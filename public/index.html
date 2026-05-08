@@ -248,6 +248,13 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '2.7.5': [
+    '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="margin-right:8px; vertical-align:middle;"><polyline points="20 6 9 17 4 12"></polyline></svg> <b>Soporte Completo Nu:</b> Interés $0 en la primera cuota de compras diferidas.',
+    '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="margin-right:8px; vertical-align:middle;"><polyline points="20 6 9 17 4 12"></polyline></svg> <b>Historial Extendido:</b> Integración de 25 ciclos históricos de tarjetas Nu.',
+    '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right:8px; vertical-align:middle;"><polyline points="20 6 9 17 4 12"></polyline></svg> <b>Propagación de URLs:</b> Actualización masiva de tasas desde Configuración.',
+    '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:8px; vertical-align:middle;"><polyline points="20 6 9 17 4 12"></polyline></svg> <b>Fix de Seguridad:</b> Eliminado enlace roto de Superfinanciera (ahora PDF oficial Nu).',
+    '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:8px; vertical-align:middle;"><polyline points="20 6 9 17 4 12"></polyline></svg> <b>Auditoría:</b> Limpieza y optimización de base de datos completada.',
+  ],
   '2.7.4': [
     'URLs de tasas a prueba de errores: si borras la URL de un banco predefinido (Bancolombia, Nu, RappiCard) en la configuración, ahora la app la restaura automáticamente al valor oficial en vez de quedarse sin enlace para auto-actualizar tasas',
     'Configuración de URLs: los bancos predefinidos ahora muestran la etiqueta "(predefinido)" y un botón "Restaurar" cuando su URL fue modificada, para volver al enlace oficial en un clic',
@@ -3793,7 +3800,7 @@ function BancosUrlsConfig() {
     if (preset && next[i].builtin && val && val.trim()) preset.url = val.trim();
   }
 
-  function resetToDefault(i) {
+  async function resetToDefault(i) {
     const b = urls[i];
     const defaultUrl = DEFAULT_BANCO_URLS[b.nombre];
     if (!defaultUrl) return;
@@ -3803,6 +3810,18 @@ function BancosUrlsConfig() {
     setSaved(false);
     const preset = BANCOS_PRESETS.find(p => p.nombre === b.nombre);
     if (preset) preset.url = defaultUrl;
+    // Propagar la URL canónica también a las tarjetas individuales con ese banco
+    // para evitar el caso "el preset está bien pero la tarjeta sigue con URL vieja".
+    try {
+      const r = await api('/config/sync-bank-url', { method: 'POST', body: { banco: b.nombre, url: defaultUrl } });
+      if (r && r.tarjetasActualizadas > 0) {
+        toast('URL restaurada y propagada a ' + r.tarjetasActualizadas + ' tarjeta(s)');
+      } else {
+        toast('URL del preset restaurada');
+      }
+    } catch (e) {
+      toastErr('URL restaurada en preset, pero no se pudo propagar a tarjetas: ' + e.message);
+    }
   }
 
   function addBanco() {
