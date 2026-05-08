@@ -248,6 +248,11 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '2.7.11': [
+    'Arreglada la card "Saldo en Bolsillo" para avances: cuando apartabas dinero para la cuota de un mes específico, ese monto seguía apareciendo sumado al navegar a otros meses.',
+    'Ahora la card refleja únicamente el dinero apartado para el mes que tienes en pantalla — coherente con el indicador de bolsillo de la fila del avance.',
+    'Las compras y diferidas no cambian — siguen calculando su bolsillo igual de bien que antes.',
+  ],
   '2.7.10': [
     'Arreglada la card "Me Deben Corte" en ciclos pasados: cuando navegabas a un mes anterior, las cuotas pendientes de compras diferidas a terceros no se sumaban en esa card aunque seguían apareciendo como pendientes en la tabla de Diferidas.',
     'Ahora "Me Deben Corte" muestra el monto correcto en cualquier ciclo que estés viendo (pasado, presente o futuro), siempre que el tercero todavía no te haya pagado y no hayas apartado dinero al bolsillo para cubrir esa cuota.',

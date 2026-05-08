@@ -32,10 +32,12 @@ module.exports = function(db) {
 
     const comprasCiclo = db.prepare("SELECT COALESCE(SUM(valor_cop - COALESCE(monto_abonado,0)),0) as total FROM compras WHERE ciclo=? AND estado NOT IN ('pagado','diferida')" + tjFilter).get(cicloActual, ...tjParams);
     const saldoBolsilloCompras = db.prepare("SELECT COALESCE(SUM(CASE WHEN estado='bolsillo' THEN valor_cop WHEN estado='bolsillo_parcial' THEN COALESCE(monto_bolsillo,0) WHEN estado='diferida' THEN COALESCE(monto_bolsillo,0) ELSE 0 END),0) as total FROM compras WHERE ciclo=? AND estado IN ('bolsillo','bolsillo_parcial','diferida')" + tjFilter).get(cicloActual, ...tjParams);
-    const saldoBolsilloAvances = db.prepare("SELECT COALESCE(SUM(COALESCE(monto_bolsillo,0)),0) as total FROM avances WHERE estado='activo'" + tjFilter).get(...tjParams);
+    // Avances: bolsillo per-cuota se acumula en el forEach de avancesActivos (más abajo)
+    // a partir de bolsillo_cuotas_avance, filtrado por la cuota_num del ciclo navegado.
+    // NO se usa avances.monto_bolsillo (que es el cache total acumulado de todas las cuotas).
+    let bolsilloAvancesCiclo = 0;
     // Diferidas sin compra vinculada (ej: RappiCard registradas directamente) guardan bolsillo en diferidas.monto_bolsillo
     const saldoBolsilloDiferidas = db.prepare("SELECT COALESCE(SUM(COALESCE(monto_bolsillo,0)),0) as total FROM diferidas WHERE estado='activo' AND id NOT IN (SELECT COALESCE(diferida_id,0) FROM compras WHERE diferida_id IS NOT NULL)" + tjFilter).get(...tjParams);
-    const saldoBolsillo = { total: (saldoBolsilloCompras.total || 0) + (saldoBolsilloAvances.total || 0) + (saldoBolsilloDiferidas.total || 0) };
 
     // Me Deben (total histórico): replica EXACTAMENTE la fórmula de la card "Me deben" en Terceros.
     //   - 1 cuota: valor_cop - monto_bolsillo
@@ -114,9 +116,16 @@ module.exports = function(db) {
         : amort.tabla.find(r => r.fechaCorte >= hoy);
       if (cuotaActual) {
         interesesMesAvances += cuotaActual.interes;
+        // Bolsillo per-cuota del ciclo navegado: solo cuenta si esa cuota tiene aparte propio.
+        // Si el avance no tiene cuota en el ciclo (cuotaActual undefined), suma 0.
+        const bolCuotaAvRow = db.prepare('SELECT monto FROM bolsillo_cuotas_avance WHERE avance_id=? AND cuota_num=?').get(av.id, cuotaActual.numCuota);
+        if (bolCuotaAvRow) bolsilloAvancesCiclo += Math.round(bolCuotaAvRow.monto);
         proximosPagos.push({ tipo: 'avance', etiqueta: av.etiqueta, fechaCorte: cuotaActual.fechaCorte, interes: cuotaActual.interes, capital: cuotaActual.cuotaCapital, total: cuotaActual.totalExtracto });
       }
     });
+    // Total de saldo en bolsillo (compras del ciclo + avances per-cuota + diferidas standalone).
+    // Se computa aquí porque bolsilloAvancesCiclo se acumuló en el forEach anterior.
+    const saldoBolsillo = { total: (saldoBolsilloCompras.total || 0) + bolsilloAvancesCiclo + (saldoBolsilloDiferidas.total || 0) };
 
     const diferidasActivas = db.prepare("SELECT * FROM diferidas WHERE estado='activo'" + tjFilter).all(...tjParams);
     let deudaDiferidas = 0, interesesMesDiferidas = 0;
