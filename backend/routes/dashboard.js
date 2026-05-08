@@ -383,8 +383,12 @@ module.exports = function(db) {
       const amort = calcularAmortizacionDiferida(c.valor_cop, dif.tasa_mv, dif.num_cuotas, dif.fecha_compra, dif.fecha_primer_corte, [], nuOpts(db, dif.tarjeta_id));
       const cuota = amort.tabla.find(r => r.fechaCorte.slice(0, 7) === cicloActual);
       if (!cuota) return;
-      // Cuota pasada (fechaCorte < hoy): consistente con meDeben que excluye cuotas cuyo fechaCorte < hoy
-      if (cuota.fechaCorte < hoy) return;
+      // NOTA: aquí NO se filtra por `cuota.fechaCorte < hoy`. ME DEBEN CORTE refleja
+      // lo que el tercero debe POR ESE CICLO específico (no "lo que falta hacia
+      // adelante" como hace meDeben global). Si el ciclo navegado es pasado y la
+      // cuota sigue pendiente y `tercero_pagado=0`, el tercero te sigue debiendo —
+      // igual que el bloque de 1-cuota tercero que filtra por c.ciclo sin checks
+      // temporales. El filtro sobre `pendiente <= 0` ya maneja "cubierto por bolsillo".
       // Per-cuota bolsillo: buscar el monto específico de ESTA cuota
       const bolCuotaRow = db.prepare('SELECT monto FROM bolsillo_cuotas WHERE compra_id=? AND cuota_num=?').get(c.id, cuota.numCuota);
       const bolCuota = bolCuotaRow ? Math.round(bolCuotaRow.monto) : 0;

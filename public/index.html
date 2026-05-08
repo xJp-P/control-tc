@@ -248,6 +248,11 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '2.7.10': [
+    'Arreglada la card "Me Deben Corte" en ciclos pasados: cuando navegabas a un mes anterior, las cuotas pendientes de compras diferidas a terceros no se sumaban en esa card aunque seguían apareciendo como pendientes en la tabla de Diferidas.',
+    'Ahora "Me Deben Corte" muestra el monto correcto en cualquier ciclo que estés viendo (pasado, presente o futuro), siempre que el tercero todavía no te haya pagado y no hayas apartado dinero al bolsillo para cubrir esa cuota.',
+    'Las cards "Me Deben" (total general) y la sección de Terceros no cambian — siguen funcionando igual de bien.',
+  ],
   '2.7.9': [
     'Bolsillo de avances independiente por mes: ahora puedes apartar dinero para la cuota de un mes específico sin que aparezca como apartado en los demás meses.',
     'Cada cuota mensual de un avance guarda su propio bolsillo, igual que ya funcionaba con las compras diferidas.',
