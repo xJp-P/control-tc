@@ -248,6 +248,11 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '2.7.12': [
+    'La card "Saldo en Bolsillo" ahora muestra el desglose: cuánto apartaste en total para el ciclo y cuánto ya abonaste al extracto.',
+    'Si abonas $1.400.000 al extracto y tenías $2.450.000 apartados, ahora ves claramente que el saldo restante es $1.050.000 — sin tener que sacar la calculadora.',
+    'El desglose se actualiza automáticamente al registrar un nuevo abono o al navegar entre ciclos: cada mes muestra sus propios números independientes.',
+  ],
   '2.7.11': [
     'Arreglada la card "Saldo en Bolsillo" para avances: cuando apartabas dinero para la cuota de un mes específico, ese monto seguía apareciendo sumado al navegar a otros meses.',
     'Ahora la card refleja únicamente el dinero apartado para el mes que tienes en pantalla — coherente con el indicador de bolsillo de la fila del avance.',
@@ -1819,7 +1824,18 @@ function CardResumen({ tarjeta, onDataChange }) {
       e('div', { className: 'card card-accent' },
         e('div', { className: 'card-label' }, 'Saldo en Bolsillo'),
         e('div', { className: 'card-value' }, fmtCOP(data.saldoBolsillo || 0)),
-        e('div', { className: 'card-sub' }, 'Compras apartadas')
+        ((data.saldoBolsilloBruto || 0) > 0 || (data.saldoBolsilloAbonado || 0) > 0)
+          ? e('div', { style: { display: 'flex', gap: 14, marginTop: 6, flexWrap: 'wrap' } },
+              e('div', null,
+                e('div', { style: { fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 } }, 'Total Apartado'),
+                e('div', { style: { fontSize: 12, color: 'var(--text-primary)', fontWeight: 600, fontFamily: 'monospace' } }, fmtCOP(data.saldoBolsilloBruto || 0))
+              ),
+              e('div', null,
+                e('div', { style: { fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 } }, 'Abonos Realizados'),
+                e('div', { style: { fontSize: 12, color: 'var(--warning)', fontWeight: 600, fontFamily: 'monospace' } }, '-' + fmtCOP(data.saldoBolsilloAbonado || 0))
+              )
+            )
+          : e('div', { className: 'card-sub' }, 'Compras apartadas')
       )
     ),
 

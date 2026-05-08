@@ -440,7 +440,13 @@ module.exports = function(db) {
       interesesComprasUsd: interesesComprasUsdDash,
       pagoMinimoUsd: pagoMinimoUsdDash,
       deudaUsd: deudaUsdDash,
+      // Card "Saldo en Bolsillo": valor neto + desglose para transparencia.
+      //   bruto    = Total Apartado del ciclo (compras + avances per-cuota + diferidas standalone)
+      //   abonado  = Abonos Realizados al extracto del ciclo (extractos.monto_pagado)
+      //   neto     = max(0, bruto - abonado) → lo que efectivamente queda apartado
       saldoBolsillo: Math.round(Math.max(0, saldoBolsillo.total - montoPagadoExtractoCiclo)),
+      saldoBolsilloBruto: Math.round(saldoBolsillo.total),
+      saldoBolsilloAbonado: Math.round(montoPagadoExtractoCiclo),
       totalAbonos: Math.round(totalAbonosHist.total),
       totalPagos: Math.round(totalPagos.total),
       proximosPagos: proximosPagos.sort((a, b) => a.fechaCorte.localeCompare(b.fechaCorte)),
