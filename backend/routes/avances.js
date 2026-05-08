@@ -21,13 +21,18 @@ module.exports = function(db, { logAction, tjNombre }) {
       const cuotaCiclo = ciclo
         ? amort.tabla.find(r => r.fechaCorte.slice(0, 7) === ciclo)
         : amort.tabla.find(r => r.fechaCorte >= hoy);
+      // Per-cuota bolsillo: mapa { cuota_num: monto } igual que diferidas
+      const bolPorCuota = {};
+      db.prepare('SELECT cuota_num, monto FROM bolsillo_cuotas_avance WHERE avance_id=?').all(av.id)
+        .forEach(b => { bolPorCuota[b.cuota_num] = Math.round(b.monto); });
       return {
         ...av,
         saldoActual: amort.resumen.saldoActual,
         cuotasRestantes: amort.resumen.cuotasRestantes,
         cuotaCorte: cuotaCiclo ? cuotaCiclo.totalExtracto : 0,
         proximoPago: amort.tabla.find(r => r.saldoFinal > 0),
-        ciclos: amort.tabla.map(r => r.fechaCorte.slice(0, 7))
+        ciclos: amort.tabla.map(r => r.fechaCorte.slice(0, 7)),
+        bolsillo_por_cuota: bolPorCuota
       };
     });
     res.json(result);
@@ -67,16 +72,50 @@ module.exports = function(db, { logAction, tjNombre }) {
     res.json({ ok: true });
   });
 
-  // ── Bolsillo de avance (apartar dinero para la cuota del corte) ────
+  // ── Bolsillo de avance (per-cuota) ─────────────────────────────────
+  // Acepta { monto_bolsillo, cuota_num }. Igual al patrón de bolsillo_cuotas
+  // de diferidas: upsert por (avance_id, cuota_num), y mantiene la columna
+  // global avances.monto_bolsillo como cache = SUMA de todas las cuotas
+  // (la usa el dashboard para "Saldo en Bolsillo").
   router.put('/:id/bolsillo', (req, res) => {
-    const { monto_bolsillo } = req.body;
+    const { monto_bolsillo, cuota_num } = req.body;
     const av = db.prepare('SELECT * FROM avances WHERE id=?').get(req.params.id);
     if (!av) return res.status(404).json({ error: 'Avance no encontrado' });
     const nuevoMonto = Math.round(parseFloat(monto_bolsillo) || 0);
-    db.prepare('UPDATE avances SET monto_bolsillo=? WHERE id=?').run(nuevoMonto, av.id);
+
+    if (cuota_num != null) {
+      // Per-cuota: upsert
+      if (nuevoMonto > 0) {
+        db.prepare('INSERT INTO bolsillo_cuotas_avance (avance_id, cuota_num, monto) VALUES (?,?,?) ON CONFLICT(avance_id, cuota_num) DO UPDATE SET monto=?')
+          .run(av.id, cuota_num, nuevoMonto, nuevoMonto);
+      } else {
+        db.prepare('DELETE FROM bolsillo_cuotas_avance WHERE avance_id=? AND cuota_num=?').run(av.id, cuota_num);
+      }
+      const sum = db.prepare('SELECT COALESCE(SUM(monto),0) as total FROM bolsillo_cuotas_avance WHERE avance_id=?').get(av.id);
+      db.prepare('UPDATE avances SET monto_bolsillo=? WHERE id=?').run(sum.total, av.id);
+      const fmt = new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',maximumFractionDigits:0}).format(nuevoMonto);
+      logAction('editar', tjNombre(av.tarjeta_id) + 'Bolsillo cuota ' + cuota_num + ': ' + av.etiqueta + ' - Apartado: ' + fmt);
+      return res.json({ ok: true, monto_bolsillo: sum.total, cuota_num, monto_cuota: nuevoMonto });
+    }
+
+    // Compat: si no llega cuota_num (cliente viejo), trata como bolsillo global y lo
+    // refleja en la cuota próxima desde HOY de la tabla de amortización.
+    const abonos = db.prepare('SELECT * FROM abonos_avance WHERE avance_id=? ORDER BY fecha').all(av.id);
+    const amort = calcularAmortizacionAvance(av.monto, av.tasa_mv, av.plazo, av.fecha_desembolso, av.dia_corte, abonos, av.comision, avanceOpts(db, av.tarjeta_id));
+    const hoyL = require('../helpers/dates').hoyLocal();
+    const cuotaProxima = amort.tabla.find(r => r.fechaCorte >= hoyL) || amort.tabla[0];
+    const cnFallback = cuotaProxima ? cuotaProxima.numCuota : 1;
+    if (nuevoMonto > 0) {
+      db.prepare('INSERT INTO bolsillo_cuotas_avance (avance_id, cuota_num, monto) VALUES (?,?,?) ON CONFLICT(avance_id, cuota_num) DO UPDATE SET monto=?')
+        .run(av.id, cnFallback, nuevoMonto, nuevoMonto);
+    } else {
+      db.prepare('DELETE FROM bolsillo_cuotas_avance WHERE avance_id=? AND cuota_num=?').run(av.id, cnFallback);
+    }
+    const sum2 = db.prepare('SELECT COALESCE(SUM(monto),0) as total FROM bolsillo_cuotas_avance WHERE avance_id=?').get(av.id);
+    db.prepare('UPDATE avances SET monto_bolsillo=? WHERE id=?').run(sum2.total, av.id);
     const fmt = new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',maximumFractionDigits:0}).format(nuevoMonto);
     logAction('editar', tjNombre(av.tarjeta_id) + 'Bolsillo de avance actualizado: ' + av.etiqueta + ' - Apartado: ' + fmt);
-    res.json({ ok: true, monto_bolsillo: nuevoMonto });
+    res.json({ ok: true, monto_bolsillo: sum2.total });
   });
 
   // ── Abonos de avance ──────────────────────────────────────────────

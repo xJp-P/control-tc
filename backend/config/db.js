@@ -570,6 +570,19 @@ function initDb(dbPathOverride) {
     UNIQUE(compra_id, cuota_num)
   )`);
 
+  // ── Bolsillo per-cuota para avances ───────────────────────────────
+  // Mismo patrón que bolsillo_cuotas (diferidas), pero por avance_id.
+  // Permite apartar dinero independiente por cada cuota mensual proyectada
+  // sin que un único monto global "contamine" la visualización de meses futuros.
+  db.exec(`CREATE TABLE IF NOT EXISTS bolsillo_cuotas_avance (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    avance_id INTEGER NOT NULL REFERENCES avances(id) ON DELETE CASCADE,
+    cuota_num INTEGER NOT NULL,
+    monto REAL NOT NULL DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now','localtime')),
+    UNIQUE(avance_id, cuota_num)
+  )`);
+
   db.prepare("UPDATE compras SET tercero_pagado = 0 WHERE estado = 'por_cobrar' AND persona_id IS NOT NULL").run();
   db.prepare("UPDATE compras SET estado = 'pagado' WHERE estado = 'por_cobrar'").run();
 

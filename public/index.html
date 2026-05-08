@@ -248,6 +248,13 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '2.7.9': [
+    'Bolsillo de Avances ahora es independiente por ciclo/cuota — apartar dinero para un mes no afecta los demás (mismo modelo que ya tenían las compras diferidas).',
+    'Nueva tabla bolsillo_cuotas_avance: cada cuota mensual proyectada del avance guarda su propio monto apartado.',
+    'Refactor backend: /api/avances devuelve bolsillo_por_cuota; /avances/:id/bolsillo acepta cuota_num para upsert per-cuota.',
+    'UI: el badge y el modal de bolsillo en cualquier ciclo (pasado, presente o futuro) reflejan únicamente el aparte de ESA cuota — sin duplicación visual.',
+    'Modal de bolsillo en avances ahora muestra el indicador "Cuota N/Plazo" igual que diferidas.',
+  ],
   '2.7.7': [
     'Fix navegación temporal: al avanzar al futuro en Resumen, las cuotas de Avances y Diferidas ya no se quedan estáticas — ahora muestran el monto correcto de cada ciclo.',
     'Backend: los endpoints /api/avances y /api/diferidas aceptan el parámetro ciclo y devuelven la cuota de ese mes específico (compatible con la lógica especial de Nu y Bancolombia).',
@@ -1461,9 +1468,13 @@ function CardResumen({ tarjeta, onDataChange }) {
     setBolsilloMonto(isPartial ? '' : String(mb || ''));
     setShowBolsilloModal(true);
   }
-  function openBolsilloAvanceModal(av) {
-    const mb = av.monto_bolsillo || 0;
-    const target = av.cuotaCorte || 0;
+  function openBolsilloAvanceModal(av, opts) {
+    opts = opts || {};
+    // Per-cuota: el bolsillo se identifica por cuota_num del ciclo navegado.
+    // El target (meta) es la cuota proyectada de ESE mes específico.
+    const cuotaNum = opts.cuota_num != null ? opts.cuota_num : 1;
+    const target = opts.target != null ? opts.target : (av.cuotaCorte || 0);
+    const mb = (av.bolsillo_por_cuota && av.bolsillo_por_cuota[cuotaNum]) || 0;
     const isPartial = mb > 0 && mb < target;
     setBolsilloCompra({
       _isAvance: true,
@@ -1472,7 +1483,9 @@ function CardResumen({ tarjeta, onDataChange }) {
       estado: 'avance',
       valor_cop: target,
       cuotaCorte: target,
-      monto_bolsillo: mb
+      monto_bolsillo: mb,
+      cuota_num: cuotaNum,
+      cuotas_total: av.plazo
     });
     setBolsilloMonto(isPartial ? '' : String(mb || ''));
     setShowBolsilloModal(true);
@@ -1514,7 +1527,8 @@ function CardResumen({ tarjeta, onDataChange }) {
         ? '/diferidas/' + bolsilloCompra.id + '/bolsillo'
         : '/compras/' + bolsilloCompra.id + '/bolsillo';
     const body = { monto_bolsillo: monto };
-    if (bolsilloCompra.cuota_num && _isDif) body.cuota_num = bolsilloCompra.cuota_num;
+    // Per-cuota: enviar cuota_num para diferidas y avances (compras 1-cuota usan global)
+    if (bolsilloCompra.cuota_num && (_isDif || _isAv)) body.cuota_num = bolsilloCompra.cuota_num;
     api(url, { method: 'PUT', body })
       .then(() => { setShowBolsilloModal(false); refreshAll(); toast('Bolsillo actualizado'); });
   }
@@ -2015,7 +2029,9 @@ function CardResumen({ tarjeta, onDataChange }) {
               )),
               e('tbody', null,
                 avancesCiclo.map(a => {
-                  var avBol = a.monto_bolsillo || 0;
+                  // Per-cuota: cuota_num del ciclo navegado (1-indexed sobre la tabla)
+                  var cuotaNumAv = a.ciclos ? a.ciclos.indexOf(ciclo) + 1 : 1;
+                  var avBol = (a.bolsillo_por_cuota && a.bolsillo_por_cuota[cuotaNumAv]) || 0;
                   var avTarget = a.cuotaCorte || 0;
                   var avBolBadge = avTarget > 0
                     ? (Math.round(avBol) >= Math.round(avTarget) ? 'bolsillo' : avBol > 0 ? 'bolsillo_parcial' : 'pendiente')
@@ -2038,8 +2054,8 @@ function CardResumen({ tarjeta, onDataChange }) {
                         : (avBolBadge && a.estado === 'activo'
                             ? e('span', {
                                 className: 'badge badge-' + avBolBadge + ' badge-clickable',
-                                onClick: (ev) => { ev.stopPropagation(); openBolsilloAvanceModal(a); },
-                                title: 'Clic para gestionar bolsillo'
+                                onClick: (ev) => { ev.stopPropagation(); openBolsilloAvanceModal(a, { cuota_num: cuotaNumAv, target: avTarget }); },
+                                title: 'Clic para gestionar bolsillo de esta cuota'
                               }, avBolBadge.replace(/_/g, ' '))
                             : null),
                       !cicloPagado && avFalta > 0 && e('div', { style: { fontSize: 11, color: 'var(--warning)', marginTop: 2 } }, 'Falta: ' + fmtCOP(avFalta))
@@ -2344,8 +2360,8 @@ function CardResumen({ tarjeta, onDataChange }) {
       var isCuotaTarget = isDif || isAvance;
       var target = bolsilloCompra._bolsilloTarget || (isCuotaTarget ? (bolsilloCompra.cuotaCorte || bolsilloCompra.valor_cop) : bolsilloCompra.valor_cop);
       var mb = bolsilloCompra.monto_bolsillo || 0;
-      // Helper: construir body con cuota_num para diferidas per-cuota
-      var mkBody = function(monto) { var b = { monto_bolsillo: monto }; if (isDif && bolsilloCompra.cuota_num) b.cuota_num = bolsilloCompra.cuota_num; return b; };
+      // Helper: construir body con cuota_num para diferidas y avances per-cuota
+      var mkBody = function(monto) { var b = { monto_bolsillo: monto }; if ((isDif || isAvance) && bolsilloCompra.cuota_num) b.cuota_num = bolsilloCompra.cuota_num; return b; };
       var bState = isCuotaTarget
         ? (mb >= target ? 'bolsillo' : mb > 0 ? 'bolsillo_parcial' : 'pendiente')
         : bolsilloCompra.estado;
@@ -2355,7 +2371,7 @@ function CardResumen({ tarjeta, onDataChange }) {
         e('div', null,
           e('div', { style: { marginBottom: 16, padding: '12px 16px', background: 'var(--bg-tertiary)', borderRadius: 8 } },
             e('div', { style: { fontSize: 13, color: 'var(--text-secondary)', marginBottom: 4 } }, bolsilloCompra.descripcion),
-            isAvance && e('div', { style: { fontSize: 12, color: 'var(--accent)', marginBottom: 4 } }, 'Avance — Cuota del corte'),
+            isAvance && bolsilloCompra.cuota_num && e('div', { style: { fontSize: 12, color: 'var(--accent)', marginBottom: 4 } }, 'Cuota ' + bolsilloCompra.cuota_num + '/' + (bolsilloCompra.cuotas_total || '?')),
             isDif && bolsilloCompra.cuota_num && e('div', { style: { fontSize: 12, color: 'var(--accent)', marginBottom: 4 } }, 'Cuota ' + bolsilloCompra.cuota_num + '/' + bolsilloCompra.cuotas_total),
             isDif && bolsilloCompra.persona_id && e('div', { style: { fontSize: 12, color: 'var(--text-muted)', marginBottom: 4 } }, 'Parte de: ' + (bolsilloCompra.persona_nombre || 'Tercero')),
             e('div', { style: { fontSize: 18, fontWeight: 700 } }, (isCuotaTarget ? 'Cuota: ' : 'Total: '), fmtCOP(target)),
