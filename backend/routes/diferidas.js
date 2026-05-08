@@ -8,7 +8,7 @@ module.exports = function(db, { logAction, tjNombre }) {
   const router = Router();
 
   router.get('/', (req, res) => {
-    const { tarjeta_id } = req.query;
+    const { tarjeta_id, ciclo } = req.query;
     let sql = 'SELECT * FROM diferidas WHERE 1=1';
     const params = [];
     if (tarjeta_id) { sql += ' AND tarjeta_id = ?'; params.push(tarjeta_id); }
@@ -17,7 +17,9 @@ module.exports = function(db, { logAction, tjNombre }) {
     const hoyDif = hoyLocal();
     const result = diferidas.map(d => {
       const amort = calcularAmortizacionDiferida(d.monto, d.tasa_mv, d.num_cuotas, d.fecha_compra, d.fecha_primer_corte, null, nuOpts(db, d.tarjeta_id));
-      const cuotaProxima = amort.tabla.find(r => r.fechaCorte >= hoyDif);
+      const cuotaCiclo = ciclo
+        ? amort.tabla.find(r => r.fechaCorte.slice(0, 7) === ciclo)
+        : amort.tabla.find(r => r.fechaCorte >= hoyDif);
       const compraPersona = db.prepare(`SELECT c.persona_id, p.nombre FROM compras c
         LEFT JOIN personas p ON c.persona_id = p.id
         WHERE c.diferida_id = ? AND c.persona_id IS NOT NULL LIMIT 1`).get(d.id);
@@ -32,7 +34,7 @@ module.exports = function(db, { logAction, tjNombre }) {
       return {
         ...d,
         saldoActual: amort.resumen.saldoActual,
-        cuotaCorte: cuotaProxima ? cuotaProxima.totalPagar : 0,
+        cuotaCorte: cuotaCiclo ? cuotaCiclo.totalPagar : 0,
         cuotasRestantes: amort.tabla.filter(r => r.fechaCorte >= hoyDif).length,
         ciclos: amort.tabla.map(r => r.fechaCorte.slice(0, 7)),
         es_de_tercero: !!compraPersona,

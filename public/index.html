@@ -248,6 +248,11 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '2.7.7': [
+    'Fix navegación temporal: al avanzar al futuro en Resumen, las cuotas de Avances y Diferidas ya no se quedan estáticas — ahora muestran el monto correcto de cada ciclo.',
+    'Backend: los endpoints /api/avances y /api/diferidas aceptan el parámetro ciclo y devuelven la cuota de ese mes específico (compatible con la lógica especial de Nu y Bancolombia).',
+    'Las cuotas decrecientes de diferidas (donde el interés baja con el saldo) ahora se reflejan correctamente al navegar mes a mes.',
+  ],
   '2.7.6': [
     'Soporte Completo Nu: interés $0 en la primera cuota de compras diferidas.',
     'Historial Extendido: integración de 25 ciclos históricos de tarjetas Nu.',
@@ -1347,8 +1352,8 @@ function CardResumen({ tarjeta, onDataChange }) {
     api('/compras/resumen?tarjeta_id=' + tarjeta.id + '&ciclo=' + ciclo).then(setResumen);
     api('/personas').then(setPersonas);
   }, [ciclo, tarjeta.id]);
-  const loadAvances = useCallback(() => { api('/avances?tarjeta_id=' + tarjeta.id).then(setAvances); }, [tarjeta.id]);
-  const loadDiferidas = useCallback(() => { api('/diferidas?tarjeta_id=' + tarjeta.id).then(setDiferidas); }, [tarjeta.id]);
+  const loadAvances = useCallback(() => { api('/avances?tarjeta_id=' + tarjeta.id + '&ciclo=' + ciclo).then(setAvances); }, [tarjeta.id, ciclo]);
+  const loadDiferidas = useCallback(() => { api('/diferidas?tarjeta_id=' + tarjeta.id + '&ciclo=' + ciclo).then(setDiferidas); }, [tarjeta.id, ciclo]);
 
   useEffect(() => { loadCompras(); }, [loadCompras]);
   useEffect(() => { loadAvances(); }, [loadAvances]);

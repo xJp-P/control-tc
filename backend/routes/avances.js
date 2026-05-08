@@ -8,7 +8,7 @@ module.exports = function(db, { logAction, tjNombre }) {
   const router = Router();
 
   router.get('/', (req, res) => {
-    const { tarjeta_id } = req.query;
+    const { tarjeta_id, ciclo } = req.query;
     let sql = 'SELECT * FROM avances WHERE 1=1';
     const params = [];
     if (tarjeta_id) { sql += ' AND tarjeta_id = ?'; params.push(tarjeta_id); }
@@ -18,12 +18,14 @@ module.exports = function(db, { logAction, tjNombre }) {
     const result = avances.map(av => {
       const abonos = db.prepare('SELECT * FROM abonos_avance WHERE avance_id=? ORDER BY fecha').all(av.id);
       const amort = calcularAmortizacionAvance(av.monto, av.tasa_mv, av.plazo, av.fecha_desembolso, av.dia_corte, abonos, av.comision, avanceOpts(db, av.tarjeta_id));
-      const cuotaProxima = amort.tabla.find(r => r.fechaCorte >= hoy);
+      const cuotaCiclo = ciclo
+        ? amort.tabla.find(r => r.fechaCorte.slice(0, 7) === ciclo)
+        : amort.tabla.find(r => r.fechaCorte >= hoy);
       return {
         ...av,
         saldoActual: amort.resumen.saldoActual,
         cuotasRestantes: amort.resumen.cuotasRestantes,
-        cuotaCorte: cuotaProxima ? cuotaProxima.totalExtracto : 0,
+        cuotaCorte: cuotaCiclo ? cuotaCiclo.totalExtracto : 0,
         proximoPago: amort.tabla.find(r => r.saldoFinal > 0),
         ciclos: amort.tabla.map(r => r.fechaCorte.slice(0, 7))
       };
