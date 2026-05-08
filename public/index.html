@@ -249,11 +249,11 @@ const API = 'http://127.0.0.1:3500/api';
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
   '2.7.9': [
-    'Bolsillo de Avances ahora es independiente por ciclo/cuota — apartar dinero para un mes no afecta los demás (mismo modelo que ya tenían las compras diferidas).',
-    'Nueva tabla bolsillo_cuotas_avance: cada cuota mensual proyectada del avance guarda su propio monto apartado.',
-    'Refactor backend: /api/avances devuelve bolsillo_por_cuota; /avances/:id/bolsillo acepta cuota_num para upsert per-cuota.',
-    'UI: el badge y el modal de bolsillo en cualquier ciclo (pasado, presente o futuro) reflejan únicamente el aparte de ESA cuota — sin duplicación visual.',
-    'Modal de bolsillo en avances ahora muestra el indicador "Cuota N/Plazo" igual que diferidas.',
+    'Bolsillo de avances independiente por mes: ahora puedes apartar dinero para la cuota de un mes específico sin que aparezca como apartado en los demás meses.',
+    'Cada cuota mensual de un avance guarda su propio bolsillo, igual que ya funcionaba con las compras diferidas.',
+    'El indicador de "bolsillo" en la tabla de avances solo se ilumina en los meses donde realmente apartaste dinero — se acabaron los falsos positivos al navegar a meses futuros.',
+    'Al abrir el modal del bolsillo desde cualquier mes (pasado, presente o futuro), ves exactamente cuánto apartaste para esa cuota — sin mezclas con otros meses.',
+    'El modal del bolsillo de avances ahora indica claramente la cuota que estás gestionando (ej. "Cuota 3/24").',
   ],
   '2.7.7': [
     'Fix navegación temporal: al avanzar al futuro en Resumen, las cuotas de Avances y Diferidas ya no se quedan estáticas — ahora muestran el monto correcto de cada ciclo.',
