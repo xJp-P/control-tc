@@ -1,0 +1,73 @@
+{
+  "name": "control-tc",
+  "version": "2.7.4",
+  "description": "Control TC — Gestor personal de tarjetas de crédito (compras, avances, diferidas, terceros y extractos)",
+  "main": "desktop/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "cross-env NODE_ENV=development electron .",
+    "server": "node backend/app.js",
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win",
+    "dist:mac": "electron-builder --mac"
+  },
+  "build": {
+    "appId": "com.juanp.controltc",
+    "productName": "Control TC",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "desktop/**/*",
+      "backend/**/*",
+      "public/**/*",
+      "node_modules/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico",
+      "artifactName": "Instalador-Windows-${version}.${ext}"
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "icon": "build/icon.png",
+      "identity": null,
+      "artifactName": "Instalador-Mac-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": false,
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "build/icon.ico"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "xJp-P",
+      "repo": "control-tc",
+      "releaseType": "release"
+    }
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.10.0",
+    "cors": "^2.8.5",
+    "electron-updater": "^6.3.0",
+    "express": "^4.21.0"
+  },
+  "devDependencies": {
+    "cross-env": "^7.0.3",
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.0"
+  }
+}
