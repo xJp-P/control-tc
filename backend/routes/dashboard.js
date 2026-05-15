@@ -296,37 +296,58 @@ module.exports = function(db) {
       }
     }
 
+    // Fecha de Pago: respeta el ciclo navegado y permite override manual por ciclo.
+    // Jerarquía: 1) fechas_pago_custom (manual)  2) extractos.fecha_pago (histórico)
+    //            3) cálculo desde tarjeta + ciclo (proyección)
     let fechaPago;
-    if (esRappiDash) {
-      // RappiCard/Davivienda: fecha de pago = fecha de corte + 14 dias
-      const corteIso = proximoCorteDate.toISOString().slice(0, 10);
-      // Buscamos el corte mas reciente cuya fecha+14 sea aun > hoy.
-      // Si proximoCorte+14 > hoy, ese es el pago. Si no, sumamos un mes.
-      let fechaPagoIso = addDays(corteIso, 14);
-      let fechaPagoCandidate = new Date(fechaPagoIso + 'T00:00:00');
-      if (fechaPagoCandidate <= now) {
-        // Corte previo ya paso, usar siguiente
-        const siguienteCorte = new Date(proximoCorteDate.getFullYear(), proximoCorteDate.getMonth() + 1, diaCorte);
-        fechaPagoIso = addDays(siguienteCorte.toISOString().slice(0, 10), 14);
-        fechaPagoCandidate = new Date(fechaPagoIso + 'T00:00:00');
-      }
-      fechaPago = fechaPagoCandidate;
-    } else {
-      if (now.getDate() < diaCorte) {
-        fechaPago = new Date(now.getFullYear(), now.getMonth(), diaPago);
-        if (fechaPago <= now) fechaPago = new Date(now.getFullYear(), now.getMonth() + 1, diaPago);
+    let esFechaPagoManual = false;
+
+    if (tarjeta_id) {
+      const custom = db.prepare("SELECT fecha_pago FROM fechas_pago_custom WHERE tarjeta_id=? AND ciclo=?").get(tarjeta_id, cicloActual);
+      if (custom && custom.fecha_pago) {
+        fechaPago = new Date(custom.fecha_pago + 'T00:00:00');
+        esFechaPagoManual = true;
       } else {
-        fechaPago = new Date(now.getFullYear(), now.getMonth() + 1, diaPago);
+        const extFechaRow = db.prepare("SELECT fecha_pago FROM extractos WHERE tarjeta_id=? AND ciclo=?").get(tarjeta_id, cicloActual);
+        if (extFechaRow && extFechaRow.fecha_pago) {
+          fechaPago = new Date(extFechaRow.fecha_pago + 'T00:00:00');
+        }
+      }
+    }
+
+    if (!fechaPago) {
+      // Cálculo por ciclo (no por "hoy"): para el ciclo navegado, determinamos
+      // su fecha_corte y luego su fecha_pago según las reglas del banco.
+      const [yrC, moC] = cicloActual.split('-').map(Number);
+      const lastDayCicloMonth = new Date(yrC, moC, 0).getDate();
+      const fechaCorteCiclo = new Date(yrC, moC - 1, Math.min(diaCorte, lastDayCicloMonth));
+      if (esRappiDash) {
+        // RappiCard/Davivienda: corte + 14 días
+        const corteIso = fechaCorteCiclo.toISOString().slice(0, 10);
+        const fpIso = addDays(corteIso, 14);
+        fechaPago = new Date(fpIso + 'T00:00:00');
+      } else {
+        // Bancolombia y similares: dia_pago del mes siguiente al ciclo
+        fechaPago = new Date(yrC, moC, diaPago);
       }
     }
     const diasParaPago = Math.ceil((fechaPago - now) / 86400000);
 
     let extractosVencidos = [];
     if (tarjeta_id) {
-      const rawExt = db.prepare("SELECT ciclo, pago_minimo, COALESCE(monto_pagado,0) as monto_pagado, fecha_pago FROM extractos WHERE tarjeta_id=? AND estado='pendiente' AND ciclo < ? ORDER BY ciclo ASC").all(tarjeta_id, cicloActual);
+      // COALESCE: si hay override en fechas_pago_custom, esa fecha gana sobre extractos.fecha_pago
+      const rawExt = db.prepare(`
+        SELECT ext.ciclo, ext.pago_minimo, COALESCE(ext.monto_pagado, 0) as monto_pagado,
+          COALESCE(fpc.fecha_pago, ext.fecha_pago) as fecha_pago,
+          CASE WHEN fpc.fecha_pago IS NOT NULL THEN 1 ELSE 0 END as es_manual
+        FROM extractos ext
+        LEFT JOIN fechas_pago_custom fpc ON fpc.tarjeta_id = ext.tarjeta_id AND fpc.ciclo = ext.ciclo
+        WHERE ext.tarjeta_id = ? AND ext.estado = 'pendiente' AND ext.ciclo < ?
+        ORDER BY ext.ciclo ASC
+      `).all(tarjeta_id, cicloActual);
       extractosVencidos = rawExt
         .filter(e => e.pago_minimo - e.monto_pagado > 1)
-        .map(e => ({ ciclo: e.ciclo, pagoMinimo: Math.round(e.pago_minimo), pagado: Math.round(e.monto_pagado), falta: Math.round(e.pago_minimo - e.monto_pagado), fechaPago: e.fecha_pago, tipo: e.fecha_pago < hoy ? 'vencido' : 'proximo' }));
+        .map(e => ({ ciclo: e.ciclo, pagoMinimo: Math.round(e.pago_minimo), pagado: Math.round(e.monto_pagado), falta: Math.round(e.pago_minimo - e.monto_pagado), fechaPago: e.fecha_pago, esFechaManual: !!e.es_manual, tipo: e.fecha_pago < hoy ? 'vencido' : 'proximo' }));
     }
 
     // ─── Datos del corte: Deuda Personal y Me Deben Corte ─────────
@@ -431,7 +452,7 @@ module.exports = function(db) {
       meDebenCorte: { total: totalMeDebenCorte, detalle: meDebenCorteList },
       deudaPersonal: deudaPersonalCorte,
       proximoCorte: { fecha: proximoCorteDate.toISOString().slice(0, 10), diasFaltan: diasParaCorte },
-      fechaPago: { fecha: fechaPago.toISOString().slice(0, 10), diasFaltan: diasParaPago },
+      fechaPago: { fecha: fechaPago.toISOString().slice(0, 10), diasFaltan: diasParaPago, esManual: esFechaPagoManual },
       interesesMes: Math.round((interesesMesAvances + interesesMesDiferidas + interesesComprasIntl) * 100) / 100,
       interesesMesAvances: Math.round(interesesMesAvances * 100) / 100,
       interesesMesDiferidas: Math.round(interesesMesDiferidas * 100) / 100,

@@ -235,8 +235,22 @@ module.exports = function(db, { logAction, tjNombre }) {
       }
     });
 
-    const result = db.prepare('SELECT * FROM extractos WHERE tarjeta_id=? ORDER BY ciclo DESC').all(tarjeta_id);
+    const result = db.prepare(`
+      SELECT ext.*, fpc.fecha_pago as fecha_pago_custom
+      FROM extractos ext
+      LEFT JOIN fechas_pago_custom fpc ON fpc.tarjeta_id = ext.tarjeta_id AND fpc.ciclo = ext.ciclo
+      WHERE ext.tarjeta_id = ? ORDER BY ext.ciclo DESC
+    `).all(tarjeta_id);
     result.forEach(ext => {
+      // Si hay override manual de fecha de pago, lo aplicamos al campo display.
+      // El valor "auto" original sigue intacto en la columna extractos.fecha_pago.
+      if (ext.fecha_pago_custom) {
+        ext.fecha_pago_auto = ext.fecha_pago;
+        ext.fecha_pago = ext.fecha_pago_custom;
+        ext.es_fecha_pago_manual = true;
+      } else {
+        ext.es_fecha_pago_manual = false;
+      }
       const calc = calcExtracto(tarjeta_id, ext.ciclo, ext.estado === 'pagado');
       if (calc) {
         ext.compras = calc.compras;
@@ -307,6 +321,26 @@ module.exports = function(db, { logAction, tjNombre }) {
     const fmt = new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',maximumFractionDigits:0}).format(montoAbono);
     logAction('pago', tjNombre(ext.tarjeta_id) + (pagadoCompleto ? 'Extracto pagado: ' : 'Abono a extracto: ') + ext.ciclo + ' por ' + fmt);
     res.json({ ok: true, pagadoCompleto, nuevoMontoPagado });
+  });
+
+  // ── Override manual de fecha de pago por ciclo ──────────────────────
+  // PUT /api/extractos/fecha-pago-custom
+  // Body: { tarjeta_id, ciclo, fecha_pago }  → si fecha_pago es null/vacía, elimina el override.
+  // Es un "display override": no toca extractos.fecha_pago ni recalcula intereses ni pago mínimo.
+  router.put('/fecha-pago-custom', (req, res) => {
+    const { tarjeta_id, ciclo, fecha_pago } = req.body;
+    if (!tarjeta_id || !ciclo) return res.status(400).json({ error: 'tarjeta_id y ciclo son requeridos' });
+    const fp = fecha_pago && String(fecha_pago).trim() ? String(fecha_pago).slice(0, 10) : null;
+    if (fp) {
+      db.prepare('INSERT INTO fechas_pago_custom (tarjeta_id, ciclo, fecha_pago) VALUES (?,?,?) ON CONFLICT(tarjeta_id, ciclo) DO UPDATE SET fecha_pago=?')
+        .run(tarjeta_id, ciclo, fp, fp);
+      logAction('editar', tjNombre(tarjeta_id) + 'Fecha de pago manual fijada para ' + ciclo + ': ' + fp);
+      res.json({ ok: true, fecha_pago: fp, esManual: true });
+    } else {
+      db.prepare('DELETE FROM fechas_pago_custom WHERE tarjeta_id=? AND ciclo=?').run(tarjeta_id, ciclo);
+      logAction('editar', tjNombre(tarjeta_id) + 'Override de fecha de pago eliminado para ' + ciclo);
+      res.json({ ok: true, fecha_pago: null, esManual: false });
+    }
   });
 
   return router;

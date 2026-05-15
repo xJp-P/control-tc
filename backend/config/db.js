@@ -583,6 +583,20 @@ function initDb(dbPathOverride) {
     UNIQUE(avance_id, cuota_num)
   )`);
 
+  // ── Fechas de pago manuales por ciclo ─────────────────────────────
+  // Override puntual: cuando el banco asigna una fecha de pago real
+  // distinta de la calculada (festivos, fines de semana). Aplica solo
+  // al display; no afecta cálculos de intereses, pago mínimo, etc.
+  // Un registro por (tarjeta_id, ciclo) gracias a UNIQUE.
+  db.exec(`CREATE TABLE IF NOT EXISTS fechas_pago_custom (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tarjeta_id INTEGER NOT NULL REFERENCES tarjetas(id) ON DELETE CASCADE,
+    ciclo TEXT NOT NULL,
+    fecha_pago TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now','localtime')),
+    UNIQUE(tarjeta_id, ciclo)
+  )`);
+
   db.prepare("UPDATE compras SET tercero_pagado = 0 WHERE estado = 'por_cobrar' AND persona_id IS NOT NULL").run();
   db.prepare("UPDATE compras SET estado = 'pagado' WHERE estado = 'por_cobrar'").run();
 

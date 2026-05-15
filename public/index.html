@@ -248,6 +248,14 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '2.7.13': [
+    'Ahora puedes editar manualmente la fecha de pago de cualquier mes desde la card "Fecha Limite de Pago": haz clic en el icono de lápiz, escoges la fecha real que aparece en tu extracto y listo.',
+    'Útil cuando el banco mueve la fecha de pago uno o dos días por festivos o fines de semana — la app ya no muestra una fecha tentativa cuando tú conoces la real.',
+    'La fecha que modificas es independiente por mes: cambiar la de abril no afecta la de mayo, ni viceversa.',
+    'Cuando una fecha es manual, aparece la etiqueta "(MANUAL)" junto al campo para que sepas que fue fijada a mano, no calculada.',
+    'El cambio se refleja en todas las vistas que muestran esa fecha: card del Resumen, tabla de Pagos, y la sección de Próximos Pagos del Dashboard global.',
+    'Los cálculos de intereses, pago mínimo y demás siguen funcionando igual — esto solo es un ajuste visual.',
+  ],
   '2.7.12': [
     'La card "Saldo en Bolsillo" ahora muestra el desglose: cuánto apartaste en total para el ciclo y cuánto ya abonaste al extracto.',
     'Si abonas $1.400.000 al extracto y tenías $2.450.000 apartados, ahora ves claramente que el saldo restante es $1.050.000 — sin tener que sacar la calculadora.',
@@ -981,7 +989,7 @@ function GlobalDashboard({ tarjetas, onSelectCard, onNewCard }) {
                 ),
                 e('div', { style: { textAlign: 'right' } },
                   e('div', { style: { fontWeight: 700, fontSize: isVencido ? 16 : 13, color: color } }, isVencido ? 'VENCIDO' : 'PRÓXIMO A VENCER'),
-                  e('div', { style: { fontSize: 11, color: 'var(--text-muted)' } }, isVencido ? 'Pagar antes de abonar' : 'Límite: ' + labelFecha)
+                  e('div', { style: { fontSize: 11, color: 'var(--text-muted)' } }, isVencido ? 'Pagar antes de abonar' : 'Límite: ' + labelFecha, !isVencido && ext.esFechaManual && e('span', { style: { fontSize: 9, marginLeft: 4, color: 'var(--accent)', fontWeight: 700 } }, '(MANUAL)'))
                 )
               )
             );
@@ -1364,6 +1372,8 @@ function CardResumen({ tarjeta, onDataChange }) {
   const [abonoCapitalPreview, setAbonoCapitalPreview] = useState(null);
   const [abonoCapitalSaving, setAbonoCapitalSaving] = useState(false);
   const [showBolsilloModal, setShowBolsilloModal] = useState(false);
+  const [showFechaPagoModal, setShowFechaPagoModal] = useState(false);
+  const [fechaPagoInput, setFechaPagoInput] = useState('');
   const [bolsilloCompra, setBolsilloCompra] = useState(null);
   const [bolsilloMonto, setBolsilloMonto] = useState('');
 
@@ -1690,10 +1700,20 @@ function CardResumen({ tarjeta, onDataChange }) {
         e('div', { className: 'card-value' }, fmtDate(data.proximoCorte.fecha)),
         e('div', { className: 'card-sub' }, 'Faltan ' + data.proximoCorte.diasFaltan + ' dias')
       ),
-      data.fechaPago && e('div', { className: 'card', style: { borderColor: data.fechaPago.diasFaltan <= 5 ? 'var(--danger)' : 'var(--border)' } },
-        e('div', { className: 'card-label' }, 'Fecha Limite de Pago'),
-        e('div', { className: 'card-value', style: { color: data.fechaPago.diasFaltan <= 5 ? 'var(--danger)' : 'var(--text-primary)' } }, fmtDate(data.fechaPago.fecha)),
-        e('div', { className: 'card-sub' }, data.fechaPago.diasFaltan <= 0 ? 'VENCIDO' : 'Faltan ' + data.fechaPago.diasFaltan + ' dias')
+      data.fechaPago && e('div', { className: 'card', style: { borderColor: data.fechaPago.diasFaltan <= 5 && data.fechaPago.diasFaltan > 0 ? 'var(--danger)' : 'var(--border)', position: 'relative' } },
+        e('button', {
+          type: 'button',
+          onClick: () => { setFechaPagoInput(data.fechaPago.fecha || ''); setShowFechaPagoModal(true); },
+          title: 'Editar fecha de pago para este ciclo',
+          style: { position: 'absolute', top: 8, right: 8, background: 'transparent', border: 'none', cursor: 'pointer', padding: 4, color: 'var(--text-muted)', display: 'flex', alignItems: 'center' }
+        },
+          e(Ico, { name: 'edit', size: 14, color: 'currentColor' })
+        ),
+        e('div', { className: 'card-label' }, 'Fecha Limite de Pago',
+          data.fechaPago.esManual && e('span', { style: { marginLeft: 6, fontSize: 9, color: 'var(--accent)', fontWeight: 700, letterSpacing: 0.3 } }, '(MANUAL)')
+        ),
+        e('div', { className: 'card-value', style: { color: data.fechaPago.diasFaltan <= 5 && data.fechaPago.diasFaltan > 0 ? 'var(--danger)' : 'var(--text-primary)' } }, fmtDate(data.fechaPago.fecha)),
+        e('div', { className: 'card-sub' }, data.fechaPago.diasFaltan < 0 ? Math.abs(data.fechaPago.diasFaltan) + ' dias atras' : data.fechaPago.diasFaltan === 0 ? 'Hoy' : 'Faltan ' + data.fechaPago.diasFaltan + ' dias')
       ),
       e('div', { className: 'card' },
         e('div', { className: 'card-label' }, 'Tasas MV'),
@@ -2445,7 +2465,49 @@ function CardResumen({ tarjeta, onDataChange }) {
           )
         )
       );
-    })()
+    })(),
+    // Modal de edición de fecha de pago (override por ciclo)
+    e(Modal, {
+      show: showFechaPagoModal,
+      onClose: () => setShowFechaPagoModal(false),
+      title: 'Fecha de pago — ' + ciclo
+    },
+      e('div', null,
+        e('div', { style: { marginBottom: 12, fontSize: 13, color: 'var(--text-secondary)' } },
+          'Si la fecha que muestra el banco en el extracto difiere de la calculada (festivos, fines de semana), fíjala aquí. Solo afecta a este ciclo (', ciclo, '), no a los demás meses ni a otros cálculos.'
+        ),
+        e('div', { className: 'form-group' },
+          e('label', { className: 'form-label' }, 'Fecha de pago'),
+          e('input', {
+            type: 'date',
+            className: 'form-input',
+            value: fechaPagoInput,
+            onChange: (ev) => setFechaPagoInput(ev.target.value)
+          }),
+          data.fechaPago && data.fechaPago.esManual && e('div', { className: 'form-hint', style: { color: 'var(--accent)' } }, 'Actualmente esta fecha está fijada manualmente.')
+        ),
+        e('div', { className: 'modal-actions', style: { marginTop: 16 } },
+          data.fechaPago && data.fechaPago.esManual && e('button', {
+            type: 'button',
+            className: 'btn btn-danger',
+            onClick: () => {
+              api('/extractos/fecha-pago-custom', { method: 'PUT', body: { tarjeta_id: tarjeta.id, ciclo, fecha_pago: null } })
+                .then(() => { setShowFechaPagoModal(false); refreshAll(); toast('Override de fecha eliminado'); });
+            }
+          }, 'Quitar override'),
+          e('button', { type: 'button', className: 'btn', onClick: () => setShowFechaPagoModal(false) }, 'Cancelar'),
+          e('button', {
+            type: 'button',
+            className: 'btn btn-primary',
+            onClick: () => {
+              if (!fechaPagoInput) { toast('Selecciona una fecha valida'); return; }
+              api('/extractos/fecha-pago-custom', { method: 'PUT', body: { tarjeta_id: tarjeta.id, ciclo, fecha_pago: fechaPagoInput } })
+                .then(() => { setShowFechaPagoModal(false); refreshAll(); toast('Fecha de pago actualizada'); });
+            }
+          }, 'Guardar')
+        )
+      )
+    )
   );
 }
 
@@ -2989,7 +3051,11 @@ function Pagos({ tarjeta, onDataChange }) {
     },
       e('td', { style: { fontWeight: 600 } }, hasDetail ? (isExpanded ? '\u25BC ' : '\u25B6 ') : '  ', fmtCiclo(ext.ciclo)),
       e('td', null, fmtDate(ext.fecha_corte)),
-      e('td', { style: { color: vencido ? 'var(--danger)' : '' } }, fmtDate(ext.fecha_pago), vencido && e('span', { style: { color: 'var(--danger)', fontSize: 11, marginLeft: 6 } }, 'VENCIDO')),
+      e('td', { style: { color: vencido ? 'var(--danger)' : '' } },
+        fmtDate(ext.fecha_pago),
+        ext.es_fecha_pago_manual && e('span', { style: { fontSize: 9, marginLeft: 6, color: 'var(--accent)', fontWeight: 700, letterSpacing: 0.3 } }, '(MANUAL)'),
+        vencido && e('span', { style: { color: 'var(--danger)', fontSize: 11, marginLeft: 6 } }, 'VENCIDO')
+      ),
       e('td', { className: 'text-right text-mono' }, fmtCOP(ext.pago_minimo)),
       e('td', { className: 'text-right text-mono' }, fmtCOP(ext.pago_total)),
       e('td', { className: 'text-right text-mono', style: { fontSize: 12, color: ext.intereses_intl > 0 ? '#14b8a6' : 'var(--text-muted)', fontWeight: ext.intereses_intl > 0 ? 600 : 400 } },
@@ -3399,7 +3465,7 @@ function Pagos({ tarjeta, onDataChange }) {
               e('span', { className: 'summary-label', style: { color: '#14b8a6' } }, 'Intereses Internacionales (incluidos)'),
               e('span', { className: 'summary-value', style: { color: '#14b8a6', fontWeight: 600 } }, fmtCOP(pagoExtracto.intereses_intl))
             ),
-            e('div', { className: 'summary-row' }, e('span', { className: 'summary-label' }, 'Fecha Limite'), e('span', { className: 'summary-value' }, fmtDate(pagoExtracto.fecha_pago))),
+            e('div', { className: 'summary-row' }, e('span', { className: 'summary-label' }, 'Fecha Limite'), e('span', { className: 'summary-value' }, fmtDate(pagoExtracto.fecha_pago), pagoExtracto.es_fecha_pago_manual && e('span', { style: { fontSize: 9, marginLeft: 6, color: 'var(--accent)', fontWeight: 700, letterSpacing: 0.3 } }, '(MANUAL)'))),
             yaPagado > 0 && e('div', { style: { marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--border)' } },
               e('div', { className: 'summary-row' }, e('span', { className: 'summary-label', style: { color: 'var(--success)' } }, 'Ya Abonado'), e('span', { className: 'summary-value', style: { color: 'var(--success)' } }, fmtCOP(yaPagado))),
               e('div', { className: 'summary-row' }, e('span', { className: 'summary-label', style: { color: 'var(--warning)' } }, 'Restante'), e('span', { className: 'summary-value', style: { color: 'var(--warning)', fontWeight: 700 } }, fmtCOP(restante))),
