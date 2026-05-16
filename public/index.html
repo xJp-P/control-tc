@@ -248,6 +248,11 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '2.7.14': [
+    'Arreglada la mega-card "Cupo Total" del Dashboard general: el porcentaje y el monto disponible ahora coinciden con la suma de las cards individuales de cada tarjeta.',
+    'Antes, la vista global no descontaba los abonos parciales hechos a extractos ni sumaba las cuotas pendientes de extractos vencidos — eso hacía que el Disponible y el porcentaje del Dashboard fueran distintos a los de las tarjetas individuales.',
+    'Si entras a una tarjeta y luego vuelves al Dashboard, los números ahora cuadran exactamente.',
+  ],
   '2.7.13': [
     'Ahora puedes editar manualmente la fecha de pago de cualquier mes desde la card "Fecha Limite de Pago": haz clic en el icono de lápiz, escoges la fecha real que aparece en tu extracto y listo.',
     'Útil cuando el banco mueve la fecha de pago uno o dos días por festivos o fines de semana — la app ya no muestra una fecha tentativa cuando tú conoces la real.',

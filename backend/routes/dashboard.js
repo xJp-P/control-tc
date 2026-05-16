@@ -167,32 +167,37 @@ module.exports = function(db) {
     const comprasPendientesCiclo = db.prepare("SELECT COALESCE(SUM(valor_cop - COALESCE(monto_abonado,0)),0) as total FROM compras WHERE ciclo=? AND estado NOT IN ('pagado','diferida')" + tjFilter).get(cicloActual, ...tjParams);
     const todasComprasPendientes = db.prepare("SELECT COALESCE(SUM(valor_cop - COALESCE(monto_abonado,0)),0) as total FROM compras WHERE estado NOT IN ('pagado','diferida')" + tjFilter).get(...tjParams);
 
+    // Ajustes de deuda: capital de cuotas en extractos pendientes pasados
+    // y monto pagado a esos extractos. Antes solo corrían en vista per-card,
+    // por eso la mega-card del Dashboard global mostraba un disponible y un
+    // porcentaje distintos de la suma de las cards individuales. Ahora corren
+    // siempre — en global, cada extracto pendiente filtra sus avances/diferidas
+    // por su propio tarjeta_id internamente.
     let deudaImpagaAvances = 0, deudaImpagaDiferidas = 0;
-    if (tarjeta_id) {
-      const extractosImpagos2 = db.prepare("SELECT ciclo FROM extractos WHERE tarjeta_id=? AND estado='pendiente' AND fecha_corte <= ?").all(tarjeta_id, hoy);
-      extractosImpagos2.forEach(ext => {
-        avancesActivos.forEach(av => {
-          const abonos2 = db.prepare('SELECT * FROM abonos_avance WHERE avance_id=? ORDER BY fecha').all(av.id);
-          const amort2 = calcularAmortizacionAvance(av.monto, av.tasa_mv, av.plazo, av.fecha_desembolso, av.dia_corte, abonos2, av.comision, avanceOpts(db, av.tarjeta_id));
-          const cuota2 = amort2.tabla.find(r => r.fechaCorte.slice(0, 7) === ext.ciclo);
-          if (cuota2) deudaImpagaAvances += cuota2.cuotaCapital;
-        });
-        diferidasActivas.forEach(d => {
-          const abonosDif2 = db.prepare('SELECT * FROM abonos_diferida WHERE diferida_id=? ORDER BY fecha').all(d.id);
-          const amort2 = calcularAmortizacionDiferida(d.monto, d.tasa_mv, d.num_cuotas, d.fecha_compra, d.fecha_primer_corte, abonosDif2, nuOpts(db, d.tarjeta_id));
-          const cuota2 = amort2.tabla.find(r => r.fechaCorte.slice(0, 7) === ext.ciclo);
-          if (cuota2) deudaImpagaDiferidas += cuota2.cuotaCapital;
-        });
+    const extractosImpagos2 = tarjeta_id
+      ? db.prepare("SELECT tarjeta_id, ciclo FROM extractos WHERE tarjeta_id=? AND estado='pendiente' AND fecha_corte <= ?").all(tarjeta_id, hoy)
+      : db.prepare("SELECT tarjeta_id, ciclo FROM extractos WHERE estado='pendiente' AND fecha_corte <= ?").all(hoy);
+    extractosImpagos2.forEach(ext => {
+      avancesActivos.filter(av => av.tarjeta_id === ext.tarjeta_id).forEach(av => {
+        const abonos2 = db.prepare('SELECT * FROM abonos_avance WHERE avance_id=? ORDER BY fecha').all(av.id);
+        const amort2 = calcularAmortizacionAvance(av.monto, av.tasa_mv, av.plazo, av.fecha_desembolso, av.dia_corte, abonos2, av.comision, avanceOpts(db, av.tarjeta_id));
+        const cuota2 = amort2.tabla.find(r => r.fechaCorte.slice(0, 7) === ext.ciclo);
+        if (cuota2) deudaImpagaAvances += cuota2.cuotaCapital;
       });
-    }
+      diferidasActivas.filter(d => d.tarjeta_id === ext.tarjeta_id).forEach(d => {
+        const abonosDif2 = db.prepare('SELECT * FROM abonos_diferida WHERE diferida_id=? ORDER BY fecha').all(d.id);
+        const amort2 = calcularAmortizacionDiferida(d.monto, d.tasa_mv, d.num_cuotas, d.fecha_compra, d.fecha_primer_corte, abonosDif2, nuOpts(db, d.tarjeta_id));
+        const cuota2 = amort2.tabla.find(r => r.fechaCorte.slice(0, 7) === ext.ciclo);
+        if (cuota2) deudaImpagaDiferidas += cuota2.cuotaCapital;
+      });
+    });
     deudaAvances += deudaImpagaAvances;
     deudaDiferidas += deudaImpagaDiferidas;
 
-    let montoPagadoExtractoTotal = 0;
-    if (tarjeta_id) {
-      const extParciales = db.prepare("SELECT COALESCE(SUM(monto_pagado),0) as total FROM extractos WHERE tarjeta_id=? AND estado='pendiente' AND monto_pagado > 0").get(tarjeta_id);
-      montoPagadoExtractoTotal = extParciales.total || 0;
-    }
+    const extParciales = tarjeta_id
+      ? db.prepare("SELECT COALESCE(SUM(monto_pagado),0) as total FROM extractos WHERE tarjeta_id=? AND estado='pendiente' AND monto_pagado > 0").get(tarjeta_id)
+      : db.prepare("SELECT COALESCE(SUM(monto_pagado),0) as total FROM extractos WHERE estado='pendiente' AND monto_pagado > 0").get();
+    const montoPagadoExtractoTotal = extParciales.total || 0;
     let montoPagadoExtractoCiclo = 0, extractoCicloData = null;
     if (tarjeta_id) {
       const extCiclo = db.prepare("SELECT * FROM extractos WHERE tarjeta_id=? AND ciclo=?").get(tarjeta_id, cicloActual);
