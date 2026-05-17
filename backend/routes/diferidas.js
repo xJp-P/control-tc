@@ -1,6 +1,6 @@
 // backend/routes/diferidas.js — CRUD /api/diferidas
 const { Router } = require('express');
-const { hoyLocal } = require('../helpers/dates');
+const { hoyLocal, calcCicloLocal } = require('../helpers/dates');
 const { calcularAmortizacionDiferida } = require('../engine/amortizacion');
 const { nuOpts } = require('../helpers/banco');
 
@@ -65,8 +65,25 @@ module.exports = function(db, { logAction, tjNombre }) {
     res.json({ id: r.lastInsertRowid });
   });
 
+  // Helper: chequear inmutabilidad de una diferida.
+  // Bloquea si el extracto del ciclo de origen (fecha_compra) está pagado.
+  function validateDiferidaMutable(difRow) {
+    if (!difRow) return null;
+    const tj = db.prepare('SELECT dia_corte FROM tarjetas WHERE id=?').get(difRow.tarjeta_id);
+    const diaCorte = tj ? tj.dia_corte : 30;
+    const cicloOrigen = calcCicloLocal(difRow.fecha_compra, diaCorte);
+    const ext = db.prepare("SELECT estado FROM extractos WHERE tarjeta_id=? AND ciclo=?").get(difRow.tarjeta_id, cicloOrigen);
+    if (ext && ext.estado === 'pagado') {
+      return 'No se puede modificar: el extracto del ciclo ' + cicloOrigen + ' (origen de la diferida) ya está pagado.';
+    }
+    return null;
+  }
+
   router.put('/:id', (req, res) => {
     const { tarjeta_id, etiqueta, monto, tasa_mv, num_cuotas, fecha_compra, fecha_primer_corte, estado, notas } = req.body;
+    const current = db.prepare('SELECT tarjeta_id, fecha_compra FROM diferidas WHERE id=?').get(req.params.id);
+    const err = validateDiferidaMutable(current);
+    if (err) return res.status(403).json({ error: err });
     db.prepare(`UPDATE diferidas SET tarjeta_id=?, etiqueta=?, monto=?, tasa_mv=?, num_cuotas=?, fecha_compra=?, fecha_primer_corte=?, estado=?, notas=? WHERE id=?`)
       .run(tarjeta_id, etiqueta, monto, tasa_mv, num_cuotas, fecha_compra, fecha_primer_corte, estado, notas, req.params.id);
     logAction('editar', tjNombre(tarjeta_id) + 'Diferida editada: ' + etiqueta);
@@ -86,7 +103,9 @@ module.exports = function(db, { logAction, tjNombre }) {
   });
 
   router.delete('/:id', (req, res) => {
-    const d = db.prepare('SELECT etiqueta, tarjeta_id FROM diferidas WHERE id=?').get(req.params.id);
+    const d = db.prepare('SELECT etiqueta, tarjeta_id, fecha_compra FROM diferidas WHERE id=?').get(req.params.id);
+    const err = validateDiferidaMutable(d);
+    if (err) return res.status(403).json({ error: err });
     db.prepare('DELETE FROM diferidas WHERE id=?').run(req.params.id);
     logAction('eliminar', tjNombre(d ? d.tarjeta_id : null) + 'Diferida eliminada: ' + (d ? d.etiqueta : 'ID ' + req.params.id));
     res.json({ ok: true });

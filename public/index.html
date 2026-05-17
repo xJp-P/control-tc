@@ -248,6 +248,14 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '2.8.0': [
+    'Inmutabilidad de registros: cuando el extracto de un ciclo ya fue pagado, los botones de editar y eliminar desaparecen automáticamente en compras, compras divididas, diferidas y avances de ese ciclo. Si alguien intenta editar o borrar desde otra herramienta, el backend también lo bloquea.',
+    'Avances: ahora la regla de "solo se puede editar/eliminar dentro del primer mes" también se aplica al botón de eliminar (antes solo bloqueaba el de editar).',
+    'Badge "Pagado" unificado: en lugar de aparecer disperso entre varias columnas, ahora se muestra exclusivamente en la columna "Estado" con un check elegante. Más limpio y sin duplicaciones.',
+    'Compras divididas: arreglado el badge de "Pagado" cuando el extracto se cierra — ahora la fila madre y las hijas se ven correctamente como pagadas (antes esto solo funcionaba para diferidas, no para compras de una sola cuota).',
+    'Compras divididas: el estado "Bolsillo Parcial" en la compra madre ahora se calcula correctamente sumando lo que tienes apartado de cada parte. Si solo apartaste lo de una persona, la madre ya no dice "Bolsillo" completo erróneamente.',
+    'Color verde en columna "INT INTL" y "TOTAL" reemplazado por color blanco normal — más consistente con el resto de la tabla. El valor de los intereses internacionales sigue siendo identificable porque está en su propia columna dedicada.',
+  ],
   '2.7.16': [
     'Dividir compras 100% entre terceros: ahora puedes asignar toda la compra a otras personas y que tu parte quede en $0, sin tener que asumir un porcentaje obligatorio.',
     'Nuevo botón "÷ Solo terceros" en el modal de división: reparte el total exacto entre las personas que agregaste, sin reservar nada para ti.',
@@ -1939,7 +1947,7 @@ function CardResumen({ tarjeta, onDataChange }) {
               c.descripcion,
               c.valor_usd ? e('span', { style: { color: 'var(--text-muted)', fontSize: 11, marginLeft: 6 } }, 'USD $' + c.valor_usd + (c.tasa_usd ? ' x ' + c.tasa_usd : '')) : null,
               isDif && c.cuota_num && e('span', { style: { fontSize: 10, color: 'var(--accent)', marginLeft: 8 } }, 'Cuota ' + c.cuota_num + '/' + c.cuotas_total),
-              showAsPaid && e('span', { className: 'badge badge-pagado', style: { marginLeft: 8, fontSize: 10 } }, 'pagado'),
+              // Badge "Pagado" reubicado a la columna Actions — ya no aparece inline aquí.
               tieneParcial && e('span', { className: 'badge badge-active', style: { marginLeft: 8, fontSize: 10 } }, 'abono parcial'),
               c.persona_id ? e('span', { style: { fontSize: 10, color: 'var(--accent)', marginLeft: 8 } }, c.persona_nombre) : null
             ),
@@ -1947,11 +1955,12 @@ function CardResumen({ tarjeta, onDataChange }) {
               fmtCOP(valorMostrar),
               tieneParcial && e('div', { style: { fontSize: 11, color: 'var(--primary)' } }, 'Abonado: ' + fmtCOP(abonado) + ' | Resta: ' + fmtCOP(c.valor_cop - abonado))
             ),
-            aplicaIntl && e('td', { className: 'text-right text-mono', style: { fontSize: 12 } }, interesIntl > 0 ? e('span', { style: { color: '#14b8a6' } }, fmtCOP(interesIntl)) : e('span', { style: { color: 'var(--text-muted)' } }, '—')),
-            aplicaIntl && e('td', { className: 'text-right text-mono', style: { fontWeight: interesIntl > 0 ? 600 : undefined } }, interesIntl > 0 ? e('span', { style: { color: '#14b8a6' } }, fmtCOP(valorMostrar + interesIntl)) : e('span', { className: 'text-mono' }, fmtCOP(valorMostrar))),
+            aplicaIntl && e('td', { className: 'text-right text-mono', style: { fontSize: 12 } }, interesIntl > 0 ? fmtCOP(interesIntl) : e('span', { style: { color: 'var(--text-muted)' } }, '—')),
+            aplicaIntl && e('td', { className: 'text-right text-mono', style: { fontWeight: interesIntl > 0 ? 600 : undefined } }, fmtCOP(interesIntl > 0 ? valorMostrar + interesIntl : valorMostrar)),
             e('td', null,
               showAsPaid
-                ? null
+                ? e('span', { className: 'badge badge-pagado', style: { display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, padding: '4px 10px' } },
+                    e(Ico, { name: 'check', size: 12, color: 'currentColor' }), 'Pagado')
                 : (c.estado !== 'pagado'
                     ? e('span', {
                         className: 'badge badge-' + badgeEstado + ' badge-clickable',
@@ -1962,9 +1971,10 @@ function CardResumen({ tarjeta, onDataChange }) {
               !showAsPaid && faltaBolsillo > 0 && e('div', { style: { fontSize: 11, color: 'var(--warning)', marginTop: 2 } }, 'Falta: ' + fmtCOP(faltaBolsillo))
             ),
             e('td', { style: { whiteSpace: 'nowrap' } },
-              e('button', { className: 'btn btn-sm', onClick: () => { setEditCompra(c); setShowCompraModal(true); } }, e(Ico, { name: 'edit', size: 14, color: 'currentColor' })),
-              ' ',
-              e('button', { className: 'btn btn-sm btn-danger', onClick: () => removeCompra(c.id) }, e(Ico, { name: 'trash', size: 14, color: 'currentColor' }))
+              // Cuando el ciclo está pagado: badge "Pagado" va en la columna Estado (arriba); acá queda vacío.
+              !showAsPaid && e('button', { className: 'btn btn-sm', onClick: () => { setEditCompra(c); setShowCompraModal(true); } }, e(Ico, { name: 'edit', size: 14, color: 'currentColor' })),
+              !showAsPaid && ' ',
+              !showAsPaid && e('button', { className: 'btn btn-sm btn-danger', onClick: () => removeCompra(c.id) }, e(Ico, { name: 'trash', size: 14, color: 'currentColor' }))
             )
           );
         };
@@ -1974,23 +1984,37 @@ function CardResumen({ tarjeta, onDataChange }) {
               e('th', null, 'Fecha'),
               e('th', null, 'Descripcion'),
               e('th', { className: 'text-right' }, 'Valor'),
-              aplicaIntl && e('th', { className: 'text-right', style: { color: '#14b8a6', whiteSpace: 'nowrap' } }, 'Int Intl'),
-              aplicaIntl && e('th', { className: 'text-right', style: { color: '#14b8a6', whiteSpace: 'nowrap' } }, 'Total'),
+              aplicaIntl && e('th', { className: 'text-right', style: { whiteSpace: 'nowrap' } }, 'Int Intl'),
+              aplicaIntl && e('th', { className: 'text-right', style: { whiteSpace: 'nowrap' } }, 'Total'),
               e('th', null, 'Estado'),
               e('th', null, '')
             )),
             e('tbody', null,
               purchaseRows.flatMap(item => {
                 if (item.tipo === 'grupo') {
-                  // Para grupos diferidos: calcular estado bolsillo combinado
-                  var grupoBadge = item.estado;
-                  var grupoPaidPast = cicloPagadoC && item.esDiferida; // diferida en ciclo pagado
+                  // Estado "pagado" del grupo:
+                  //   - Diferidas: aplica cuando el ciclo display está pagado (las hijas conservan estado='diferida').
+                  //   - 1-cuota: aplica cuando TODAS las partes están en estado='pagado' (lo marca el sync al cerrar extracto).
+                  //   - O cuando el extracto del ciclo display está pagado (fallback global).
+                  var todasPartesPagadas = item.partes.length > 0 && item.partes.every(function(c) { return c.estado === 'pagado'; });
+                  var grupoPaidPast = cicloPagadoC || (!item.esDiferida && todasPartesPagadas);
+
+                  // Estado bolsillo del grupo: SIEMPRE calculado por agregado, no por items[0].estado.
+                  var grupoBadge;
                   if (item.esDiferida) {
                     var grpBolTotal = item.partes.reduce(function(s, c) { return s + (c.monto_bolsillo || 0); }, 0);
                     var grpTarget = item.partes.reduce(function(s, c) { return s + (c.cuotaCorte || c.valor_cop); }, 0);
                     grupoBadge = grupoPaidPast
                       ? 'pagado'
                       : (Math.round(grpBolTotal) >= Math.round(grpTarget) ? 'bolsillo' : grpBolTotal > 0 ? 'bolsillo_parcial' : 'diferida');
+                  } else {
+                    // Grupo 1-cuota: sumar bolsillo de todas las partes y comparar contra suma de valores.
+                    // Antes leíamos items[0].estado, lo que producía "bolsillo" falso si solo una parte estaba apartada.
+                    var grpBolTotal1c = item.partes.reduce(function(s, c) { return s + (c.monto_bolsillo || 0); }, 0);
+                    var grpTarget1c = item.partes.reduce(function(s, c) { return s + c.valor_cop; }, 0);
+                    grupoBadge = grupoPaidPast
+                      ? 'pagado'
+                      : (Math.round(grpBolTotal1c) >= Math.round(grpTarget1c) ? 'bolsillo' : grpBolTotal1c > 0 ? 'bolsillo_parcial' : 'pendiente');
                   }
                   const grpEsIntl = item.partes.length > 0 && !!(item.partes[0].es_internacional);
                   const grpInteres = item.partes.reduce((s, p) => s + calcInteresIntl(p), 0);
@@ -2003,9 +2027,13 @@ function CardResumen({ tarjeta, onDataChange }) {
                         item.esDiferida ? 'Cuota ' + item.cuota_num + '/' + item.cuotas_total + ' \u00B7 ' + item.partes.length + ' partes' : 'Dividida ' + item.partes.length + ' partes')
                     ),
                     e('td', { className: 'text-right text-mono', style: { fontWeight: 700, color: grupoPaidPast ? 'var(--success)' : undefined } }, fmtCOP(item.total)),
-                    aplicaIntl && e('td', { className: 'text-right text-mono', style: { fontSize: 12 } }, grpInteres > 0 ? e('span', { style: { color: '#14b8a6' } }, fmtCOP(grpInteres)) : e('span', { style: { color: 'var(--text-muted)' } }, '\u2014')),
-                    aplicaIntl && e('td', { className: 'text-right text-mono', style: { fontWeight: grpInteres > 0 ? 700 : undefined } }, grpInteres > 0 ? e('span', { style: { color: '#14b8a6' } }, fmtCOP(item.total + grpInteres)) : e('span', { className: 'text-mono', style: { fontWeight: 700 } }, fmtCOP(item.total))),
-                    e('td', null, e('span', { className: 'badge badge-' + grupoBadge }, grupoBadge.replace(/_/g, ' '))),
+                    aplicaIntl && e('td', { className: 'text-right text-mono', style: { fontSize: 12 } }, grpInteres > 0 ? fmtCOP(grpInteres) : e('span', { style: { color: 'var(--text-muted)' } }, '\u2014')),
+                    aplicaIntl && e('td', { className: 'text-right text-mono', style: { fontWeight: 700 } }, fmtCOP(grpInteres > 0 ? item.total + grpInteres : item.total)),
+                    // Estado: cuando el grupo está pagado, el badge "Pagado" vive aquí (estilo unificado).
+                    e('td', null, grupoPaidPast
+                      ? e('span', { className: 'badge badge-pagado', style: { display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, padding: '4px 10px' } },
+                          e(Ico, { name: 'check', size: 12, color: 'currentColor' }), 'Pagado')
+                      : e('span', { className: 'badge badge-' + grupoBadge }, grupoBadge.replace(/_/g, ' '))),
                     e('td', { style: { whiteSpace: 'nowrap' } },
                       !grupoPaidPast && e('button', { className: 'btn btn-sm', onClick: (ev) => { ev.stopPropagation(); editGrupo(item); }, title: 'Editar compra dividida' }, e(Ico, { name: 'edit', size: 14, color: 'currentColor' })),
                       !grupoPaidPast && ' ',
@@ -2017,8 +2045,9 @@ function CardResumen({ tarjeta, onDataChange }) {
                     var childBol = item.esDiferida ? (c.monto_bolsillo_cuota || 0) : (c.monto_bolsillo || 0);
                     var childIntl = (!item.esDiferida && c.es_internacional) ? calcInteresIntl(c) : 0;
                     var childTarget = item.esDiferida ? (c.cuotaCorte || c.valor_cop) : (c.valor_cop + childIntl);
-                    // childPaidPast solo cuando el extracto fue efectivamente pagado (no por ciclo pasado)
-                    var childPaidPast = cicloPagadoC && item.esDiferida;
+                    // childPaidPast: aplica tanto a hijas diferidas (por ciclo pagado) como a hijas 1-cuota
+                    // (estado='pagado' lo establece el sync al pagar el extracto, o fallback al cicloPagadoC).
+                    var childPaidPast = cicloPagadoC || c.estado === 'pagado';
                     var childBadge;
                     if (item.esDiferida) {
                       childBadge = childPaidPast
@@ -2027,9 +2056,11 @@ function CardResumen({ tarjeta, onDataChange }) {
                     } else {
                       // Compra dividida a 1 cuota: cualquier parte (Personal o Tercero) puede ir a bolsillo.
                       // Mismo monto_bolsillo que usa la sección Terceros — los botones quedan conectados.
-                      childBadge = Math.round(childBol) >= Math.round(childTarget)
-                        ? 'bolsillo'
-                        : childBol > 0 ? 'bolsillo_parcial' : 'pendiente';
+                      childBadge = childPaidPast
+                        ? 'pagado'
+                        : (Math.round(childBol) >= Math.round(childTarget)
+                            ? 'bolsillo'
+                            : childBol > 0 ? 'bolsillo_parcial' : 'pendiente');
                     }
                     var childFalta = (!esFuturoCiclo && childBadge === 'bolsillo_parcial') ? Math.round(childTarget - childBol) : 0;
                     var childValor = item.esDiferida ? (c.cuotaCorte || 0) : c.valor_cop;
@@ -2041,20 +2072,24 @@ function CardResumen({ tarjeta, onDataChange }) {
                         item.esDiferida ? e('span', { style: { fontSize: 10, color: 'var(--text-muted)', marginLeft: 6 } }, 'Cuota ' + c.cuota_num + '/' + c.cuotas_total) : null
                       ),
                       e('td', { className: 'text-right text-mono', style: { fontSize: 13, color: childPaidPast ? 'var(--success)' : undefined } }, fmtCOP(childValor)),
-                      aplicaIntl && e('td', { className: 'text-right text-mono', style: { fontSize: 12 } }, childIntl > 0 ? e('span', { style: { color: '#14b8a6' } }, fmtCOP(childIntl)) : e('span', { style: { color: 'var(--text-muted)' } }, '—')),
-                      aplicaIntl && e('td', { className: 'text-right text-mono', style: { fontSize: 13, fontWeight: childIntl > 0 ? 600 : undefined } }, childIntl > 0 ? e('span', { style: { color: '#14b8a6' } }, fmtCOP(childValor + childIntl)) : fmtCOP(childValor)),
+                      aplicaIntl && e('td', { className: 'text-right text-mono', style: { fontSize: 12 } }, childIntl > 0 ? fmtCOP(childIntl) : e('span', { style: { color: 'var(--text-muted)' } }, '—')),
+                      aplicaIntl && e('td', { className: 'text-right text-mono', style: { fontSize: 13, fontWeight: childIntl > 0 ? 600 : undefined } }, fmtCOP(childIntl > 0 ? childValor + childIntl : childValor)),
+                      // Estado de la hija: cuando está pagado, el badge "Pagado" vive aquí.
                       e('td', null,
-                        childBadge ? (childPaidPast
-                          ? e('span', { className: 'badge badge-pagado', style: { fontSize: 10 } }, 'pagado')
-                          : e('span', {
-                              className: 'badge badge-' + childBadge + ' badge-clickable',
-                              onClick: function() { openBolsilloModal(Object.assign({}, c, { _bolsilloTarget: childTarget, monto_bolsillo: childBol, cuota_num: item.esDiferida ? c.cuota_num : undefined, cuotas_total: item.esDiferida ? c.cuotas_total : undefined })); },
-                              title: 'Clic para gestionar bolsillo',
-                              style: { fontSize: 10 }
-                            }, childBadge.replace(/_/g, ' '))
-                        ) : null,
+                        childPaidPast
+                          ? e('span', { className: 'badge badge-pagado', style: { display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, padding: '3px 8px' } },
+                              e(Ico, { name: 'check', size: 10, color: 'currentColor' }), 'Pagado')
+                          : (childBadge
+                              ? e('span', {
+                                  className: 'badge badge-' + childBadge + ' badge-clickable',
+                                  onClick: function() { openBolsilloModal(Object.assign({}, c, { _bolsilloTarget: childTarget, monto_bolsillo: childBol, cuota_num: item.esDiferida ? c.cuota_num : undefined, cuotas_total: item.esDiferida ? c.cuotas_total : undefined })); },
+                                  title: 'Clic para gestionar bolsillo',
+                                  style: { fontSize: 10 }
+                                }, childBadge.replace(/_/g, ' '))
+                              : null),
                         childFalta > 0 && e('div', { style: { fontSize: 10, color: 'var(--warning)', marginTop: 2 } }, 'Falta: ' + fmtCOP(childFalta))
                       ),
+                      // Actions: vacío para hijas (nunca tienen botones individuales).
                       e('td', null)
                     );
                   });
@@ -2103,7 +2138,10 @@ function CardResumen({ tarjeta, onDataChange }) {
                   var avFalta = avBolBadge === 'bolsillo_parcial' ? Math.round(avTarget - avBol) : 0;
                   var rowStyle = { cursor: 'pointer' };
                   if (cicloPagado) rowStyle.background = 'rgba(52,211,153,0.10)';
-                  var canEditAvance = tarjeta && calcCicloLocal(a.fecha_desembolso, tarjeta.dia_corte) === cicloActual();
+                  // Inmutabilidad de avances: solo se puede editar/eliminar si el desembolso es del ciclo actual
+                  // (antigüedad < 1 mes) Y el extracto de ese ciclo aún no está pagado.
+                  var canEditAvance = tarjeta && calcCicloLocal(a.fecha_desembolso, tarjeta.dia_corte) === cicloActual() && !cicloPagado;
+                  var canDeleteAvance = canEditAvance;
                   return e('tr', { key: a.id, onClick: () => loadAvanceDetail(a.id), style: rowStyle, className: selectedAvance === a.id ? 'row-highlight' : '' },
                     e('td', { style: { fontWeight: 600 } }, a.etiqueta),
                     e('td', { className: 'text-right text-mono' }, fmtCOP(a.monto)),
@@ -2112,9 +2150,10 @@ function CardResumen({ tarjeta, onDataChange }) {
                     e('td', null, fmtDate(a.fecha_desembolso)),
                     e('td', { className: 'text-right text-mono', style: { fontWeight: 700, color: a.saldoActual > 0 ? 'var(--danger)' : 'var(--success)' } }, fmtCOP(a.saldoActual)),
                     e('td', { className: 'text-right text-mono', style: { color: cicloPagado ? 'var(--success)' : 'var(--danger)' } }, avTarget > 0 ? fmtCOP(avTarget) : '-'),
+                    // Bolsillo: cuando el ciclo está pagado, no mostrar "pagado" aquí — se mueve a Actions.
                     e('td', null,
                       cicloPagado
-                        ? e('span', { className: 'badge badge-pagado', style: { fontSize: 10 } }, 'pagado')
+                        ? e('span', { style: { color: 'var(--text-muted)' } }, '—')
                         : (avBolBadge && a.estado === 'activo'
                             ? e('span', {
                                 className: 'badge badge-' + avBolBadge + ' badge-clickable',
@@ -2124,11 +2163,15 @@ function CardResumen({ tarjeta, onDataChange }) {
                             : null),
                       !cicloPagado && avFalta > 0 && e('div', { style: { fontSize: 11, color: 'var(--warning)', marginTop: 2 } }, 'Falta: ' + fmtCOP(avFalta))
                     ),
-                    e('td', null, e('span', { className: 'badge badge-' + (cicloPagado ? 'pagado' : a.estado) }, cicloPagado ? 'pagado' : a.estado)),
-                    e('td', null,
+                    // Estado: cuando el ciclo está pagado, el badge "Pagado" vive aquí.
+                    e('td', null, cicloPagado
+                      ? e('span', { className: 'badge badge-pagado', style: { display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, padding: '4px 10px' } },
+                          e(Ico, { name: 'check', size: 12, color: 'currentColor' }), 'Pagado')
+                      : e('span', { className: 'badge badge-' + a.estado }, a.estado)),
+                    e('td', { style: { whiteSpace: 'nowrap' } },
                       canEditAvance && e('button', { className: 'btn btn-sm', onClick: (ev) => { ev.stopPropagation(); setEditAvance(a); setShowAvanceModal(true); } }, e(Ico, { name: 'edit', size: 14, color: 'currentColor' })),
                       canEditAvance && ' ',
-                      e('button', { className: 'btn btn-sm btn-danger', onClick: (ev) => { ev.stopPropagation(); removeAvance(a.id); } }, e(Ico, { name: 'trash', size: 14, color: 'currentColor' }))
+                      canDeleteAvance && e('button', { className: 'btn btn-sm btn-danger', onClick: (ev) => { ev.stopPropagation(); removeAvance(a.id); } }, e(Ico, { name: 'trash', size: 14, color: 'currentColor' }))
                     )
                   );
                 })
@@ -2236,7 +2279,7 @@ function CardResumen({ tarjeta, onDataChange }) {
                     e('td', { className: 'text-right text-mono', style: { fontWeight: 700, color: d.saldoActual > 0 ? 'var(--danger)' : 'var(--success)' } }, fmtCOP(d.saldoActual)),
                     e('td', null,
                       cicloPagadoDif
-                        ? e('span', { className: 'badge badge-pagado' }, 'pagado')
+                        ? e('span', { style: { color: 'var(--text-muted)' } }, '—')
                         : e('span', {
                             className: 'badge badge-' + bolBadge + ' badge-clickable',
                             onClick: (ev) => {
@@ -2262,11 +2305,15 @@ function CardResumen({ tarjeta, onDataChange }) {
                           }, bolBadge.replace(/_/g, ' ')),
                       faltaDif > 0 && e('div', { style: { fontSize: 10, color: 'var(--warning)', marginTop: 2 } }, 'Falta: ' + fmtCOP(faltaDif))
                     ),
-                    e('td', null, e('span', { className: 'badge badge-' + (cicloPagadoDif ? 'pagado' : d.estado) }, cicloPagadoDif ? 'pagado' : d.estado)),
-                    e('td', null,
-                      e('button', { className: 'btn btn-sm', onClick: (ev) => { ev.stopPropagation(); setEditDiferida(d); setShowDiferidaModal(true); } }, e(Ico, { name: 'edit', size: 14, color: 'currentColor' })),
-                      ' ',
-                      e('button', { className: 'btn btn-sm btn-danger', onClick: (ev) => { ev.stopPropagation(); removeDiferida(d.id); } }, e(Ico, { name: 'trash', size: 14, color: 'currentColor' }))
+                    // Estado: cuando el ciclo está pagado, el badge "Pagado" vive aquí.
+                    e('td', null, cicloPagadoDif
+                      ? e('span', { className: 'badge badge-pagado', style: { display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, padding: '4px 10px' } },
+                          e(Ico, { name: 'check', size: 12, color: 'currentColor' }), 'Pagado')
+                      : e('span', { className: 'badge badge-' + d.estado }, d.estado)),
+                    e('td', { style: { whiteSpace: 'nowrap' } },
+                      !cicloPagadoDif && e('button', { className: 'btn btn-sm', onClick: (ev) => { ev.stopPropagation(); setEditDiferida(d); setShowDiferidaModal(true); } }, e(Ico, { name: 'edit', size: 14, color: 'currentColor' })),
+                      !cicloPagadoDif && ' ',
+                      !cicloPagadoDif && e('button', { className: 'btn btn-sm btn-danger', onClick: (ev) => { ev.stopPropagation(); removeDiferida(d.id); } }, e(Ico, { name: 'trash', size: 14, color: 'currentColor' }))
                     )
                   );
                 })
@@ -4378,8 +4425,8 @@ function Terceros({ tarjeta }) {
                   e('table', null,
                     e('thead', null, e('tr', null,
                       e('th', null, 'Fecha'), e('th', null, 'Descripcion'), e('th', { className: 'text-right' }, 'Valor'),
-                      aplicaIntl && e('th', { className: 'text-right', style: { color: '#14b8a6', whiteSpace: 'nowrap' } }, 'Int Intl'),
-                      aplicaIntl && e('th', { className: 'text-right', style: { color: '#14b8a6', whiteSpace: 'nowrap' } }, 'Total'),
+                      aplicaIntl && e('th', { className: 'text-right', style: { whiteSpace: 'nowrap' } }, 'Int Intl'),
+                      aplicaIntl && e('th', { className: 'text-right', style: { whiteSpace: 'nowrap' } }, 'Total'),
                       e('th', null, 'Estado TC'), e('th', null, 'Dinero'), e('th', null, '')
                     )),
                     e('tbody', null,
@@ -4428,8 +4475,8 @@ function Terceros({ tarjeta }) {
                           e('td', null, fmtDate(c.fecha)),
                           e('td', { style: { fontWeight: 600 } }, c.descripcion),
                           e('td', { className: 'text-right text-mono', style: { fontWeight: 600, color: (c.tercero_pagado || bolCubre) ? 'var(--success)' : undefined } }, fmtCOP(c.valor_cop)),
-                          aplicaIntl && e('td', { className: 'text-right text-mono', style: { fontSize: 12 } }, intlTercero > 0 ? e('span', { style: { color: '#14b8a6' } }, fmtCOP(intlTercero)) : e('span', { style: { color: 'var(--text-muted)' } }, '—')),
-                          aplicaIntl && e('td', { className: 'text-right text-mono', style: { fontWeight: intlTercero > 0 ? 600 : undefined } }, intlTercero > 0 ? e('span', { style: { color: '#14b8a6' } }, fmtCOP(c.valor_cop + intlTercero)) : e('span', { className: 'text-mono' }, fmtCOP(c.valor_cop))),
+                          aplicaIntl && e('td', { className: 'text-right text-mono', style: { fontSize: 12 } }, intlTercero > 0 ? fmtCOP(intlTercero) : e('span', { style: { color: 'var(--text-muted)' } }, '—')),
+                          aplicaIntl && e('td', { className: 'text-right text-mono', style: { fontWeight: intlTercero > 0 ? 600 : undefined } }, fmtCOP(intlTercero > 0 ? c.valor_cop + intlTercero : c.valor_cop)),
                           e('td', null, e('span', { className: 'badge badge-' + c.estado }, c.estado.replace(/_/g, ' '))),
                           e('td', null,
                             c.tercero_pagado

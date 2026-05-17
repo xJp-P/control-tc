@@ -39,4 +39,19 @@ function primerCorteAvance(fechaDesembolso, diaCorte) {
   return new Date(year, month, actualDay).toISOString().slice(0, 10);
 }
 
-module.exports = { hoyLocal, addMonths, addDays, daysBetween, primerCorteAvance };
+// Calcula el ciclo (YYYY-MM) en el que cae una fecha según el día de corte de la tarjeta.
+// Si el día de la fecha es > diaCorte, se cuenta para el ciclo del mes siguiente.
+// Equivalente a calcCicloLocal del frontend — mantener sincronizados.
+function calcCicloLocal(fechaStr, diaCorte) {
+  const d = new Date(fechaStr + 'T12:00:00');
+  if (d.getDate() > (diaCorte || 30)) d.setMonth(d.getMonth() + 1);
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+}
+
+// Devuelve el ciclo del mes calendario actual (YYYY-MM).
+function cicloActualStr() {
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+}
+
+module.exports = { hoyLocal, addMonths, addDays, daysBetween, primerCorteAvance, calcCicloLocal, cicloActualStr };

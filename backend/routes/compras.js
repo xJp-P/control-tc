@@ -121,7 +121,14 @@ module.exports = function(db, { logAction, tjNombre }) {
   router.put('/:id', (req, res) => {
     const { tarjeta_id, fecha, descripcion, valor_cop, valor_usd, tasa_usd, persona_id, estado, notas, monto_bolsillo, es_internacional } = req.body;
     const ciclo = calcCiclo(fecha, tarjeta_id);
-    const current = db.prepare('SELECT estado, monto_bolsillo, es_internacional FROM compras WHERE id=?').get(req.params.id);
+    const current = db.prepare('SELECT estado, monto_bolsillo, es_internacional, ciclo, tarjeta_id FROM compras WHERE id=?').get(req.params.id);
+    // Inmutabilidad: si el extracto del ciclo actual de la compra ya está pagado, bloquear.
+    if (current) {
+      const ext = db.prepare("SELECT estado FROM extractos WHERE tarjeta_id=? AND ciclo=?").get(current.tarjeta_id, current.ciclo);
+      if (ext && ext.estado === 'pagado') {
+        return res.status(403).json({ error: 'No se puede editar: el extracto del ciclo ' + current.ciclo + ' ya está pagado.' });
+      }
+    }
     const finalEstado = estado || (current ? current.estado : 'pendiente');
     const finalBolsillo = monto_bolsillo !== undefined ? (monto_bolsillo || 0) : (current ? current.monto_bolsillo : 0);
     const finalIntl = es_internacional !== undefined ? (es_internacional ? 1 : 0) : (current ? (current.es_internacional || 0) : 0);
@@ -163,7 +170,14 @@ module.exports = function(db, { logAction, tjNombre }) {
   });
 
   router.delete('/:id', (req, res) => {
-    const c = db.prepare('SELECT descripcion, tarjeta_id, diferida_id FROM compras WHERE id=?').get(req.params.id);
+    const c = db.prepare('SELECT descripcion, tarjeta_id, diferida_id, ciclo FROM compras WHERE id=?').get(req.params.id);
+    // Inmutabilidad: bloquear si el extracto del ciclo ya está pagado.
+    if (c) {
+      const ext = db.prepare("SELECT estado FROM extractos WHERE tarjeta_id=? AND ciclo=?").get(c.tarjeta_id, c.ciclo);
+      if (ext && ext.estado === 'pagado') {
+        return res.status(403).json({ error: 'No se puede eliminar: el extracto del ciclo ' + c.ciclo + ' ya está pagado.' });
+      }
+    }
     db.prepare('DELETE FROM compras WHERE id=?').run(req.params.id);
     // Si la compra tenía diferida vinculada y ya no queda ninguna otra compra referenciándola,
     // borrar la diferida también para que no quede sumando en deudaDiferidas (bug: cupo total)

@@ -1,6 +1,6 @@
 // backend/routes/avances.js — CRUD /api/avances + abonos
 const { Router } = require('express');
-const { hoyLocal } = require('../helpers/dates');
+const { hoyLocal, calcCicloLocal, cicloActualStr } = require('../helpers/dates');
 const { calcularAmortizacionAvance } = require('../engine/amortizacion');
 const { avanceOpts } = require('../helpers/banco');
 
@@ -56,8 +56,26 @@ module.exports = function(db, { logAction, tjNombre }) {
     res.json({ id: r.lastInsertRowid });
   });
 
+  // Helper: validar inmutabilidad de un avance (antigüedad + extracto pagado).
+  // Mismo criterio que el frontend (canEditAvance) para que UI y API coincidan.
+  function validateAvanceMutable(avanceRow) {
+    if (!avanceRow) return null;
+    const cicloDesembolso = calcCicloLocal(avanceRow.fecha_desembolso, avanceRow.dia_corte);
+    if (cicloDesembolso !== cicloActualStr()) {
+      return 'No se puede modificar: el avance tiene más de un mes de antigüedad (desembolsado en el ciclo ' + cicloDesembolso + ').';
+    }
+    const ext = db.prepare("SELECT estado FROM extractos WHERE tarjeta_id=? AND ciclo=?").get(avanceRow.tarjeta_id, cicloDesembolso);
+    if (ext && ext.estado === 'pagado') {
+      return 'No se puede modificar: el extracto del ciclo ' + cicloDesembolso + ' ya está pagado.';
+    }
+    return null;
+  }
+
   router.put('/:id', (req, res) => {
     const { tarjeta_id, etiqueta, monto, tasa_mv, plazo, fecha_desembolso, dia_corte, estado, notas, comision } = req.body;
+    const current = db.prepare('SELECT tarjeta_id, fecha_desembolso, dia_corte FROM avances WHERE id=?').get(req.params.id);
+    const err = validateAvanceMutable(current);
+    if (err) return res.status(403).json({ error: err });
     db.prepare(`UPDATE avances SET tarjeta_id=?, etiqueta=?, monto=?, tasa_mv=?, plazo=?, fecha_desembolso=?, dia_corte=?, estado=?, notas=?, comision=? WHERE id=?`)
       .run(tarjeta_id, etiqueta, monto, tasa_mv, plazo, fecha_desembolso, dia_corte, estado, notas, comision || 0, req.params.id);
     logAction('editar', tjNombre(tarjeta_id) + 'Avance editado: ' + etiqueta);
@@ -65,7 +83,9 @@ module.exports = function(db, { logAction, tjNombre }) {
   });
 
   router.delete('/:id', (req, res) => {
-    const av = db.prepare('SELECT etiqueta, tarjeta_id FROM avances WHERE id=?').get(req.params.id);
+    const av = db.prepare('SELECT etiqueta, tarjeta_id, fecha_desembolso, dia_corte FROM avances WHERE id=?').get(req.params.id);
+    const err = validateAvanceMutable(av);
+    if (err) return res.status(403).json({ error: err });
     db.prepare('DELETE FROM abonos_avance WHERE avance_id=?').run(req.params.id);
     db.prepare('DELETE FROM avances WHERE id=?').run(req.params.id);
     logAction('eliminar', tjNombre(av ? av.tarjeta_id : null) + 'Avance eliminado: ' + (av ? av.etiqueta : 'ID ' + req.params.id));
