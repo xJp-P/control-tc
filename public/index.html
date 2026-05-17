@@ -248,6 +248,13 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '2.7.16': [
+    'Dividir compras 100% entre terceros: ahora puedes asignar toda la compra a otras personas y que tu parte quede en $0, sin tener que asumir un porcentaje obligatorio.',
+    'Nuevo botón "÷ Solo terceros" en el modal de división: reparte el total exacto entre las personas que agregaste, sin reservar nada para ti.',
+    'El botón anterior "÷ Partes iguales" ahora se llama "÷ Incluyéndome" para distinguir claramente las dos formas de dividir.',
+    'Cuando logras dividir el 100% entre terceros, el indicador te confirma: "Dividido 100% entre terceros — tu parte queda en $0".',
+    'Funciona tanto para compras de una sola cuota como para diferidas, y también al editar una compra dividida existente (la parte personal se elimina automáticamente).',
+  ],
   '2.7.15': [
     'Nota explicativa en las cards "Cupo Usado" y "Cupo Total": ahora se aclara que el disponible puede diferir del banco por intereses devengados sin facturar y cuota de manejo del mes.',
     'Esto explica por qué la app puede mostrar un disponible distinto al de la app del banco — los cálculos siguen siendo correctos, pero el banco va sumando intereses día a día y carga la cuota de manejo, mientras la app solo refleja lo que ya quedó en algún extracto.',
@@ -2748,7 +2755,7 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
       dividir && e('div', { style: { fontSize: 11, color: 'var(--text-muted)', marginTop: 4, marginLeft: 20 } },
         item && item._isGrupo
           ? 'Edita los montos por persona o agrega/quita personas. Cuotas no se modifican.'
-          : 'Se crean entradas separadas por cada parte. Tu parte es el resto que no asignes a nadie.'
+          : 'Se crean entradas separadas por cada parte. Si los montos suman el total exacto, tu parte queda en $0 y toda la compra le corresponde a los terceros.'
       )
     ),
     dividir && e('div', { style: { background: 'var(--bg-tertiary)', borderRadius: 8, padding: '12px', marginBottom: 12 } },
@@ -2767,22 +2774,32 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
         splits.length > 1 && e('button', { type: 'button', className: 'btn btn-sm btn-danger',
           onClick: () => setSplits(prev => prev.filter((_, j) => j !== i)) }, '\u00D7')
       )),
-      e('div', { style: { display: 'flex', gap: 8, marginBottom: 8 } },
+      e('div', { style: { display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' } },
         e('button', { type: 'button', className: 'btn btn-sm',
           onClick: () => setSplits(prev => [...prev, { persona_id: '', monto: '' }]) }, '+ Agregar persona'),
-        totalCopNum > 0 && e('button', { type: 'button', className: 'btn btn-sm',
+        totalCopNum > 0 && splits.length > 0 && e('button', { type: 'button', className: 'btn btn-sm',
           onClick: () => {
             const numPartes = splits.length + 1; // personas + yo
             const cuota = Math.floor(totalCopNum / numPartes);
             const resto = totalCopNum - cuota * numPartes;
             setSplits(prev => prev.map((s, i) => ({ ...s, monto: String(i === 0 ? cuota + resto : cuota) })));
-          }
-        }, '\u00F7 Partes iguales')
+          },
+          title: 'Divide el total entre los terceros y t\u00FA (t\u00FA asumes una parte igual)'
+        }, '\u00F7 Incluy\u00E9ndome'),
+        totalCopNum > 0 && splits.length > 0 && e('button', { type: 'button', className: 'btn btn-sm',
+          onClick: () => {
+            const numPartes = splits.length; // solo terceros, sin titular
+            const cuota = Math.floor(totalCopNum / numPartes);
+            const resto = totalCopNum - cuota * numPartes;
+            setSplits(prev => prev.map((s, i) => ({ ...s, monto: String(i === 0 ? cuota + resto : cuota) })));
+          },
+          title: 'Divide el total 100% entre los terceros (tu parte queda en $0)'
+        }, '\u00F7 Solo terceros')
       ),
       totalCopNum > 0 && e('div', { style: { fontSize: 12, marginTop: 4 } },
         e('span', { style: { color: remainder < 0 ? 'var(--danger)' : remainder === 0 ? 'var(--success)' : 'var(--text-secondary)' } },
           remainder < 0 ? 'Excede el total en ' + fmtCOP(Math.abs(remainder))
-            : remainder === 0 ? 'Dividido al 100%'
+            : remainder === 0 ? 'Dividido 100% entre terceros \u2014 tu parte queda en $0'
             : 'Tu parte: ' + fmtCOP(remainder)
         )
       )
