@@ -248,6 +248,13 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '2.9.0': [
+    'Asistente inteligente de Interés Internacional: al registrar una compra en tu Bancolombia Visa, si el nombre del establecimiento coincide con compras anteriores que marcaste como internacionales (ej. Netflix, Amazon, Apple), aparece un aviso recordándote considerar marcar el check de INTL.',
+    'El asistente aprende y desaprende solo: si dejas de marcar un comercio como internacional, deja de sugerírtelo. Si empiezas a marcar uno nuevo, queda registrado para futuras compras.',
+    'El aviso solo se activa en tarjetas Bancolombia Visa (las únicas que cobran ese interés). En Nu, RappiCard, Mastercard y Amex no aparece para no generar ruido.',
+    'El aviso es informativo: nunca marca el check automáticamente ni bloquea el guardado — tú decides.',
+    'Iconos del CHANGELOG ahora se ven proporcionados al texto: aumentamos su tamaño y mejoramos la alineación para que sean más legibles.',
+  ],
   '2.8.3': [
     'Tabla más compacta en Diferidas y Avances: las columnas "Bolsillo" y "Estado" se unieron en una sola columna "Estado" que ya captura todo (pendiente, bolsillo apartado, ciclo pagado, etc.). Ya no aparece el badge redundante "activo" en cada fila.',
     'Alineación visual entre las tablas de Compras y Diferidas: ahora las columnas Fecha, Descripción, Responsable, Valor/Saldo Actual, Estado y Acciones quedan perfectamente alineadas verticalmente — la sensación al mirar las dos tablas es la de una sola cuadrícula limpia.',
@@ -742,6 +749,7 @@ const ICONS = {
   refresh:    'M23 4v6h-6 M1 20v-6h6 M3.51 9a9 9 0 0114.85-3.36L23 10 M1 14l4.64 4.36A9 9 0 0020.49 15',
   undo:       'M3 7v6h6 M21 17a9 9 0 00-9-9 9 9 0 00-6.69 3L3 13',
   calculator: 'M4 2h16a2 2 0 012 2v16a2 2 0 01-2 2H4a2 2 0 01-2-2V4a2 2 0 012-2z M8 8h8v3H8z M8 14h2v2H8z M12 14h2v2h-2z M16 14h2v2h-2z M8 18h2v2H8z M12 18h2v2h-2z M16 18h2v2h-2z',
+  bulb:       'M9 18h6 M10 22h4 M15.09 14c.18-.98.65-1.74 1.41-2.5A4.65 4.65 0 0018 8a6 6 0 00-12 0c0 1 .23 2.23 1.5 3.5A4.61 4.61 0 018.91 14',
 };
 function Ico({ name, size = 18, sw = 1.8, color = 'currentColor' }) {
   const d = ICONS[name]; if (!d) return null;
@@ -2684,6 +2692,13 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
   });
   const lastUsdField = useRef(null); // tracks which field was edited last: 'usd', 'tasa', 'cop'
 
+  // Asistente INTL: cargamos al montar el form la lista de descripciones que ya tienen
+  // alguna compra marcada como es_internacional=1 en la DB (real-time, auto-aprende/desaprende).
+  const [intlDescripciones, setIntlDescripciones] = useState([]);
+  useEffect(() => {
+    api('/compras/intl-descripciones').then(setIntlDescripciones).catch(() => setIntlDescripciones([]));
+  }, []);
+
   function onUsdChange(val) { lastUsdField.current = 'usd'; setValorUsd(val); }
   function onTasaChange(val) { lastUsdField.current = 'tasa'; setTasaUsd(val); }
   function onCopUsdChange(val) { lastUsdField.current = 'cop'; setValorCop(val); }
@@ -2835,6 +2850,15 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
   const aplicaIntlForm = !!(tarjeta && tarjeta.banco && tarjeta.banco.toLowerCase().includes('bancolombia') && !_dualForm);
   const intlCheckboxLabel = aplicaIntlForm ? 'Compra internacional (acumula intereses)' : 'Compra Internacional';
 
+  // Asistente INTL — el hint solo se muestra si:
+  //   1) La tarjeta seleccionada es Bancolombia Visa (candado por tarjeta: aplicaIntlForm).
+  //   2) El usuario lleva al menos 3 caracteres en la descripción (evita falsos positivos).
+  //   3) Alguna descripción histórica intl coincide (substring case-insensitive bidireccional).
+  //   4) El checkbox de intl aún NO está marcado (sino el hint sería redundante).
+  const descNorm = (descripcion || '').toLowerCase().trim();
+  const intlHistMatch = descNorm.length >= 3 && intlDescripciones.some(d => d.includes(descNorm) || descNorm.includes(d));
+  const showIntlHint = aplicaIntlForm && intlHistMatch && !esInternacional;
+
   return e('form', { onSubmit: submit },
     e('div', { className: 'form-row' },
       e('div', { className: 'form-group' },
@@ -2851,7 +2875,14 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
     ),
     e('div', { className: 'form-group' },
       e('label', { className: 'form-label' }, 'Descripcion'),
-      e('input', { type: 'text', className: 'form-input', value: descripcion, onChange: ev => setDescripcion(ev.target.value), required: true })
+      e('input', { type: 'text', className: 'form-input', value: descripcion, onChange: ev => setDescripcion(ev.target.value), required: true }),
+      // Asistente INTL: aviso proactivo cuando estamos en Bancolombia Visa y la descripción coincide con histórico intl.
+      showIntlHint && e('div', {
+        style: { fontSize: 12, color: '#fb923c', marginTop: 6, display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', background: 'rgba(251,146,60,0.08)', border: '1px solid rgba(251,146,60,0.25)', borderRadius: 6 }
+      },
+        e('span', { style: { flexShrink: 0, display: 'inline-flex' } }, e(Ico, { name: 'bulb', size: 14, color: 'currentColor' })),
+        e('span', null, 'Compras anteriores con este nombre cobraron interés internacional. Considera marcar el check abajo.')
+      )
     ),
     e('div', { style: { marginBottom: 12 } },
       e('label', { style: { cursor: 'pointer', fontSize: 13 } },
@@ -5100,8 +5131,9 @@ function App() {
         ),
         e('div', { style: { marginBottom: 16 } },
           changelogDlg.items.map((item, i) =>
-            e('div', { key: i, style: { display: 'flex', alignItems: 'flex-start', gap: 8, padding: '6px 0', fontSize: 13, color: 'var(--text-secondary)' } },
-              e(Ico, { name: 'check', size: 14, color: 'var(--success)' }),
+            e('div', { key: i, style: { display: 'flex', alignItems: 'flex-start', gap: 10, padding: '8px 0', fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.45 } },
+              // Icono más grande y con un poco de margen superior para alinear con la primera línea del texto.
+              e('span', { style: { flexShrink: 0, marginTop: 2 } }, e(Ico, { name: 'check', size: 18, color: 'var(--success)' })),
               e('span', null, item)
             )
           )

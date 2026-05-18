@@ -107,6 +107,22 @@ module.exports = function(db, { logAction, tjNombre }) {
     res.json({ porPersona: rows, personal, totalGeneral });
   });
 
+  // Asistente INTL: devuelve descripciones (deduplicadas, lowercase, trimmed) que ACTUALMENTE
+  // tienen al menos una compra marcada como es_internacional=1. La consulta es en tiempo real:
+  // si el usuario desmarca el flag intl de una compra y no quedan más con esa descripcion
+  // marcadas, ya no aparecerá en este listado en la siguiente petición (auto-desaprendizaje).
+  router.get('/intl-descripciones', (req, res) => {
+    const rows = db.prepare(`
+      SELECT DISTINCT LOWER(TRIM(descripcion)) as descripcion
+      FROM compras
+      WHERE es_internacional = 1
+        AND descripcion IS NOT NULL
+        AND TRIM(descripcion) != ''
+      ORDER BY descripcion
+    `).all();
+    res.json(rows.map(r => r.descripcion));
+  });
+
   router.post('/', (req, res) => {
     const { tarjeta_id, fecha, descripcion, valor_cop, valor_usd, tasa_usd, persona_id, estado, notas, diferida_id, grupo_id, es_internacional } = req.body;
     const ciclo = calcCiclo(fecha, tarjeta_id);
