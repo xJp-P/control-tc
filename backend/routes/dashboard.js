@@ -14,7 +14,15 @@ module.exports = function(db) {
     const cicloActual = cicloParam || hoy.slice(0, 7);
     const cicloReal = hoy.slice(0, 7);
 
-    const tjFilter = tarjeta_id ? ' AND tarjeta_id = ?' : '';
+    // tjFilter:
+    //   - Si hay tarjeta_id (vista per-card): respeta la selección del usuario, incluso si está inactiva
+    //     (para poder consultar historial de tarjetas archivadas).
+    //   - Si NO hay tarjeta_id (vista global / Dashboard general): excluye tarjetas inactivas de TODOS los
+    //     aggregados (cupo, deudas, intereses, bolsillo, me deben). Las inactivas son históricas y no
+    //     deben contar para nada en los totales actuales.
+    const tjFilter = tarjeta_id
+      ? ' AND tarjeta_id = ?'
+      : " AND tarjeta_id IN (SELECT id FROM tarjetas WHERE estado='activa')";
     const tjParams = tarjeta_id ? [tarjeta_id] : [];
 
     let diaCorte = 30, diaPago = 16, esRappiDash = false, dualExtractoDash = false, tasaIntlGlobal = 0.01911, aplicaIntlDash = false;
@@ -174,9 +182,10 @@ module.exports = function(db) {
     // siempre — en global, cada extracto pendiente filtra sus avances/diferidas
     // por su propio tarjeta_id internamente.
     let deudaImpagaAvances = 0, deudaImpagaDiferidas = 0;
+    // En vista global excluimos extractos de tarjetas inactivas (no deben sumar a deuda total).
     const extractosImpagos2 = tarjeta_id
       ? db.prepare("SELECT tarjeta_id, ciclo FROM extractos WHERE tarjeta_id=? AND estado='pendiente' AND fecha_corte <= ?").all(tarjeta_id, hoy)
-      : db.prepare("SELECT tarjeta_id, ciclo FROM extractos WHERE estado='pendiente' AND fecha_corte <= ?").all(hoy);
+      : db.prepare("SELECT tarjeta_id, ciclo FROM extractos WHERE estado='pendiente' AND fecha_corte <= ? AND tarjeta_id IN (SELECT id FROM tarjetas WHERE estado='activa')").all(hoy);
     extractosImpagos2.forEach(ext => {
       avancesActivos.filter(av => av.tarjeta_id === ext.tarjeta_id).forEach(av => {
         const abonos2 = db.prepare('SELECT * FROM abonos_avance WHERE avance_id=? ORDER BY fecha').all(av.id);
@@ -196,7 +205,7 @@ module.exports = function(db) {
 
     const extParciales = tarjeta_id
       ? db.prepare("SELECT COALESCE(SUM(monto_pagado),0) as total FROM extractos WHERE tarjeta_id=? AND estado='pendiente' AND monto_pagado > 0").get(tarjeta_id)
-      : db.prepare("SELECT COALESCE(SUM(monto_pagado),0) as total FROM extractos WHERE estado='pendiente' AND monto_pagado > 0").get();
+      : db.prepare("SELECT COALESCE(SUM(monto_pagado),0) as total FROM extractos WHERE estado='pendiente' AND monto_pagado > 0 AND tarjeta_id IN (SELECT id FROM tarjetas WHERE estado='activa')").get();
     const montoPagadoExtractoTotal = extParciales.total || 0;
     let montoPagadoExtractoCiclo = 0, extractoCicloData = null;
     if (tarjeta_id) {

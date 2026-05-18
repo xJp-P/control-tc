@@ -248,6 +248,13 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '3.0.0': [
+    'Reordenamiento manual de tarjetas: cada tarjeta tiene un nuevo campo "Orden" en el formulario de edición. El número menor aparece primero en la barra lateral y en el Dashboard. Si lo dejas vacío, la tarjeta cae al final por fecha de creación.',
+    'Tus tarjetas existentes recibieron un orden inicial automático según la fecha en que las creaste, así que el ordenamiento ya funciona desde la primera vez que abras esta versión.',
+    'Nueva sección "Historial / Inactivas" en la barra lateral: aparece debajo de "Mis Tarjetas" cuando tienes al menos una tarjeta marcada como inactiva. Es un acordeón colapsable (cerrado por defecto) que te muestra las tarjetas archivadas sin saturar la vista principal.',
+    'Las tarjetas inactivas ya no cuentan para los totales del Dashboard general (cupo total, cupo usado, deuda total, intereses, Me Deben, Saldo en Bolsillo). Si necesitas consultar el historial de una tarjeta archivada, basta con hacer clic en ella desde la sección Historial — entras a su vista normal con extractos, compras y todo intacto.',
+    'Para archivar una tarjeta basta con editarla y cambiar su Estado a "inactiva". Para reactivarla, lo mismo en reversa.',
+  ],
   '2.9.0': [
     'Asistente inteligente de Interés Internacional: al registrar una compra en tu Bancolombia Visa, si el nombre del establecimiento coincide con compras anteriores que marcaste como internacionales (ej. Netflix, Amazon, Apple), aparece un aviso recordándote considerar marcar el check de INTL.',
     'El asistente aprende y desaprende solo: si dejas de marcar un comercio como internacional, deja de sugerírtelo. Si empiezas a marcar uno nuevo, queda registrado para futuras compras.',
@@ -750,6 +757,8 @@ const ICONS = {
   undo:       'M3 7v6h6 M21 17a9 9 0 00-9-9 9 9 0 00-6.69 3L3 13',
   calculator: 'M4 2h16a2 2 0 012 2v16a2 2 0 01-2 2H4a2 2 0 01-2-2V4a2 2 0 012-2z M8 8h8v3H8z M8 14h2v2H8z M12 14h2v2h-2z M16 14h2v2h-2z M8 18h2v2H8z M12 18h2v2h-2z M16 18h2v2h-2z',
   bulb:       'M9 18h6 M10 22h4 M15.09 14c.18-.98.65-1.74 1.41-2.5A4.65 4.65 0 0018 8a6 6 0 00-12 0c0 1 .23 2.23 1.5 3.5A4.61 4.61 0 018.91 14',
+  'chevron-right': 'M9 18l6-6-6-6',
+  'chevron-down':  'M6 9l6 6 6-6',
 };
 function Ico({ name, size = 18, sw = 1.8, color = 'currentColor' }) {
   const d = ICONS[name]; if (!d) return null;
@@ -864,9 +873,11 @@ function GlobalDashboard({ tarjetas, onSelectCard, onNewCard }) {
   const [cardDash, setCardDash] = useState({});
 
   useEffect(() => { api('/dashboard').then(setDashData); }, []);
+  // Solo fetcheamos dashboards de tarjetas activas — las inactivas no aportan al centro del Dashboard.
+  const tarjetasActivas = tarjetas.filter(t => t.estado === 'activa');
   useEffect(() => {
-    if (!tarjetas.length) return;
-    Promise.all(tarjetas.map(t => api('/dashboard?tarjeta_id=' + t.id).then(d => ({ id: t.id, data: d }))))
+    if (!tarjetasActivas.length) return;
+    Promise.all(tarjetasActivas.map(t => api('/dashboard?tarjeta_id=' + t.id).then(d => ({ id: t.id, data: d }))))
       .then(results => {
         const map = {};
         results.forEach(r => { map[r.id] = r.data; });
@@ -969,16 +980,16 @@ function GlobalDashboard({ tarjetas, onSelectCard, onNewCard }) {
       e('button', { className: 'btn btn-primary', onClick: onNewCard }, '+ Nueva Tarjeta')
     ),
 
-    tarjetas.length === 0
+    tarjetasActivas.length === 0
       ? e('div', { className: 'empty-state' },
           e('div', { className: 'icon' }, e(Ico, { name: 'credit-card', size: 48, color: 'var(--text-muted)' })),
-          e('div', null, 'No tienes tarjetas registradas'),
+          e('div', null, tarjetas.length === 0 ? 'No tienes tarjetas registradas' : 'No hay tarjetas activas — todas están archivadas'),
           e('div', { style: { marginTop: 16 } },
             e('button', { className: 'btn btn-primary', onClick: onNewCard }, '+ Crear tu primera tarjeta')
           )
         )
       : e('div', { className: 'tarjeta-grid' },
-          tarjetas.map(t =>
+          tarjetasActivas.map(t =>
             e('div', { key: t.id, className: 'tarjeta-card', onClick: () => onSelectCard(t.id) },
               t.imagen && e('img', { src: t.imagen, className: 'tarjeta-card-img', alt: t.nombre }),
               e('div', { className: 'tarjeta-card-header' },
@@ -1132,6 +1143,8 @@ function TarjetaForm({ item, onSave, onCancel }) {
       ? item.difiere_intereses_cuota1 : null
   );
   const [imagen, setImagen] = useState(item ? (item.imagen || '') : '');
+  // Orden manual de la tarjeta en listados — null = sin orden, cae al final por created_at.
+  const [orden, setOrden] = useState(item && item.orden != null ? String(item.orden) : '');
   const [fetchingRates, setFetchingRates] = useState(false);
   const [tasaTipoAvances, setTasaTipoAvances] = useState('mv');
   const [tasaTipoDiferidas, setTasaTipoDiferidas] = useState('mv');
@@ -1231,7 +1244,8 @@ function TarjetaForm({ item, onSave, onCancel }) {
       tasa_mv_diferidas: parseFloat(tasaMvDiferidas) / 100,
       url_tasas: urlTasas || null, cupo_total: parseFloat(cupoTotal) || 0,
       estado, notas, franquicia: franquicia || null,
-      difiere_intereses_cuota1: esBanco ? difiereInteresesCuota1 : null
+      difiere_intereses_cuota1: esBanco ? difiereInteresesCuota1 : null,
+      orden: orden.trim() === '' ? null : parseInt(orden)
     });
   }
 
@@ -1379,6 +1393,19 @@ function TarjetaForm({ item, onSave, onCancel }) {
           e('option', { value: 'activa' }, 'Activa'),
           e('option', { value: 'inactiva' }, 'Inactiva')
         )
+      ),
+      // Orden manual: número entero. Menor = aparece primero. Vacío = al final por fecha de creación.
+      e('div', { className: 'form-group' },
+        e('label', { className: 'form-label' }, 'Orden (opcional)'),
+        e('input', {
+          type: 'number',
+          className: 'form-input',
+          value: orden,
+          onChange: ev => setOrden(ev.target.value),
+          placeholder: 'Ej: 1, 2, 3...',
+          min: 0
+        }),
+        e('div', { className: 'form-hint' }, 'Posición en listados (Mis Tarjetas y Dashboard). Menor número = aparece primero. Vacío = al final.')
       )
     ),
     e('div', { className: 'form-group' },
@@ -4795,6 +4822,7 @@ function CardView({ tarjetaId, initialTab, onBack, onRefreshTarjetas }) {
 // ═══════════════════════════════════════════════════════════════════
 function App() {
   const [view, setView] = useState('dashboard');
+  const [showInactivasNav, setShowInactivasNav] = useState(false); // sección "Historial / Inactivas" colapsada por defecto
   const [tarjetas, setTarjetas] = useState([]);
   const [selectedCardId, setSelectedCardId] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -4986,20 +5014,47 @@ function App() {
           e(Ico, { name: 'home', size: 18, color: view === 'dashboard' ? 'var(--accent)' : 'var(--text-secondary)' }), 'Dashboard'
         ),
 
-        // Tarjetas section
-        e('div', { className: 'nav-section-title' }, 'Mis Tarjetas'),
-        tarjetas.map(t =>
-          e('div', { key: t.id, className: 'nav-item nav-card-item' + (view === 'card' && selectedCardId === t.id ? ' active' : ''), onClick: () => selectCard(t.id) },
-            t.imagen
-              ? e('img', { src: t.imagen, style: { width: 28, height: 18, objectFit: 'cover', borderRadius: 3, flexShrink: 0 } })
-              : e('span', { className: 'nav-card-dot', style: { background: t.color } }),
-            e('span', { className: 'nav-card-name' }, t.nombre),
-            t.deudaTotal > 0 && e('span', { className: 'nav-card-badge' }, fmtCOP(t.deudaTotal))
-          )
-        ),
-        e('div', { className: 'nav-item nav-add-btn', onClick: () => setShowNewCardModal(true) },
-          e(Ico, { name: 'plus', size: 16, color: 'var(--accent)' }), 'Nueva Tarjeta'
-        ),
+        // Tarjetas section — solo activas
+        (() => {
+          const tjActivas = tarjetas.filter(t => t.estado === 'activa');
+          const tjInactivas = tarjetas.filter(t => t.estado === 'inactiva');
+          return e(Fragment, null,
+            e('div', { className: 'nav-section-title' }, 'Mis Tarjetas'),
+            tjActivas.map(t =>
+              e('div', { key: t.id, className: 'nav-item nav-card-item' + (view === 'card' && selectedCardId === t.id ? ' active' : ''), onClick: () => selectCard(t.id) },
+                t.imagen
+                  ? e('img', { src: t.imagen, style: { width: 28, height: 18, objectFit: 'cover', borderRadius: 3, flexShrink: 0 } })
+                  : e('span', { className: 'nav-card-dot', style: { background: t.color } }),
+                e('span', { className: 'nav-card-name' }, t.nombre),
+                t.deudaTotal > 0 && e('span', { className: 'nav-card-badge' }, fmtCOP(t.deudaTotal))
+              )
+            ),
+            e('div', { className: 'nav-item nav-add-btn', onClick: () => setShowNewCardModal(true) },
+              e(Ico, { name: 'plus', size: 16, color: 'var(--accent)' }), 'Nueva Tarjeta'
+            ),
+            // Sección colapsable de tarjetas inactivas — solo se renderiza si hay alguna.
+            tjInactivas.length > 0 && e(Fragment, null,
+              e('div', {
+                className: 'nav-section-title',
+                style: { cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4, userSelect: 'none' },
+                onClick: () => setShowInactivasNav(v => !v),
+                title: showInactivasNav ? 'Ocultar' : 'Mostrar'
+              },
+                e(Ico, { name: showInactivasNav ? 'chevron-down' : 'chevron-right', size: 10, color: 'currentColor' }),
+                'Historial / Inactivas',
+                e('span', { style: { marginLeft: 'auto', opacity: 0.6 } }, '(' + tjInactivas.length + ')')
+              ),
+              showInactivasNav && tjInactivas.map(t =>
+                e('div', { key: t.id, className: 'nav-item nav-card-item' + (view === 'card' && selectedCardId === t.id ? ' active' : ''), style: { opacity: 0.7 }, onClick: () => selectCard(t.id) },
+                  t.imagen
+                    ? e('img', { src: t.imagen, style: { width: 28, height: 18, objectFit: 'cover', borderRadius: 3, flexShrink: 0, filter: 'grayscale(0.4)' } })
+                    : e('span', { className: 'nav-card-dot', style: { background: t.color, opacity: 0.6 } }),
+                  e('span', { className: 'nav-card-name' }, t.nombre)
+                )
+              )
+            )
+          );
+        })(),
 
         // Calculadora, Historial & Config
         e('div', { className: 'nav-section-title', style: { marginTop: 12 } }, ''),

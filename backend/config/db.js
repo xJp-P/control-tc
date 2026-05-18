@@ -535,6 +535,24 @@ function initDb(dbPathOverride) {
   try { db.prepare('SELECT difiere_intereses_cuota1 FROM tarjetas LIMIT 1').get(); }
   catch (e) { db.exec('ALTER TABLE tarjetas ADD COLUMN difiere_intereses_cuota1 INTEGER'); }
 
+  // orden: posición manual de la tarjeta en listados. NULL = sin orden definido (cae al final).
+  // El backfill asigna 1, 2, 3, ... a las tarjetas existentes según created_at.
+  let nuevaColumnaOrden = false;
+  try { db.prepare('SELECT orden FROM tarjetas LIMIT 1').get(); }
+  catch (e) { db.exec('ALTER TABLE tarjetas ADD COLUMN orden INTEGER'); nuevaColumnaOrden = true; }
+  // Backfill solo la primera vez (o si quedan tarjetas con orden NULL).
+  const sinOrden = db.prepare('SELECT COUNT(*) as n FROM tarjetas WHERE orden IS NULL').get();
+  if (sinOrden && sinOrden.n > 0) {
+    const tarjetasParaOrdenar = db.prepare('SELECT id FROM tarjetas WHERE orden IS NULL ORDER BY created_at ASC').all();
+    const maxActual = db.prepare('SELECT COALESCE(MAX(orden), 0) as max FROM tarjetas WHERE orden IS NOT NULL').get();
+    let siguiente = (maxActual ? maxActual.max : 0) + 1;
+    tarjetasParaOrdenar.forEach(t => {
+      db.prepare('UPDATE tarjetas SET orden=? WHERE id=?').run(siguiente, t.id);
+      siguiente++;
+    });
+    if (nuevaColumnaOrden) console.log('[Migration] Columna `orden` agregada y backfill aplicado a ' + tarjetasParaOrdenar.length + ' tarjetas.');
+  }
+
   try { db.prepare('SELECT monto_bolsillo FROM compras LIMIT 1').get(); }
   catch (e) { db.exec('ALTER TABLE compras ADD COLUMN monto_bolsillo REAL DEFAULT 0'); }
 

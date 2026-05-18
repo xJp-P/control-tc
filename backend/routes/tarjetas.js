@@ -10,7 +10,8 @@ module.exports = function(db, { logAction }) {
   const router = Router();
 
   router.get('/', (req, res) => {
-    const tarjetas = db.prepare('SELECT * FROM tarjetas ORDER BY created_at DESC').all();
+    // Orden: respeta el campo `orden` manual; las que no tengan caen al final por created_at.
+    const tarjetas = db.prepare('SELECT * FROM tarjetas ORDER BY COALESCE(orden, 999999) ASC, created_at DESC').all();
     const hoy = hoyLocal();
     const cicloActual = hoy.slice(0, 7);
 
@@ -83,24 +84,27 @@ module.exports = function(db, { logAction }) {
   });
 
   router.post('/', (req, res) => {
-    const { nombre, banco, dia_corte, dia_pago, color, imagen, tasa_mv_avances, tasa_mv_diferidas, url_tasas, cupo_total, notas, franquicia, difiere_intereses_cuota1 } = req.body;
+    const { nombre, banco, dia_corte, dia_pago, color, imagen, tasa_mv_avances, tasa_mv_diferidas, url_tasas, cupo_total, notas, franquicia, difiere_intereses_cuota1, orden } = req.body;
     // Solo guardar el flag si banco es Bancolombia; en otros casos null
     const esBanco = banco && banco.toLowerCase().includes('bancolombia');
     const flagDifiere = esBanco && (difiere_intereses_cuota1 === 0 || difiere_intereses_cuota1 === 1) ? difiere_intereses_cuota1 : null;
-    const r = db.prepare(`INSERT INTO tarjetas (nombre, banco, dia_corte, dia_pago, color, imagen, tasa_mv_avances, tasa_mv_diferidas, url_tasas, cupo_total, notas, franquicia, difiere_intereses_cuota1)
-                          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+    const ordenFinal = (orden === 0 || (orden && !isNaN(parseInt(orden)))) ? parseInt(orden) : null;
+    const r = db.prepare(`INSERT INTO tarjetas (nombre, banco, dia_corte, dia_pago, color, imagen, tasa_mv_avances, tasa_mv_diferidas, url_tasas, cupo_total, notas, franquicia, difiere_intereses_cuota1, orden)
+                          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
       .run(nombre, banco || null, dia_corte || 30, dia_pago || 16, color || '#4f8cff', imagen || null,
-           tasa_mv_avances || 0.01911, tasa_mv_diferidas || 0.0188, url_tasas || null, cupo_total || 0, notas || null, franquicia || null, flagDifiere);
+           tasa_mv_avances || 0.01911, tasa_mv_diferidas || 0.0188, url_tasas || null, cupo_total || 0, notas || null, franquicia || null, flagDifiere, ordenFinal);
     logAction('crear', 'Tarjeta creada: ' + nombre, banco || null);
     res.json({ id: r.lastInsertRowid });
   });
 
   router.put('/:id', (req, res) => {
-    const { nombre, banco, dia_corte, dia_pago, color, imagen, tasa_mv_avances, tasa_mv_diferidas, url_tasas, cupo_total, estado, notas, franquicia, difiere_intereses_cuota1 } = req.body;
+    const { nombre, banco, dia_corte, dia_pago, color, imagen, tasa_mv_avances, tasa_mv_diferidas, url_tasas, cupo_total, estado, notas, franquicia, difiere_intereses_cuota1, orden } = req.body;
     const esBanco = banco && banco.toLowerCase().includes('bancolombia');
     const flagDifiere = esBanco && (difiere_intereses_cuota1 === 0 || difiere_intereses_cuota1 === 1) ? difiere_intereses_cuota1 : null;
-    db.prepare(`UPDATE tarjetas SET nombre=?, banco=?, dia_corte=?, dia_pago=?, color=?, imagen=?, tasa_mv_avances=?, tasa_mv_diferidas=?, url_tasas=?, cupo_total=?, estado=?, notas=?, franquicia=?, difiere_intereses_cuota1=? WHERE id=?`)
-      .run(nombre, banco, dia_corte, dia_pago || 16, color, imagen, tasa_mv_avances, tasa_mv_diferidas, url_tasas, cupo_total, estado, notas, franquicia || null, flagDifiere, req.params.id);
+    // orden: si viene un número válido lo guardamos; si viene vacío/null lo dejamos en NULL.
+    const ordenFinal = (orden === 0 || (orden && !isNaN(parseInt(orden)))) ? parseInt(orden) : null;
+    db.prepare(`UPDATE tarjetas SET nombre=?, banco=?, dia_corte=?, dia_pago=?, color=?, imagen=?, tasa_mv_avances=?, tasa_mv_diferidas=?, url_tasas=?, cupo_total=?, estado=?, notas=?, franquicia=?, difiere_intereses_cuota1=?, orden=? WHERE id=?`)
+      .run(nombre, banco, dia_corte, dia_pago || 16, color, imagen, tasa_mv_avances, tasa_mv_diferidas, url_tasas, cupo_total, estado, notas, franquicia || null, flagDifiere, ordenFinal, req.params.id);
     clearBancoCache(parseInt(req.params.id));
     logAction('editar', 'Tarjeta editada: ' + nombre);
     res.json({ ok: true });
