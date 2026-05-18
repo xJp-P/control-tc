@@ -1,6 +1,6 @@
 // backend/routes/compras.js — CRUD /api/compras + bolsillo
 const { Router } = require('express');
-const { hoyLocal, daysBetween } = require('../helpers/dates');
+const { hoyLocal, daysBetween, primerCorteAvance } = require('../helpers/dates');
 const { calcularAmortizacionDiferida } = require('../engine/amortizacion');
 const { nuOpts, aplicaIntInternacional } = require('../helpers/banco');
 
@@ -121,7 +121,7 @@ module.exports = function(db, { logAction, tjNombre }) {
   router.put('/:id', (req, res) => {
     const { tarjeta_id, fecha, descripcion, valor_cop, valor_usd, tasa_usd, persona_id, estado, notas, monto_bolsillo, es_internacional } = req.body;
     const ciclo = calcCiclo(fecha, tarjeta_id);
-    const current = db.prepare('SELECT estado, monto_bolsillo, es_internacional, ciclo, tarjeta_id FROM compras WHERE id=?').get(req.params.id);
+    const current = db.prepare('SELECT estado, monto_bolsillo, es_internacional, ciclo, tarjeta_id, diferida_id, fecha FROM compras WHERE id=?').get(req.params.id);
     // Inmutabilidad: si el extracto del ciclo actual de la compra ya está pagado, bloquear.
     if (current) {
       const ext = db.prepare("SELECT estado FROM extractos WHERE tarjeta_id=? AND ciclo=?").get(current.tarjeta_id, current.ciclo);
@@ -134,6 +134,20 @@ module.exports = function(db, { logAction, tjNombre }) {
     const finalIntl = es_internacional !== undefined ? (es_internacional ? 1 : 0) : (current ? (current.es_internacional || 0) : 0);
     db.prepare(`UPDATE compras SET tarjeta_id=?, fecha=?, descripcion=?, valor_cop=?, valor_usd=?, tasa_usd=?, persona_id=?, estado=?, ciclo=?, notas=?, monto_bolsillo=?, es_internacional=? WHERE id=?`)
       .run(tarjeta_id, fecha, descripcion, valor_cop, valor_usd, tasa_usd, persona_id, finalEstado, ciclo, notas, finalBolsillo, finalIntl, req.params.id);
+
+    // SINCRONIZAR diferida vinculada: si la compra tiene diferida_id, mantener
+    // alineadas fecha_compra y fecha_primer_corte (y tarjeta_id si cambió).
+    // Sin esto, editar la fecha de una compra a cuotas dejaba la diferida con su
+    // amortización original — las cuotas se mostraban en el mes equivocado.
+    if (current && current.diferida_id && (current.fecha !== fecha || current.tarjeta_id !== tarjeta_id)) {
+      const tjRow = db.prepare('SELECT dia_corte FROM tarjetas WHERE id=?').get(tarjeta_id);
+      const diaCorte = tjRow ? (tjRow.dia_corte || 30) : 30;
+      const fechaPrimerCorte = primerCorteAvance(fecha, diaCorte);
+      db.prepare('UPDATE diferidas SET tarjeta_id=?, fecha_compra=?, fecha_primer_corte=? WHERE id=?')
+        .run(tarjeta_id, fecha, fechaPrimerCorte, current.diferida_id);
+      logAction('editar', tjNombre(tarjeta_id) + 'Diferida sincronizada con compra editada (fecha → ' + fecha + ', primer corte → ' + fechaPrimerCorte + ')');
+    }
+
     logAction('editar', tjNombre(tarjeta_id) + 'Compra editada: ' + descripcion);
     res.json({ ok: true });
   });

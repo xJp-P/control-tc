@@ -248,6 +248,10 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '2.8.1': [
+    'Arreglado un bug que dejaba mal calculadas las cuotas al editar la fecha de una compra a cuotas: si registrabas una compra con una fecha equivocada y luego la corregías, las cuotas seguían apareciendo en los meses originales y no en los nuevos.',
+    'Ahora, cuando editas la fecha (o cambias la tarjeta) de una compra a cuotas, la diferida vinculada se actualiza automáticamente y la primera cuota cae en el ciclo correcto desde el primer momento.',
+  ],
   '2.8.0': [
     'Inmutabilidad de registros: cuando el extracto de un ciclo ya fue pagado, los botones de editar y eliminar desaparecen automáticamente en compras, compras divididas, diferidas y avances de ese ciclo. Si alguien intenta editar o borrar desde otra herramienta, el backend también lo bloquea.',
     'Avances: ahora la regla de "solo se puede editar/eliminar dentro del primer mes" también se aplica al botón de eliminar (antes solo bloqueaba el de editar).',
