@@ -20,7 +20,7 @@ module.exports = function(db, { logAction, tjNombre }) {
       const cuotaCiclo = ciclo
         ? amort.tabla.find(r => r.fechaCorte.slice(0, 7) === ciclo)
         : amort.tabla.find(r => r.fechaCorte >= hoyDif);
-      const compraPersona = db.prepare(`SELECT c.persona_id, p.nombre FROM compras c
+      const compraPersona = db.prepare(`SELECT c.persona_id, p.nombre, p.color FROM compras c
         LEFT JOIN personas p ON c.persona_id = p.id
         WHERE c.diferida_id = ? AND c.persona_id IS NOT NULL LIMIT 1`).get(d.id);
       // Compra vinculada a esta diferida (para gestionar bolsillo). Toma la primera/principal.
@@ -39,6 +39,7 @@ module.exports = function(db, { logAction, tjNombre }) {
         ciclos: amort.tabla.map(r => r.fechaCorte.slice(0, 7)),
         es_de_tercero: !!compraPersona,
         persona_nombre: compraPersona ? compraPersona.nombre : null,
+        persona_color: compraPersona ? compraPersona.color : null,
         compra_id: compraVinc ? compraVinc.id : null,
         // Bolsillo total (cache) y per-cuota
         monto_bolsillo: compraVinc ? (compraVinc.monto_bolsillo || 0) : (d.monto_bolsillo || 0),

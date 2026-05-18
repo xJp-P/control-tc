@@ -248,6 +248,14 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '2.8.2': [
+    'Nueva columna "Responsable" en las tablas de Compras y Diferidas del Resumen: el nombre del tercero ya no aparece apretado al lado de la descripción, ahora tiene su propio espacio con el color de identificación de cada persona.',
+    'Compras divididas: la fila madre muestra un badge azul "Dividida" (antes verde) — el verde queda reservado para "Pagado" y así se distinguen mejor los dos estados.',
+    'Reordenamiento del Resumen: la sección de Compras Diferidas ahora aparece justo después de las Compras normales, y los Avances al final. Antes el orden era distinto.',
+    'Tabla Diferidas reorganizada: la fecha de compra ahora es la primera columna (igual que en Compras), seguida de Descripción, Responsable, Cuota Corte, Cuotas, Tasa MV, Saldo Actual, Bolsillo y Estado.',
+    'Headers de Diferidas y Avances: la columna "Etiqueta" se renombró a "Descripción" para mantener consistencia con la tabla de Compras.',
+    'Card "Intereses del Mes": la mini-columna "Int Intl" ya no aparece en verde — usa los mismos colores que las otras mini-columnas (Diferidas, Avances) para mantener consistencia visual.',
+  ],
   '2.8.1': [
     'Arreglado un bug que dejaba mal calculadas las cuotas al editar la fecha de una compra a cuotas: si registrabas una compra con una fecha equivocada y luego la corregías, las cuotas seguían apareciendo en los meses originales y no en los nuevos.',
     'Ahora, cuando editas la fecha (o cambias la tarjeta) de una compra a cuotas, la diferida vinculada se actualiza automáticamente y la primera cuota cae en el ciclo correcto desde el primer momento.',
@@ -919,8 +927,8 @@ function GlobalDashboard({ tarjetas, onSelectCard, onNewCard }) {
                 e('div', { style: { fontSize: 12, color: 'var(--text-primary)', fontWeight: 600, fontFamily: 'monospace' } }, fmtCOPDec(dashData.interesesMesAvances || 0))
               ),
               dashData.interesesComprasIntl > 0 && e('div', null,
-                e('div', { style: { fontSize: 10, color: '#14b8a6', textTransform: 'uppercase', letterSpacing: 0.4 } }, 'Int Intl'),
-                e('div', { style: { fontSize: 12, color: '#14b8a6', fontWeight: 600, fontFamily: 'monospace' } }, fmtCOP(dashData.interesesComprasIntl))
+                e('div', { style: { fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 } }, 'Int Intl'),
+                e('div', { style: { fontSize: 12, color: 'var(--text-primary)', fontWeight: 600, fontFamily: 'monospace' } }, fmtCOP(dashData.interesesComprasIntl))
               )
             )
           ),
@@ -1848,8 +1856,8 @@ function CardResumen({ tarjeta, onDataChange }) {
             e('div', { style: { fontSize: 12, color: 'var(--text-primary)', fontWeight: 600, fontFamily: 'monospace' } }, fmtCOPDec(data.interesesMesAvances || 0))
           ),
           data.interesesComprasIntl > 0 && e('div', null,
-            e('div', { style: { fontSize: 10, color: '#14b8a6', textTransform: 'uppercase', letterSpacing: 0.4 } }, 'Int Intl'),
-            e('div', { style: { fontSize: 12, color: '#14b8a6', fontWeight: 600, fontFamily: 'monospace' } }, fmtCOP(data.interesesComprasIntl))
+            e('div', { style: { fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 } }, 'Int Intl'),
+            e('div', { style: { fontSize: 12, color: 'var(--text-primary)', fontWeight: 600, fontFamily: 'monospace' } }, fmtCOP(data.interesesComprasIntl))
           )
         )
       ),
@@ -1952,9 +1960,16 @@ function CardResumen({ tarjeta, onDataChange }) {
               c.descripcion,
               c.valor_usd ? e('span', { style: { color: 'var(--text-muted)', fontSize: 11, marginLeft: 6 } }, 'USD $' + c.valor_usd + (c.tasa_usd ? ' x ' + c.tasa_usd : '')) : null,
               isDif && c.cuota_num && e('span', { style: { fontSize: 10, color: 'var(--accent)', marginLeft: 8 } }, 'Cuota ' + c.cuota_num + '/' + c.cuotas_total),
-              // Badge "Pagado" reubicado a la columna Actions — ya no aparece inline aquí.
-              tieneParcial && e('span', { className: 'badge badge-active', style: { marginLeft: 8, fontSize: 10 } }, 'abono parcial'),
-              c.persona_id ? e('span', { style: { fontSize: 10, color: 'var(--accent)', marginLeft: 8 } }, c.persona_nombre) : null
+              // Nombre del responsable se movió a su propia columna.
+              tieneParcial && e('span', { className: 'badge badge-active', style: { marginLeft: 8, fontSize: 10 } }, 'abono parcial')
+            ),
+            // Responsable: tercero con persona-dot o "—" si es Personal.
+            e('td', { style: { fontSize: 12 } },
+              c.persona_id
+                ? e('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 6 } },
+                    e('span', { style: { background: c.persona_color || 'var(--accent)', width: 8, height: 8, display: 'inline-block', borderRadius: '50%' } }),
+                    e('span', { style: { color: 'var(--text-primary)' } }, c.persona_nombre))
+                : e('span', { style: { color: 'var(--text-muted)' } }, '—')
             ),
             e('td', { className: 'text-right text-mono' },
               fmtCOP(valorMostrar),
@@ -1988,6 +2003,7 @@ function CardResumen({ tarjeta, onDataChange }) {
             e('thead', null, e('tr', null,
               e('th', null, 'Fecha'),
               e('th', null, 'Descripcion'),
+              e('th', null, 'Responsable'),
               e('th', { className: 'text-right' }, 'Valor'),
               aplicaIntl && e('th', { className: 'text-right', style: { whiteSpace: 'nowrap' } }, 'Int Intl'),
               aplicaIntl && e('th', { className: 'text-right', style: { whiteSpace: 'nowrap' } }, 'Total'),
@@ -2028,8 +2044,14 @@ function CardResumen({ tarjeta, onDataChange }) {
                     e('td', { style: { fontWeight: 700 } },
                       item.descripcion,
                       item.valor_usd ? e('span', { style: { color: 'var(--text-muted)', fontSize: 11, marginLeft: 6 } }, 'USD $' + item.valor_usd + (item.tasa_usd ? ' x ' + item.tasa_usd : '')) : null,
-                      e('span', { style: { fontSize: 10, color: 'var(--accent)', marginLeft: 8, fontWeight: 600 } },
-                        item.esDiferida ? 'Cuota ' + item.cuota_num + '/' + item.cuotas_total + ' \u00B7 ' + item.partes.length + ' partes' : 'Dividida ' + item.partes.length + ' partes')
+                      // Cuota info se mantiene en descripcion (es info de cuota, no de responsable).
+                      item.esDiferida && e('span', { style: { fontSize: 10, color: 'var(--accent)', marginLeft: 8, fontWeight: 600 } }, 'Cuota ' + item.cuota_num + '/' + item.cuotas_total)
+                    ),
+                    // Responsable: badge "Dividida" en azul (reservamos verde para "pagado") + cantidad de partes.
+                    e('td', { style: { fontSize: 12 } },
+                      e('span', { className: 'badge', style: { display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, padding: '3px 8px', background: 'rgba(56,189,248,0.15)', color: '#38bdf8' } },
+                        e(Ico, { name: 'users', size: 10, color: 'currentColor' }), 'Dividida'),
+                      e('span', { style: { fontSize: 10, color: 'var(--text-muted)', marginLeft: 6 } }, item.partes.length + ' partes')
                     ),
                     e('td', { className: 'text-right text-mono', style: { fontWeight: 700, color: grupoPaidPast ? 'var(--success)' : undefined } }, fmtCOP(item.total)),
                     aplicaIntl && e('td', { className: 'text-right text-mono', style: { fontSize: 12 } }, grpInteres > 0 ? fmtCOP(grpInteres) : e('span', { style: { color: 'var(--text-muted)' } }, '\u2014')),
@@ -2071,10 +2093,16 @@ function CardResumen({ tarjeta, onDataChange }) {
                     var childValor = item.esDiferida ? (c.cuotaCorte || 0) : c.valor_cop;
                     return e('tr', { key: c.id, style: { background: childPaidPast ? 'rgba(52,211,153,0.08)' : 'rgba(99,102,241,0.04)' } },
                       e('td', null),
-                      e('td', { style: { paddingLeft: 24, fontSize: 13 } },
-                        e('span', { className: 'persona-dot', style: { background: c.persona_id ? c.persona_color : '#666', width: 8, height: 8, display: 'inline-block', borderRadius: '50%', marginRight: 6, verticalAlign: 'middle' } }),
-                        c.persona_id ? c.persona_nombre : 'Personal',
-                        item.esDiferida ? e('span', { style: { fontSize: 10, color: 'var(--text-muted)', marginLeft: 6 } }, 'Cuota ' + c.cuota_num + '/' + c.cuotas_total) : null
+                      // Descripcion: vacía (la madre ya la muestra). Mantenemos indentación con muted "↳" para jerarquía visual.
+                      e('td', { style: { paddingLeft: 24, fontSize: 12, color: 'var(--text-muted)' } },
+                        '↳ parte',
+                        item.esDiferida ? e('span', { style: { fontSize: 10, marginLeft: 6 } }, 'Cuota ' + c.cuota_num + '/' + c.cuotas_total) : null
+                      ),
+                      // Responsable: persona-dot + nombre (o "Personal" si no hay persona_id).
+                      e('td', { style: { fontSize: 12 } },
+                        e('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 6 } },
+                          e('span', { className: 'persona-dot', style: { background: c.persona_id ? c.persona_color : '#666', width: 8, height: 8, display: 'inline-block', borderRadius: '50%' } }),
+                          e('span', { style: { color: 'var(--text-primary)' } }, c.persona_id ? c.persona_nombre : 'Personal'))
                       ),
                       e('td', { className: 'text-right text-mono', style: { fontSize: 13, color: childPaidPast ? 'var(--success)' : undefined } }, fmtCOP(childValor)),
                       aplicaIntl && e('td', { className: 'text-right text-mono', style: { fontSize: 12 } }, childIntl > 0 ? fmtCOP(childIntl) : e('span', { style: { color: 'var(--text-muted)' } }, '—')),
@@ -2108,6 +2136,153 @@ function CardResumen({ tarjeta, onDataChange }) {
       })()
     ),
 
+    // ──── DIFERIDAS SECTION ────
+    (() => {
+      const diferidasCiclo = diferidas.filter(d => d.ciclos && d.ciclos.includes(ciclo));
+      const cicloPagadoDif = !!(data.extractoCiclo && data.extractoCiclo.estado === 'pagado');
+      const esFuturoCicloDif = ciclo > cicloActual();
+      const totalCuotaDif = diferidasCiclo.reduce((s, d) => s + (d.cuotaCorte || 0), 0);
+      return e('div', { style: { marginTop: 32 } },
+      e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 15, fontWeight: 700, marginBottom: 12 } },
+        e('span', null, e(Ico, { name: 'calendar', size: 16, color: 'var(--purple)' }), ' Diferidas'),
+        totalCuotaDif > 0 && e('span', { className: 'text-mono', style: { color: cicloPagadoDif ? 'var(--success)' : 'var(--purple)' } },
+          fmtCOP(totalCuotaDif) + (cicloPagadoDif ? ' (pagado)' : ''))
+      ),
+      diferidasCiclo.length === 0
+        ? e('div', { className: 'empty-state' }, e('div', { className: 'icon' }, e(Ico, { name: 'calendar', size: 48, color: 'var(--text-muted)' })), e('div', null, 'No hay diferidas en este ciclo'))
+        : e('div', { className: 'table-wrap', style: { marginBottom: 16 } },
+            e('table', null,
+              e('thead', null, e('tr', null,
+                e('th', null, 'Fecha'),
+                e('th', null, 'Descripcion'),
+                e('th', null, 'Responsable'),
+                e('th', { className: 'text-right' }, 'Cuota Corte'),
+                e('th', null, 'Cuotas'),
+                e('th', null, 'Tasa MV'),
+                e('th', { className: 'text-right' }, 'Saldo Actual'),
+                e('th', null, 'Bolsillo'),
+                e('th', null, 'Estado'),
+                e('th', null, '')
+              )),
+              e('tbody', null,
+                diferidasCiclo.map(d => {
+                  var rowStyleD = { cursor: 'pointer' };
+                  if (cicloPagadoDif) rowStyleD.background = 'rgba(52,211,153,0.10)';
+                  // Per-cuota: determinar cuota_num para este ciclo y su bolsillo específico
+                  var cuotaNumDif = d.ciclos ? d.ciclos.indexOf(ciclo) + 1 : 1;
+                  var bolDif = (d.bolsillo_por_cuota && d.bolsillo_por_cuota[cuotaNumDif]) || 0;
+                  var targetDif = d.cuotaCorte || 0;
+                  var bolBadge = cicloPagadoDif
+                    ? 'pagado'
+                    : esFuturoCicloDif
+                      ? 'pendiente'
+                      : (Math.round(bolDif) >= Math.round(targetDif) && targetDif > 0 ? 'bolsillo' : bolDif > 0 ? 'bolsillo_parcial' : 'pendiente');
+                  var faltaDif = (!esFuturoCicloDif && bolBadge === 'bolsillo_parcial') ? Math.round(targetDif - bolDif) : 0;
+                  return e('tr', { key: d.id, onClick: () => loadDiferidaDetail(d.id), style: rowStyleD, className: selectedDiferida === d.id ? 'row-highlight' : '' },
+                    // Fecha
+                    e('td', null, fmtDate(d.fecha_compra)),
+                    // Descripcion: limpia (el nombre del tercero se movió a la columna Responsable).
+                    e('td', { style: { fontWeight: 600 } }, d.etiqueta),
+                    // Responsable: persona-dot + nombre si es de tercero, "—" si es Personal.
+                    e('td', { style: { fontSize: 12 } },
+                      d.es_de_tercero
+                        ? e('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 6 } },
+                            e('span', { style: { background: d.persona_color || 'var(--accent)', width: 8, height: 8, display: 'inline-block', borderRadius: '50%' } }),
+                            e('span', { style: { color: 'var(--text-primary)' } }, d.persona_nombre))
+                        : e('span', { style: { color: 'var(--text-muted)' } }, '—')
+                    ),
+                    // Cuota Corte
+                    e('td', { className: 'text-right text-mono', style: { fontWeight: 700, color: cicloPagadoDif ? 'var(--success)' : 'var(--danger)' } }, fmtCOP(d.cuotaCorte)),
+                    // Cuotas (N/X)
+                    e('td', null, (d.ciclos ? d.ciclos.indexOf(ciclo) + 1 : (d.num_cuotas - d.cuotasRestantes + 1)) + '/' + d.num_cuotas),
+                    // Tasa MV
+                    e('td', { className: 'text-mono' }, (d.tasa_mv * 100).toFixed(2) + '%'),
+                    // Saldo Actual
+                    e('td', { className: 'text-right text-mono', style: { fontWeight: 700, color: d.saldoActual > 0 ? 'var(--danger)' : 'var(--success)' } }, fmtCOP(d.saldoActual)),
+                    e('td', null,
+                      cicloPagadoDif
+                        ? e('span', { style: { color: 'var(--text-muted)' } }, '—')
+                        : e('span', {
+                            className: 'badge badge-' + bolBadge + ' badge-clickable',
+                            onClick: (ev) => {
+                              ev.stopPropagation();
+                              if (d.compra_id) {
+                                openBolsilloModal({
+                                  id: d.compra_id,
+                                  descripcion: d.etiqueta + (d.es_de_tercero ? ' (' + d.persona_nombre + ')' : ''),
+                                  estado: 'diferida',
+                                  valor_cop: targetDif,
+                                  cuotaCorte: targetDif,
+                                  monto_bolsillo: bolDif,
+                                  _bolsilloTarget: targetDif,
+                                  cuota_num: cuotaNumDif,
+                                  cuotas_total: d.num_cuotas
+                                });
+                              } else {
+                                openBolsilloDiferidaModal(d);
+                              }
+                            },
+                            title: 'Clic para gestionar bolsillo (cuota del corte)',
+                            style: { fontSize: 10 }
+                          }, bolBadge.replace(/_/g, ' ')),
+                      faltaDif > 0 && e('div', { style: { fontSize: 10, color: 'var(--warning)', marginTop: 2 } }, 'Falta: ' + fmtCOP(faltaDif))
+                    ),
+                    // Estado: cuando el ciclo está pagado, el badge "Pagado" vive aquí.
+                    e('td', null, cicloPagadoDif
+                      ? e('span', { className: 'badge badge-pagado', style: { display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, padding: '4px 10px' } },
+                          e(Ico, { name: 'check', size: 12, color: 'currentColor' }), 'Pagado')
+                      : e('span', { className: 'badge badge-' + d.estado }, d.estado)),
+                    e('td', { style: { whiteSpace: 'nowrap' } },
+                      !cicloPagadoDif && e('button', { className: 'btn btn-sm', onClick: (ev) => { ev.stopPropagation(); setEditDiferida(d); setShowDiferidaModal(true); } }, e(Ico, { name: 'edit', size: 14, color: 'currentColor' })),
+                      !cicloPagadoDif && ' ',
+                      !cicloPagadoDif && e('button', { className: 'btn btn-sm btn-danger', onClick: (ev) => { ev.stopPropagation(); removeDiferida(d.id); } }, e(Ico, { name: 'trash', size: 14, color: 'currentColor' }))
+                    )
+                  );
+                })
+              )
+            )
+          ),
+      // Diferida detail
+      diferidaDetail && e('div', null,
+        e('div', { className: 'toolbar' },
+          e('div', { className: 'section-title', style: { margin: 0 } }, e(Ico, { name: 'clipboard', size: 18, color: 'var(--accent)' }), ' Amortizacion: ' + diferidaDetail.etiqueta),
+          e('div', { className: 'toolbar-spacer' }),
+          e('button', { className: 'btn btn-sm', onClick: () => { setSelectedDiferida(null); setDiferidaDetail(null); }, style: { fontSize: 18, padding: '4px 10px' } }, '\u{2715}')
+        ),
+        e('div', { className: 'table-wrap', style: { maxHeight: 500, overflowY: 'auto' } },
+          e('table', null,
+            e('thead', null, e('tr', null,
+              e('th', null, '#'), e('th', null, 'Fecha Corte'), e('th', null, 'Dias'),
+              e('th', { className: 'text-right' }, 'Saldo Inicial'), e('th', { className: 'text-right' }, 'Int. Periodo'),
+              e('th', { className: 'text-right' }, 'Int. Diferido'), e('th', { className: 'text-right' }, 'Int. Total'),
+              e('th', { className: 'text-right' }, 'Cuota Capital'), e('th', { className: 'text-right' }, 'Total a Pagar')
+            )),
+            e('tbody', null,
+              diferidaDetail.amortizacion.map(r => {
+                const isCurrent = r.fechaCorte >= hoy && (!diferidaDetail.amortizacion[r.numCuota - 2] || diferidaDetail.amortizacion[r.numCuota - 2].fechaCorte < hoy);
+                return e('tr', { key: r.numCuota, className: isCurrent ? 'row-highlight' : '' },
+                  e('td', null, r.numCuota), e('td', null, fmtDate(r.fechaCorte)), e('td', { className: 'text-center' }, r.dias),
+                  e('td', { className: 'text-right text-mono' }, fmtCOP(r.saldoInicial)),
+                  e('td', { className: 'text-right text-mono' }, fmtCOPDec(r.interesPeriodo)),
+                  e('td', { className: 'text-right text-mono', style: { color: r.interesDiferido > 0 ? 'var(--warning)' : '' } }, r.interesDiferido > 0 ? fmtCOPDec(r.interesDiferido) : '-'),
+                  e('td', { className: 'text-right text-mono' }, fmtCOPDec(r.interesTotal)),
+                  e('td', { className: 'text-right text-mono' }, fmtCOP(r.cuotaCapital)),
+                  e('td', { className: 'text-right text-mono', style: { fontWeight: 700 } }, fmtCOP(r.totalPagar))
+                );
+              })
+            )
+          )
+        ),
+        diferidaDetail.resumen && e('div', { className: 'summary-box' },
+          e('div', { style: { fontWeight: 700, marginBottom: 12 } }, 'Resumen'),
+          e('div', { className: 'summary-row' }, e('span', { className: 'summary-label' }, 'Cuota Capital Fija'), e('span', { className: 'summary-value' }, fmtCOP(diferidaDetail.resumen.cuotaCapitalFija))),
+          e('div', { className: 'summary-row' }, e('span', { className: 'summary-label' }, 'Total Intereses'), e('span', { className: 'summary-value negative' }, fmtCOPDec(diferidaDetail.resumen.totalIntereses))),
+          e('div', { className: 'summary-row' }, e('span', { className: 'summary-label' }, 'Saldo Actual'), e('span', { className: 'summary-value' }, fmtCOP(diferidaDetail.resumen.saldoActual)))
+        )
+      )
+    );
+    })(),
+
     // ──── AVANCES SECTION ────
     (() => {
       const avancesCiclo = avances.filter(a => a.ciclos && a.ciclos.includes(ciclo));
@@ -2126,7 +2301,7 @@ function CardResumen({ tarjeta, onDataChange }) {
         : e('div', { className: 'table-wrap', style: { marginBottom: 16 } },
             e('table', null,
               e('thead', null, e('tr', null,
-                e('th', null, 'Etiqueta'), e('th', { className: 'text-right' }, 'Monto'), e('th', null, 'Tasa MV'),
+                e('th', null, 'Descripcion'), e('th', { className: 'text-right' }, 'Monto'), e('th', null, 'Tasa MV'),
                 e('th', null, 'Plazo'), e('th', null, 'Desembolso'), e('th', { className: 'text-right' }, 'Saldo Actual'),
                 e('th', { className: 'text-right' }, 'Cuota'), e('th', null, 'Bolsillo'),
                 e('th', null, 'Estado'), e('th', null, '')
@@ -2232,135 +2407,6 @@ function CardResumen({ tarjeta, onDataChange }) {
           e('div', { className: 'summary-row' }, e('span', { className: 'summary-label' }, 'Saldo Actual'), e('span', { className: 'summary-value negative' }, fmtCOP(avanceDetail.resumen.saldoActual))),
           e('div', { className: 'summary-row' }, e('span', { className: 'summary-label' }, 'Cuotas Restantes'), e('span', { className: 'summary-value' }, avanceDetail.resumen.cuotasRestantes + ' de ' + avanceDetail.amortizacion.length)),
           avanceDetail.resumen.ahorroIntereses > 0 && e('div', { className: 'summary-row' }, e('span', { className: 'summary-label' }, e(Ico, { name: 'trending', size: 14, color: 'var(--success)' }), ' Interes Ahorrado'), e('span', { className: 'summary-value', style: { color: 'var(--success)', fontWeight: 700 } }, fmtCOPDec(avanceDetail.resumen.ahorroIntereses)))
-        )
-      )
-    );
-    })(),
-
-    // ──── DIFERIDAS SECTION ────
-    (() => {
-      const diferidasCiclo = diferidas.filter(d => d.ciclos && d.ciclos.includes(ciclo));
-      const cicloPagadoDif = !!(data.extractoCiclo && data.extractoCiclo.estado === 'pagado');
-      const esFuturoCicloDif = ciclo > cicloActual();
-      const totalCuotaDif = diferidasCiclo.reduce((s, d) => s + (d.cuotaCorte || 0), 0);
-      return e('div', { style: { marginTop: 32 } },
-      e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 15, fontWeight: 700, marginBottom: 12 } },
-        e('span', null, e(Ico, { name: 'calendar', size: 16, color: 'var(--purple)' }), ' Diferidas'),
-        totalCuotaDif > 0 && e('span', { className: 'text-mono', style: { color: cicloPagadoDif ? 'var(--success)' : 'var(--purple)' } },
-          fmtCOP(totalCuotaDif) + (cicloPagadoDif ? ' (pagado)' : ''))
-      ),
-      diferidasCiclo.length === 0
-        ? e('div', { className: 'empty-state' }, e('div', { className: 'icon' }, e(Ico, { name: 'calendar', size: 48, color: 'var(--text-muted)' })), e('div', null, 'No hay diferidas en este ciclo'))
-        : e('div', { className: 'table-wrap', style: { marginBottom: 16 } },
-            e('table', null,
-              e('thead', null, e('tr', null,
-                e('th', null, 'Etiqueta'), e('th', { className: 'text-right' }, 'Cuota Corte'), e('th', null, 'Tasa MV'),
-                e('th', null, 'Cuotas'), e('th', null, 'Fecha Compra'), e('th', { className: 'text-right' }, 'Saldo Actual'),
-                e('th', null, 'Bolsillo'), e('th', null, 'Estado'), e('th', null, '')
-              )),
-              e('tbody', null,
-                diferidasCiclo.map(d => {
-                  var rowStyleD = { cursor: 'pointer' };
-                  if (cicloPagadoDif) rowStyleD.background = 'rgba(52,211,153,0.10)';
-                  // Per-cuota: determinar cuota_num para este ciclo y su bolsillo específico
-                  var cuotaNumDif = d.ciclos ? d.ciclos.indexOf(ciclo) + 1 : 1;
-                  var bolDif = (d.bolsillo_por_cuota && d.bolsillo_por_cuota[cuotaNumDif]) || 0;
-                  var targetDif = d.cuotaCorte || 0;
-                  var bolBadge = cicloPagadoDif
-                    ? 'pagado'
-                    : esFuturoCicloDif
-                      ? 'pendiente'
-                      : (Math.round(bolDif) >= Math.round(targetDif) && targetDif > 0 ? 'bolsillo' : bolDif > 0 ? 'bolsillo_parcial' : 'pendiente');
-                  var faltaDif = (!esFuturoCicloDif && bolBadge === 'bolsillo_parcial') ? Math.round(targetDif - bolDif) : 0;
-                  return e('tr', { key: d.id, onClick: () => loadDiferidaDetail(d.id), style: rowStyleD, className: selectedDiferida === d.id ? 'row-highlight' : '' },
-                    e('td', { style: { fontWeight: 600 } },
-                      d.etiqueta,
-                      d.es_de_tercero && e('span', { style: { fontSize: 10, color: 'var(--accent)', marginLeft: 6 } }, d.persona_nombre)
-                    ),
-                    e('td', { className: 'text-right text-mono', style: { fontWeight: 700, color: cicloPagadoDif ? 'var(--success)' : 'var(--danger)' } }, fmtCOP(d.cuotaCorte)),
-                    e('td', { className: 'text-mono' }, (d.tasa_mv * 100).toFixed(2) + '%'),
-                    e('td', null, (d.ciclos ? d.ciclos.indexOf(ciclo) + 1 : (d.num_cuotas - d.cuotasRestantes + 1)) + '/' + d.num_cuotas),
-                    e('td', null, fmtDate(d.fecha_compra)),
-                    e('td', { className: 'text-right text-mono', style: { fontWeight: 700, color: d.saldoActual > 0 ? 'var(--danger)' : 'var(--success)' } }, fmtCOP(d.saldoActual)),
-                    e('td', null,
-                      cicloPagadoDif
-                        ? e('span', { style: { color: 'var(--text-muted)' } }, '—')
-                        : e('span', {
-                            className: 'badge badge-' + bolBadge + ' badge-clickable',
-                            onClick: (ev) => {
-                              ev.stopPropagation();
-                              if (d.compra_id) {
-                                openBolsilloModal({
-                                  id: d.compra_id,
-                                  descripcion: d.etiqueta + (d.es_de_tercero ? ' (' + d.persona_nombre + ')' : ''),
-                                  estado: 'diferida',
-                                  valor_cop: targetDif,
-                                  cuotaCorte: targetDif,
-                                  monto_bolsillo: bolDif,
-                                  _bolsilloTarget: targetDif,
-                                  cuota_num: cuotaNumDif,
-                                  cuotas_total: d.num_cuotas
-                                });
-                              } else {
-                                openBolsilloDiferidaModal(d);
-                              }
-                            },
-                            title: 'Clic para gestionar bolsillo (cuota del corte)',
-                            style: { fontSize: 10 }
-                          }, bolBadge.replace(/_/g, ' ')),
-                      faltaDif > 0 && e('div', { style: { fontSize: 10, color: 'var(--warning)', marginTop: 2 } }, 'Falta: ' + fmtCOP(faltaDif))
-                    ),
-                    // Estado: cuando el ciclo está pagado, el badge "Pagado" vive aquí.
-                    e('td', null, cicloPagadoDif
-                      ? e('span', { className: 'badge badge-pagado', style: { display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, padding: '4px 10px' } },
-                          e(Ico, { name: 'check', size: 12, color: 'currentColor' }), 'Pagado')
-                      : e('span', { className: 'badge badge-' + d.estado }, d.estado)),
-                    e('td', { style: { whiteSpace: 'nowrap' } },
-                      !cicloPagadoDif && e('button', { className: 'btn btn-sm', onClick: (ev) => { ev.stopPropagation(); setEditDiferida(d); setShowDiferidaModal(true); } }, e(Ico, { name: 'edit', size: 14, color: 'currentColor' })),
-                      !cicloPagadoDif && ' ',
-                      !cicloPagadoDif && e('button', { className: 'btn btn-sm btn-danger', onClick: (ev) => { ev.stopPropagation(); removeDiferida(d.id); } }, e(Ico, { name: 'trash', size: 14, color: 'currentColor' }))
-                    )
-                  );
-                })
-              )
-            )
-          ),
-      // Diferida detail
-      diferidaDetail && e('div', null,
-        e('div', { className: 'toolbar' },
-          e('div', { className: 'section-title', style: { margin: 0 } }, e(Ico, { name: 'clipboard', size: 18, color: 'var(--accent)' }), ' Amortizacion: ' + diferidaDetail.etiqueta),
-          e('div', { className: 'toolbar-spacer' }),
-          e('button', { className: 'btn btn-sm', onClick: () => { setSelectedDiferida(null); setDiferidaDetail(null); }, style: { fontSize: 18, padding: '4px 10px' } }, '\u{2715}')
-        ),
-        e('div', { className: 'table-wrap', style: { maxHeight: 500, overflowY: 'auto' } },
-          e('table', null,
-            e('thead', null, e('tr', null,
-              e('th', null, '#'), e('th', null, 'Fecha Corte'), e('th', null, 'Dias'),
-              e('th', { className: 'text-right' }, 'Saldo Inicial'), e('th', { className: 'text-right' }, 'Int. Periodo'),
-              e('th', { className: 'text-right' }, 'Int. Diferido'), e('th', { className: 'text-right' }, 'Int. Total'),
-              e('th', { className: 'text-right' }, 'Cuota Capital'), e('th', { className: 'text-right' }, 'Total a Pagar')
-            )),
-            e('tbody', null,
-              diferidaDetail.amortizacion.map(r => {
-                const isCurrent = r.fechaCorte >= hoy && (!diferidaDetail.amortizacion[r.numCuota - 2] || diferidaDetail.amortizacion[r.numCuota - 2].fechaCorte < hoy);
-                return e('tr', { key: r.numCuota, className: isCurrent ? 'row-highlight' : '' },
-                  e('td', null, r.numCuota), e('td', null, fmtDate(r.fechaCorte)), e('td', { className: 'text-center' }, r.dias),
-                  e('td', { className: 'text-right text-mono' }, fmtCOP(r.saldoInicial)),
-                  e('td', { className: 'text-right text-mono' }, fmtCOPDec(r.interesPeriodo)),
-                  e('td', { className: 'text-right text-mono', style: { color: r.interesDiferido > 0 ? 'var(--warning)' : '' } }, r.interesDiferido > 0 ? fmtCOPDec(r.interesDiferido) : '-'),
-                  e('td', { className: 'text-right text-mono' }, fmtCOPDec(r.interesTotal)),
-                  e('td', { className: 'text-right text-mono' }, fmtCOP(r.cuotaCapital)),
-                  e('td', { className: 'text-right text-mono', style: { fontWeight: 700 } }, fmtCOP(r.totalPagar))
-                );
-              })
-            )
-          )
-        ),
-        diferidaDetail.resumen && e('div', { className: 'summary-box' },
-          e('div', { style: { fontWeight: 700, marginBottom: 12 } }, 'Resumen'),
-          e('div', { className: 'summary-row' }, e('span', { className: 'summary-label' }, 'Cuota Capital Fija'), e('span', { className: 'summary-value' }, fmtCOP(diferidaDetail.resumen.cuotaCapitalFija))),
-          e('div', { className: 'summary-row' }, e('span', { className: 'summary-label' }, 'Total Intereses'), e('span', { className: 'summary-value negative' }, fmtCOPDec(diferidaDetail.resumen.totalIntereses))),
-          e('div', { className: 'summary-row' }, e('span', { className: 'summary-label' }, 'Saldo Actual'), e('span', { className: 'summary-value' }, fmtCOP(diferidaDetail.resumen.saldoActual)))
         )
       )
     );
