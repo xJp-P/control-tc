@@ -251,6 +251,7 @@ const CHANGELOG = {
   '2.8.1': [
     'Arreglado un bug que dejaba mal calculadas las cuotas al editar la fecha de una compra a cuotas: si registrabas una compra con una fecha equivocada y luego la corregías, las cuotas seguían apareciendo en los meses originales y no en los nuevos.',
     'Ahora, cuando editas la fecha (o cambias la tarjeta) de una compra a cuotas, la diferida vinculada se actualiza automáticamente y la primera cuota cae en el ciclo correcto desde el primer momento.',
+    'Auto-corrección al actualizar: si tu base de datos tenía compras a cuotas que arrastraban este bug desde antes, la app las detecta y las realinea sola al abrir esta versión por primera vez. No necesitas hacer nada manualmente.',
   ],
   '2.8.0': [
     'Inmutabilidad de registros: cuando el extracto de un ciclo ya fue pagado, los botones de editar y eliminar desaparecen automáticamente en compras, compras divididas, diferidas y avances de ese ciclo. Si alguien intenta editar o borrar desde otra herramienta, el backend también lo bloquea.',

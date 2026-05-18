@@ -5,6 +5,7 @@ const fs = require('fs');
 const { calcularAmortizacionAvance } = require('../engine/amortizacion');
 const { calcularAmortizacionDiferida } = require('../engine/amortizacion');
 const { esNuBank, nuOpts, avanceOpts } = require('../helpers/banco');
+const { primerCorteAvance } = require('../helpers/dates');
 
 const DEFAULT_DB_DIR = path.join(require('os').homedir(), 'AppData', 'Roaming', 'CreditCardManager');
 const DB_CONFIG_FILE = path.join(DEFAULT_DB_DIR, 'db_location.json');
@@ -319,6 +320,29 @@ function syncData(db) {
 
     db.prepare("UPDATE pagos SET notas=? WHERE id=?").run('Abono a capital (redistribuido) - ' + detalleNuevo.join(', '), pago.id);
     console.log('[Sync] Redistribucion 4-grupos completada: ' + detalleNuevo.length + ' deudas, restante: $' + restante);
+  });
+
+  // 11. Auto-heal: compras a cuotas con su diferida desincronizada (fecha o tarjeta).
+  //     Bug histórico: antes de v2.8.1, editar la fecha o tarjeta de una compra
+  //     no actualizaba la diferida vinculada → la amortización quedaba calculada
+  //     desde la fecha vieja y las cuotas caían en meses equivocados.
+  //     Este paso detecta y realinea cualquier desincronización existente.
+  const desyncedRows = db.prepare(`
+    SELECT c.id as compra_id, c.descripcion, c.fecha as compra_fecha, c.tarjeta_id as compra_tarjeta_id,
+           d.id as dif_id, d.fecha_compra as dif_fecha, d.tarjeta_id as dif_tarjeta_id,
+           t.dia_corte
+    FROM compras c
+    JOIN diferidas d ON c.diferida_id = d.id
+    JOIN tarjetas t ON c.tarjeta_id = t.id
+    WHERE c.fecha != d.fecha_compra OR c.tarjeta_id != d.tarjeta_id
+  `).all();
+  desyncedRows.forEach(row => {
+    const diaCorte = row.dia_corte || 30;
+    const nuevaFechaPrimerCorte = primerCorteAvance(row.compra_fecha, diaCorte);
+    db.prepare('UPDATE diferidas SET tarjeta_id=?, fecha_compra=?, fecha_primer_corte=? WHERE id=?')
+      .run(row.compra_tarjeta_id, row.compra_fecha, nuevaFechaPrimerCorte, row.dif_id);
+    fixes++;
+    console.log('[Sync] Diferida #' + row.dif_id + ' (' + row.descripcion + ') resincronizada con compra #' + row.compra_id + ': fecha ' + row.dif_fecha + ' → ' + row.compra_fecha + ', primer corte → ' + nuevaFechaPrimerCorte);
   });
 
   console.log('[Sync] Sincronizacion completada. ' + fixes + ' correcciones aplicadas.');
