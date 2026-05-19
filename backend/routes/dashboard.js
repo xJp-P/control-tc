@@ -53,7 +53,7 @@ module.exports = function(db) {
     //               (el bolsillo cubre la cuota del calendario si bolsillo >= cuota.total)
     // El bolsillo afecta el total visual al apartar dinero. Incluye todas las compras pendientes.
     const comprasTerceroAll = db.prepare(`
-      SELECT c.id, c.tarjeta_id, c.persona_id, p.nombre, p.color, c.valor_cop, c.estado,
+      SELECT c.id, c.tarjeta_id, c.persona_id, p.nombre, p.color, c.valor_cop, c.valor_usd, c.estado,
         c.diferida_id, c.descripcion, c.fecha, c.ciclo,
         COALESCE(c.es_internacional, 0) as es_internacional,
         COALESCE(c.monto_bolsillo, 0) as bolsillo,
@@ -67,6 +67,8 @@ module.exports = function(db) {
     const meDebenMap = {};
     comprasTerceroAll.forEach(c => {
       let pendiente = 0;
+      let pendienteUsd = 0;
+      let cuotasArr = null;
       if (c.estado === 'diferida') {
         // Buscar la diferida vinculada (igual que en routes/terceros.js)
         const dif = c.diferida_id
@@ -74,20 +76,24 @@ module.exports = function(db) {
           : db.prepare('SELECT * FROM diferidas WHERE tarjeta_id=? AND etiqueta=? AND fecha_compra=?').get(c.tarjeta_id, c.descripcion, c.fecha);
         if (!dif) return;
         const amort = calcularAmortizacionDiferida(c.valor_cop, dif.tasa_mv, dif.num_cuotas, dif.fecha_compra, dif.fecha_primer_corte, null, nuOpts(db, c.tarjeta_id));
-        const bolsilloRound = Math.round(c.bolsillo);
         const cuotasBase = amort.tabla.map(r => ({
           total: Math.round(r.totalPagar),
           pagada: r.fechaCorte < hoy
         }));
-        // Per-cuota bolsillo: cada cuota tiene su propio monto apartado
         const bolCuotasDash = db.prepare('SELECT cuota_num, monto FROM bolsillo_cuotas WHERE compra_id=?').all(c.id);
         const bolMapDash = {};
         bolCuotasDash.forEach(b => { bolMapDash[b.cuota_num] = Math.round(b.monto); });
-        const cuotas = cuotasBase.map((q, i) => ({
+        cuotasArr = cuotasBase.map((q, i) => ({
           ...q,
           cubierta_bolsillo: (bolMapDash[i + 1] || 0) >= q.total
         }));
-        pendiente = cuotas.filter(q => !q.pagada && !q.cubierta_bolsillo).reduce((s, q) => s + q.total, 0);
+        pendiente = cuotasArr.filter(q => !q.pagada && !q.cubierta_bolsillo).reduce((s, q) => s + q.total, 0);
+        // USD: prorrateo del valor USD entre cuotas pendientes (asume mismo plazo).
+        if (c.valor_usd && c.valor_usd > 0) {
+          const cuotaUsd = c.valor_usd / dif.num_cuotas;
+          const pendientesCount = cuotasArr.filter(q => !q.pagada && !q.cubierta_bolsillo).length;
+          pendienteUsd = cuotaUsd * pendientesCount;
+        }
       } else {
         // 1 cuota: valor - bolsillo (+ interés intl si la tarjeta aplica)
         pendiente = c.valor_cop - c.bolsillo;
@@ -103,13 +109,21 @@ module.exports = function(db) {
             if (dias > 0) pendiente += Math.round(c.valor_cop * cTasaIntl * (dias / 30));
           }
         }
+        // USD: para compras 1 cuota Mastercard/Amex, valor_cop = 0 y valor_usd > 0.
+        if (c.valor_usd && c.valor_usd > 0) pendienteUsd = c.valor_usd;
       }
-      if (pendiente <= 0) return;
-      if (!meDebenMap[c.persona_id]) meDebenMap[c.persona_id] = { nombre: c.nombre, color: c.color, total: 0 };
-      meDebenMap[c.persona_id].total += pendiente;
+      if (pendiente <= 0 && pendienteUsd <= 0) return;
+      if (!meDebenMap[c.persona_id]) meDebenMap[c.persona_id] = { nombre: c.nombre, color: c.color, total: 0, totalUsd: 0 };
+      if (pendiente > 0) meDebenMap[c.persona_id].total += pendiente;
+      if (pendienteUsd > 0) meDebenMap[c.persona_id].totalUsd += pendienteUsd;
     });
-    const meDeben = Object.values(meDebenMap).map(r => ({ nombre: r.nombre, color: r.color, total: Math.round(r.total) }));
+    const meDeben = Object.values(meDebenMap).map(r => ({
+      nombre: r.nombre, color: r.color,
+      total: Math.round(r.total),
+      totalUsd: Math.round((r.totalUsd || 0) * 100) / 100
+    }));
     const totalMeDeben = meDeben.reduce((s, r) => s + r.total, 0);
+    const totalMeDebenUsd = Math.round(meDeben.reduce((s, r) => s + (r.totalUsd || 0), 0) * 100) / 100;
 
     const avancesActivos = db.prepare("SELECT * FROM avances WHERE estado='activo'" + tjFilter).all(...tjParams);
     let deudaAvances = 0, interesesMesAvances = 0;
@@ -207,14 +221,25 @@ module.exports = function(db) {
       ? db.prepare("SELECT COALESCE(SUM(monto_pagado),0) as total FROM extractos WHERE tarjeta_id=? AND estado='pendiente' AND monto_pagado > 0").get(tarjeta_id)
       : db.prepare("SELECT COALESCE(SUM(monto_pagado),0) as total FROM extractos WHERE estado='pendiente' AND monto_pagado > 0 AND tarjeta_id IN (SELECT id FROM tarjetas WHERE estado='activa')").get();
     const montoPagadoExtractoTotal = extParciales.total || 0;
-    let montoPagadoExtractoCiclo = 0, extractoCicloData = null;
+    let montoPagadoExtractoCiclo = 0, montoPagadoUsdExtractoCiclo = 0;
+    let estadoUsdExtractoCiclo = null, extractoCicloData = null;
     if (tarjeta_id) {
       const extCiclo = db.prepare("SELECT * FROM extractos WHERE tarjeta_id=? AND ciclo=?").get(tarjeta_id, cicloActual);
       if (extCiclo) {
         if (extCiclo.estado === 'pendiente') montoPagadoExtractoCiclo = extCiclo.monto_pagado || 0;
         if (extCiclo.estado === 'pagado') {
-          extractoCicloData = { estado: 'pagado', pago_minimo: extCiclo.pago_minimo, pago_total: extCiclo.pago_total, monto_pagado: extCiclo.monto_pagado || 0, fecha_pagado: extCiclo.fecha_pagado, fecha_corte: extCiclo.fecha_corte, fecha_pago: extCiclo.fecha_pago };
+          extractoCicloData = {
+            estado: 'pagado', pago_minimo: extCiclo.pago_minimo, pago_total: extCiclo.pago_total,
+            monto_pagado: extCiclo.monto_pagado || 0, fecha_pagado: extCiclo.fecha_pagado,
+            fecha_corte: extCiclo.fecha_corte, fecha_pago: extCiclo.fecha_pago,
+            estado_usd: extCiclo.estado_usd, monto_pagado_usd: extCiclo.monto_pagado_usd || 0,
+            fecha_pagado_usd: extCiclo.fecha_pagado_usd, pago_minimo_usd: extCiclo.pago_minimo_usd || 0,
+            pago_total_usd: extCiclo.pago_total_usd || 0
+          };
         }
+        // Para extractos pendientes, también arrastramos el abono USD parcial y el estado_usd.
+        montoPagadoUsdExtractoCiclo = extCiclo.monto_pagado_usd || 0;
+        estadoUsdExtractoCiclo = extCiclo.estado_usd || null;
       }
     }
 
@@ -287,6 +312,20 @@ module.exports = function(db) {
         "SELECT COALESCE(SUM(valor_usd),0) as total FROM compras WHERE valor_usd IS NOT NULL AND valor_usd > 0 AND estado NOT IN ('pagado')" + tjFilter
       ).get(...tjParams);
       deudaUsdDash = Math.round((deudaUsdRow.total || 0) * 100) / 100;
+
+      // Para ciclos donde al menos una porción ya está cerrada (COP o USD),
+      // las compras de esa moneda están en 'pagado' y el cálculo desde compras
+      // pendientes da 0 → la card desaparece. Preferimos los valores reales
+      // facturados por el banco, almacenados en pago_minimo_usd / pago_total_usd.
+      if (tarjeta_id) {
+        const extRow = db.prepare(
+          "SELECT estado, estado_usd, COALESCE(pago_minimo_usd,0) as pm, COALESCE(pago_total_usd,0) as pt FROM extractos WHERE tarjeta_id=? AND ciclo=?"
+        ).get(tarjeta_id, cicloActual);
+        if (extRow && (extRow.estado === 'pagado' || extRow.estado_usd === 'pagado')) {
+          pagoMinimoUsdDash = Math.round(extRow.pm * 100) / 100;
+          deudaUsdDash = Math.round(extRow.pt * 100) / 100;
+        }
+      }
     }
 
     const cupoTotal = tarjeta_id
@@ -369,6 +408,11 @@ module.exports = function(db) {
     const comprasPersonalCiclo = db.prepare(
       "SELECT COALESCE(SUM(valor_cop - COALESCE(monto_abonado,0)),0) as total FROM compras WHERE ciclo=? AND estado NOT IN ('pagado','diferida') AND persona_id IS NULL" + tjFilter
     ).get(cicloActual, ...tjParams);
+    // USD: para Mastercard/Amex, las compras 1-cuota tienen valor_cop=0 y valor_usd>0;
+    // estas no aparecen en la suma COP de arriba. Las sumamos aparte.
+    const comprasPersonalCicloUsd = db.prepare(
+      "SELECT COALESCE(SUM(valor_usd),0) as total FROM compras WHERE ciclo=? AND estado NOT IN ('pagado','diferida') AND persona_id IS NULL AND valor_usd IS NOT NULL AND valor_usd > 0" + tjFilter
+    ).get(cicloActual, ...tjParams);
     // Cuotas de avances del ciclo (todos los avances son personales)
     let cuotasAvancesPersonalCorte = 0;
     avancesActivos.forEach(av => {
@@ -382,11 +426,19 @@ module.exports = function(db) {
     const deudaPersonalCorte = Math.round(
       (comprasPersonalCiclo.total || 0) + cuotasAvancesPersonalCorte + cuotasDiferidasPersonalCorte + interesesComprasIntlPersonal
     );
+    // USD: para tarjetas duales, las compras personales del ciclo en USD se suman aparte.
+    // Por ahora no incluimos cuotas USD de avances/diferidas (raros: solo compras 1-cuota USD).
+    const deudaPersonalCorteUsd = Math.round((comprasPersonalCicloUsd.total || 0) * 100) / 100;
+    // Saldo Bolsillo USD: suma de monto_bolsillo_usd de compras del ciclo con USD apartado.
+    const saldoBolsilloComprasUsd = db.prepare(
+      "SELECT COALESCE(SUM(monto_bolsillo_usd),0) as total FROM compras WHERE ciclo=? AND estado IN ('bolsillo','bolsillo_parcial','diferida') AND COALESCE(monto_bolsillo_usd,0) > 0" + tjFilter
+    ).get(cicloActual, ...tjParams);
+    const saldoBolsilloUsd = Math.round((saldoBolsilloComprasUsd.total || 0) * 100) / 100;
 
     // Me Deben Corte: lo que cada tercero debe en este ciclo. Resta abono del tercero y bolsillo del usuario.
     const meDebenCorteMap = {};
     const meDebenCorte1Cuota = db.prepare(`
-      SELECT c.persona_id, p.nombre, p.color, c.valor_cop, c.fecha,
+      SELECT c.persona_id, p.nombre, p.color, c.valor_cop, c.valor_usd, c.fecha,
         COALESCE(c.es_internacional, 0) as es_internacional,
         COALESCE(c.tercero_monto_abonado, 0) as abono,
         COALESCE(c.monto_bolsillo, 0) as bolsillo,
@@ -411,12 +463,14 @@ module.exports = function(db) {
           if (dias > 0) pendiente += Math.round(r.valor_cop * rTasaIntl * (dias / 30));
         }
       }
-      if (pendiente <= 0) return;
-      if (!meDebenCorteMap[r.persona_id]) meDebenCorteMap[r.persona_id] = { nombre: r.nombre, color: r.color, total: 0 };
-      meDebenCorteMap[r.persona_id].total += pendiente;
+      const pendienteUsd = (r.valor_usd && r.valor_usd > 0) ? r.valor_usd : 0;
+      if (pendiente <= 0 && pendienteUsd <= 0) return;
+      if (!meDebenCorteMap[r.persona_id]) meDebenCorteMap[r.persona_id] = { nombre: r.nombre, color: r.color, total: 0, totalUsd: 0 };
+      if (pendiente > 0) meDebenCorteMap[r.persona_id].total += pendiente;
+      if (pendienteUsd > 0) meDebenCorteMap[r.persona_id].totalUsd += pendienteUsd;
     });
     const comprasDifTercero = db.prepare(`
-      SELECT c.id, c.persona_id, c.diferida_id, c.valor_cop, p.nombre, p.color,
+      SELECT c.id, c.persona_id, c.diferida_id, c.valor_cop, c.valor_usd, p.nombre, p.color,
         COALESCE(c.monto_bolsillo, 0) as bolsillo
       FROM compras c JOIN personas p ON c.persona_id = p.id
       WHERE c.tercero_pagado = 0 AND c.estado = 'diferida' AND c.diferida_id IS NOT NULL${tjFilter}
@@ -427,24 +481,26 @@ module.exports = function(db) {
       const amort = calcularAmortizacionDiferida(c.valor_cop, dif.tasa_mv, dif.num_cuotas, dif.fecha_compra, dif.fecha_primer_corte, [], nuOpts(db, dif.tarjeta_id));
       const cuota = amort.tabla.find(r => r.fechaCorte.slice(0, 7) === cicloActual);
       if (!cuota) return;
-      // NOTA: aquí NO se filtra por `cuota.fechaCorte < hoy`. ME DEBEN CORTE refleja
-      // lo que el tercero debe POR ESE CICLO específico (no "lo que falta hacia
-      // adelante" como hace meDeben global). Si el ciclo navegado es pasado y la
-      // cuota sigue pendiente y `tercero_pagado=0`, el tercero te sigue debiendo —
-      // igual que el bloque de 1-cuota tercero que filtra por c.ciclo sin checks
-      // temporales. El filtro sobre `pendiente <= 0` ya maneja "cubierto por bolsillo".
-      // Per-cuota bolsillo: buscar el monto específico de ESTA cuota
+      // Per-cuota bolsillo
       const bolCuotaRow = db.prepare('SELECT monto FROM bolsillo_cuotas WHERE compra_id=? AND cuota_num=?').get(c.id, cuota.numCuota);
       const bolCuota = bolCuotaRow ? Math.round(bolCuotaRow.monto) : 0;
       const pendiente = Math.max(0, Math.round(cuota.totalPagar) - bolCuota);
-      if (pendiente <= 0) return;
-      if (!meDebenCorteMap[c.persona_id]) meDebenCorteMap[c.persona_id] = { nombre: c.nombre, color: c.color, total: 0 };
-      meDebenCorteMap[c.persona_id].total += pendiente;
+      // USD: cuota_usd = valor_usd / num_cuotas
+      const pendienteUsd = (c.valor_usd && c.valor_usd > 0) ? (c.valor_usd / dif.num_cuotas) : 0;
+      if (pendiente <= 0 && pendienteUsd <= 0) return;
+      if (!meDebenCorteMap[c.persona_id]) meDebenCorteMap[c.persona_id] = { nombre: c.nombre, color: c.color, total: 0, totalUsd: 0 };
+      if (pendiente > 0) meDebenCorteMap[c.persona_id].total += pendiente;
+      if (pendienteUsd > 0) meDebenCorteMap[c.persona_id].totalUsd += pendienteUsd;
     });
     const meDebenCorteList = Object.values(meDebenCorteMap)
-      .filter(r => r.total > 0)
-      .map(r => ({ nombre: r.nombre, color: r.color, total: Math.round(r.total) }));
+      .filter(r => r.total > 0 || (r.totalUsd || 0) > 0)
+      .map(r => ({
+        nombre: r.nombre, color: r.color,
+        total: Math.round(r.total),
+        totalUsd: Math.round((r.totalUsd || 0) * 100) / 100
+      }));
     const totalMeDebenCorte = meDebenCorteList.reduce((s, r) => s + r.total, 0);
+    const totalMeDebenCorteUsd = Math.round(meDebenCorteList.reduce((s, r) => s + (r.totalUsd || 0), 0) * 100) / 100;
 
     res.json({
       cupoTotal: Math.round(cupoTotal),
@@ -462,9 +518,11 @@ module.exports = function(db) {
       minimoUsdEnCop: dualExtractoDash ? Math.round(comprasUsdCiclo.totalCop) : 0,
       minimoCop: dualExtractoDash ? Math.round(comprasCopCiclo.totalCop) + Math.round(cuotasCorte) : 0,
       pagoTotal: Math.round(deudaTotal),
-      meDeben: { total: Math.round(totalMeDeben), detalle: meDeben },
-      meDebenCorte: { total: totalMeDebenCorte, detalle: meDebenCorteList },
+      meDeben: { total: Math.round(totalMeDeben), totalUsd: totalMeDebenUsd, detalle: meDeben },
+      meDebenCorte: { total: totalMeDebenCorte, totalUsd: totalMeDebenCorteUsd, detalle: meDebenCorteList },
       deudaPersonal: deudaPersonalCorte,
+      deudaPersonalUsd: deudaPersonalCorteUsd,
+      saldoBolsilloUsd: saldoBolsilloUsd,
       proximoCorte: { fecha: proximoCorteDate.toISOString().slice(0, 10), diasFaltan: diasParaCorte },
       fechaPago: { fecha: fechaPago.toISOString().slice(0, 10), diasFaltan: diasParaPago, esManual: esFechaPagoManual },
       interesesMes: Math.round((interesesMesAvances + interesesMesDiferidas + interesesComprasIntl) * 100) / 100,
@@ -475,6 +533,8 @@ module.exports = function(db) {
       interesesComprasUsd: interesesComprasUsdDash,
       pagoMinimoUsd: pagoMinimoUsdDash,
       deudaUsd: deudaUsdDash,
+      montoPagadoExtractoUsd: Math.round((montoPagadoUsdExtractoCiclo || 0) * 100) / 100,
+      estadoUsdExtractoCiclo: estadoUsdExtractoCiclo,
       // Card "Saldo en Bolsillo": valor neto + desglose para transparencia.
       //   bruto    = Total Apartado del ciclo (compras + avances per-cuota + diferidas standalone)
       //   abonado  = Abonos Realizados al extracto del ciclo (extractos.monto_pagado)

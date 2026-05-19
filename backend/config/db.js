@@ -99,12 +99,23 @@ function syncData(db) {
     }
   });
 
-  // 6. Compras de extractos pagados: marcar como pagadas si no lo están
-  const extsPagados = db.prepare("SELECT tarjeta_id, ciclo FROM extractos WHERE estado='pagado'").all();
-  extsPagados.forEach(ext => {
-    const fix = db.prepare("UPDATE compras SET estado='pagado', monto_abonado=valor_cop WHERE tarjeta_id=? AND ciclo=? AND estado NOT IN ('pagado','diferida')")
-      .run(ext.tarjeta_id, ext.ciclo);
-    if (fix.changes > 0) { fixes += fix.changes; console.log('[Sync] ' + fix.changes + ' compras de extracto pagado ' + ext.ciclo + ' marcadas como pagadas'); }
+  // 6. Compras de extractos pagados: marcar como pagadas según la moneda.
+  //    estado='pagado'      → marca compras COP del ciclo (valor_usd vacío o 0).
+  //    estado_usd='pagado'  → marca compras USD del ciclo (valor_usd > 0).
+  //    Esto permite que pagar la porción COP no cierre las compras USD y viceversa.
+  const extsPagadosCop = db.prepare("SELECT tarjeta_id, ciclo FROM extractos WHERE estado='pagado'").all();
+  extsPagadosCop.forEach(ext => {
+    const fix = db.prepare(`UPDATE compras SET estado='pagado', monto_abonado=valor_cop
+      WHERE tarjeta_id=? AND ciclo=? AND estado NOT IN ('pagado','diferida')
+        AND (valor_usd IS NULL OR valor_usd = 0)`).run(ext.tarjeta_id, ext.ciclo);
+    if (fix.changes > 0) { fixes += fix.changes; console.log('[Sync] ' + fix.changes + ' compras COP de extracto pagado ' + ext.ciclo + ' marcadas como pagadas'); }
+  });
+  const extsPagadosUsd = db.prepare("SELECT tarjeta_id, ciclo FROM extractos WHERE estado_usd='pagado'").all();
+  extsPagadosUsd.forEach(ext => {
+    const fix = db.prepare(`UPDATE compras SET estado='pagado', monto_abonado=valor_cop
+      WHERE tarjeta_id=? AND ciclo=? AND estado NOT IN ('pagado','diferida')
+        AND valor_usd IS NOT NULL AND valor_usd > 0`).run(ext.tarjeta_id, ext.ciclo);
+    if (fix.changes > 0) { fixes += fix.changes; console.log('[Sync] ' + fix.changes + ' compras USD de extracto pagado ' + ext.ciclo + ' marcadas como pagadas'); }
   });
 
   // 7. Compras vinculadas a diferidas: marcar como 'diferida'
@@ -596,6 +607,51 @@ function initDb(dbPathOverride) {
   // tasa o las compras cambien después.
   try { db.prepare('SELECT intereses_intl FROM extractos LIMIT 1').get(); }
   catch (e) { db.exec('ALTER TABLE extractos ADD COLUMN intereses_intl REAL DEFAULT 0'); }
+
+  // Pago mínimo y pago total en USD del extracto (solo tarjetas con extracto dual:
+  // Mastercard / Amex Bancolombia). Para tarjetas no-duales (ej. Visa) quedan en 0.
+  // Permite mostrar la card "Pago Mínimo USD" y "Deuda USD" en el dashboard al
+  // navegar ciclos históricos donde todas las compras ya están pagadas.
+  try { db.prepare('SELECT pago_minimo_usd FROM extractos LIMIT 1').get(); }
+  catch (e) { db.exec('ALTER TABLE extractos ADD COLUMN pago_minimo_usd REAL DEFAULT 0'); }
+  try { db.prepare('SELECT pago_total_usd FROM extractos LIMIT 1').get(); }
+  catch (e) { db.exec('ALTER TABLE extractos ADD COLUMN pago_total_usd REAL DEFAULT 0'); }
+
+  // Pago en USD por separado del extracto (Mastercard / Amex Bancolombia):
+  // permite saldar la porción COP y la USD de forma independiente dentro del
+  // mismo ciclo. Para tarjetas no-duales, `estado_usd='no_aplica'`.
+  //   estado_usd: 'pendiente' | 'pagado' | 'no_aplica'
+  try { db.prepare('SELECT monto_pagado_usd FROM extractos LIMIT 1').get(); }
+  catch (e) { db.exec('ALTER TABLE extractos ADD COLUMN monto_pagado_usd REAL DEFAULT 0'); }
+  try { db.prepare('SELECT estado_usd FROM extractos LIMIT 1').get(); }
+  catch (e) { db.exec("ALTER TABLE extractos ADD COLUMN estado_usd TEXT DEFAULT 'pendiente'"); }
+  try { db.prepare('SELECT fecha_pagado_usd FROM extractos LIMIT 1').get(); }
+  catch (e) { db.exec('ALTER TABLE extractos ADD COLUMN fecha_pagado_usd TEXT'); }
+
+  // Backfill de estado_usd: ejecutar siempre que haya filas con estado_usd default
+  // y datos USD coherentes (idempotente).
+  //  - Si la fila no tiene saldo USD (pagoMinimoUsd y pagoTotalUsd en 0) → 'no_aplica'.
+  //  - Si la fila estaba 'pagado' (COP) y tiene saldo USD, asumimos que la porción
+  //    USD también se saldó al cerrar el extracto históricamente.
+  db.prepare(`UPDATE extractos SET estado_usd='no_aplica'
+    WHERE estado_usd='pendiente' AND COALESCE(pago_minimo_usd,0) <= 0 AND COALESCE(pago_total_usd,0) <= 0`).run();
+  db.prepare(`UPDATE extractos SET estado_usd='pagado',
+    monto_pagado_usd = COALESCE(NULLIF(monto_pagado_usd,0), pago_minimo_usd),
+    fecha_pagado_usd = COALESCE(fecha_pagado_usd, fecha_pagado)
+    WHERE estado_usd='pendiente' AND estado='pagado' AND COALESCE(pago_minimo_usd,0) > 0`).run();
+
+  // Pagos: agregar columna moneda para distinguir entre pagos en COP y USD.
+  // Default 'COP' para compatibilidad con todo lo que ya existe.
+  try { db.prepare('SELECT moneda FROM pagos LIMIT 1').get(); }
+  catch (e) { db.exec("ALTER TABLE pagos ADD COLUMN moneda TEXT DEFAULT 'COP'"); }
+
+  // Bolsillo en USD: caché en compras + moneda en la tabla per-cuota.
+  // Solo aplica a compras Mastercard/Amex con valor_usd > 0 (valor_cop = 0).
+  // Para Visa, RappiCard, Nu: monto_bolsillo_usd siempre 0.
+  try { db.prepare('SELECT monto_bolsillo_usd FROM compras LIMIT 1').get(); }
+  catch (e) { db.exec('ALTER TABLE compras ADD COLUMN monto_bolsillo_usd REAL DEFAULT 0'); }
+  try { db.prepare('SELECT moneda FROM bolsillo_cuotas LIMIT 1').get(); }
+  catch (e) { db.exec("ALTER TABLE bolsillo_cuotas ADD COLUMN moneda TEXT DEFAULT 'COP'"); }
 
   // Redondear monto_bolsillo con decimales (fix comparacion cuotaCorte redondeada vs bolsillo decimal)
   db.prepare('UPDATE compras SET monto_bolsillo = ROUND(monto_bolsillo) WHERE monto_bolsillo != ROUND(monto_bolsillo)').run();

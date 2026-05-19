@@ -248,6 +248,18 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '3.1.0': [
+    'Soporte bimonetario integral para las tarjetas con cuentas en pesos y dólares (Mastercard y Amex Bancolombia). El banco emite un solo extracto por ciclo pero con la deuda dividida, y ahora la app refleja esa realidad: puedes saldar primero la parte en pesos y dejar los dólares para otro día, o viceversa.',
+    'Al darle al botón Pagar de un ciclo con saldo en ambas monedas, el modal muestra dos pestañas — Pago COP y Pago USD — con su propio monto mínimo, restante y barra de progreso. La pestaña ya saldada se marca como "SALDADO" y queda deshabilitada. El ciclo solo se considera totalmente cerrado cuando ambas monedas están al día (o cuando no hay saldo en dólares).',
+    'En la lista de Pagos, cada ciclo ahora muestra dos badges independientes (COP PAGADO / USD PENDIENTE, etc.) para tarjetas con cuenta en dólares. Las columnas Pago Mínimo, Pago Total y Monto Abonado tienen una segunda línea en cian con los valores en dólares.',
+    'Rediseño visual de las tarjetas del dashboard (Deuda Total, Me Deben, Me Deben Corte, Deuda Personal, Saldo en Bolsillo): ahora cuando hay saldo en dólares se muestran en formato "dos pisos" con COP arriba, divisor horizontal y USD abajo. Las tarjetas sin saldo USD mantienen su diseño original.',
+    'El Bolsillo ahora entiende dólares: cuando apartas dinero para una compra internacional, el modal cambia a formato USD automáticamente y guarda el monto separado del bolsillo en pesos. La card "Saldo en Bolsillo" suma ambos por separado.',
+    'Las tablas de compras (en cada tarjeta y en Terceros) renombraron la columna "Valor" a "Valor COP" y agregaron una nueva columna "Valor USD" en cian. Si la compra está registrada en dólares, su monto original aparece allí en lugar de mostrar $0.',
+    'Sección Terceros: cada persona ahora muestra el monto pendiente y recibido en dólares cuando aplica, sin chips nuevos (la info va dentro del mismo chip existente).',
+    'Card Pago Mínimo USD: arreglada para que aparezca correctamente al navegar ciclos pagados de tarjetas históricas (antes el cálculo daba cero porque las compras ya estaban marcadas como pagadas).',
+    'Cargué el histórico completo de tres tarjetas antiguas (MasterCard Joven, American Express Gold, Mastercard Platinum) en la sección Historial / Inactivas, con todos sus extractos, compras, diferidas, avances y pagos hasta la fecha de cierre.',
+    'Para diferidas y avances que no completaron su plazo original (porque la tarjeta se cerró o porque se hizo un abono a capital), el histórico incluye automáticamente el abono final que liquidó el saldo restante — así no quedan cuotas fantasma proyectadas hacia el futuro.',
+  ],
   '3.0.0': [
     'Reordenamiento manual de tarjetas: cada tarjeta tiene un nuevo campo "Orden" en el formulario de edición. El número menor aparece primero en la barra lateral y en el Dashboard. Si lo dejas vacío, la tarjeta cae al final por fecha de creación.',
     'Tus tarjetas existentes recibieron un orden inicial automático según la fecha en que las creaste, así que el ordenamiento ya funciona desde la primera vez que abras esta versión.',
@@ -780,6 +792,43 @@ function fmtDate(d) {
   return parts[2] + '/' + parts[1] + '/' + parts[0];
 }
 
+// Helper para cards bimonetarias (COP arriba, divisor horizontal, USD abajo).
+// Devuelve el JSX completo de una card con cabecera, dos pisos y footer opcional.
+// Si `hasUsd` es false, solo renderiza el piso COP (igual que una card normal).
+function fmtUsd(n) {
+  return 'USD $' + new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n || 0);
+}
+function bimonCard(opts) {
+  // opts: { variant, title, copValue, usdValue, hasUsd, copExtra, footer, footerSub }
+  // variant -> 'success' | 'danger' | 'warning' | 'accent' | 'purple'
+  // Diseño "dos pisos": title arriba, valor COP con prefix inline, divisor horizontal,
+  // valor USD con prefix inline en cyan. Footer y footerSub opcionales separados.
+  const e = React.createElement;
+  const className = 'card' + (opts.variant ? ' card-' + opts.variant : '');
+  const tierStyle = { padding: '12px 16px' };
+  const dividerTier = Object.assign({}, tierStyle, { borderTop: '1px solid var(--border)' });
+  const valueStyleCop = { fontFamily: 'monospace', fontSize: 20, fontWeight: 700, lineHeight: 1.1, color: 'var(--text-primary)' };
+  const valueStyleUsd = Object.assign({}, valueStyleCop, { color: '#4FC3F7' });
+  // Si el valor COP ya viene con prefix "$", anteponemos "COP " para que quede "COP $XXX".
+  const copDisplay = typeof opts.copValue === 'string' && !opts.copValue.startsWith('COP ')
+    ? 'COP ' + opts.copValue : opts.copValue;
+  // USD ya viene como "USD $X.XX" desde fmtUsd, lo dejamos tal cual.
+  return e('div', { className, style: { padding: 0, overflow: 'hidden' } },
+    e('div', { style: { padding: '12px 16px 10px' } },
+      e('div', { className: 'card-label', style: { margin: 0 } }, opts.title)
+    ),
+    e('div', { style: Object.assign({}, tierStyle, { borderTop: '1px solid var(--border)' }) },
+      e('div', { style: valueStyleCop }, copDisplay),
+      opts.copExtra || null
+    ),
+    opts.hasUsd ? e('div', { style: dividerTier },
+      e('div', { style: valueStyleUsd }, opts.usdValue)
+    ) : null,
+    opts.footer ? e('div', { style: { borderTop: '1px solid var(--border)', padding: '10px 16px' } }, opts.footer) : null,
+    opts.footerSub ? e('div', { style: { borderTop: '1px solid var(--border)', padding: '8px 16px 12px', fontSize: 11, color: 'var(--text-muted)' } }, opts.footerSub) : null
+  );
+}
+
 function cicloActual() { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0'); }
 function todayISO() { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0'); }
 function calcCicloLocal(fechaStr, diaCorte) { var d = new Date(fechaStr + 'T12:00:00'); if (d.getDate() > (diaCorte || 30)) d.setMonth(d.getMonth() + 1); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'); }
@@ -956,20 +1005,24 @@ function GlobalDashboard({ tarjetas, onSelectCard, onNewCard }) {
               )
             )
           ),
-          e('div', { className: 'card card-success' },
-            e('div', { className: 'card-label' }, 'Me Deben'),
-            e('div', { className: 'card-value' }, fmtCOP(dashData.meDeben.total)),
-            dashData.meDeben.detalle.length > 0
-              ? e('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '8px 16px', marginTop: 8 } },
+          bimonCard({
+            variant: 'success',
+            title: 'Me Deben',
+            copValue: fmtCOP(dashData.meDeben.total),
+            usdValue: fmtUsd(dashData.meDeben.totalUsd || 0),
+            hasUsd: (dashData.meDeben.totalUsd || 0) > 0,
+            footer: dashData.meDeben.detalle.length > 0
+              ? e('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '8px 16px' } },
                   dashData.meDeben.detalle.map(d =>
                     e('div', { key: d.nombre },
                       e('div', { style: { fontSize: 11, color: 'var(--text-muted)' } }, d.nombre),
-                      e('div', { style: { fontSize: 14, fontWeight: 400, color: d.color || 'var(--success)' } }, fmtCOP(d.total))
+                      e('div', { style: { fontSize: 14, fontWeight: 400, color: d.color || 'var(--success)' } }, fmtCOP(d.total)),
+                      (d.totalUsd || 0) > 0 && e('div', { style: { fontSize: 12, color: '#4FC3F7', fontWeight: 700, fontFamily: 'monospace' } }, fmtUsd(d.totalUsd))
                     )
                   )
                 )
-              : e('div', { className: 'card-sub' }, 'Sin deudas pendientes')
-          )
+              : e('div', { className: 'card-sub', style: { margin: 0 } }, 'Sin deudas pendientes')
+          })
         )
       );
     })(),
@@ -1629,7 +1682,9 @@ function CardResumen({ tarjeta, onDataChange }) {
       : bolsilloCompra._isDiferida
         ? '/diferidas/' + bolsilloCompra.id + '/bolsillo'
         : '/compras/' + bolsilloCompra.id + '/bolsillo';
-    const body = { monto_bolsillo: monto };
+    // Detectar moneda: USD si la compra solo tiene valor_usd > 0.
+    const esUsdSave = !!(bolsilloCompra.valor_usd && bolsilloCompra.valor_usd > 0 && !bolsilloCompra.valor_cop);
+    const body = { monto_bolsillo: monto, moneda: esUsdSave ? 'USD' : 'COP' };
     // Per-cuota: enviar cuota_num para diferidas y avances (compras 1-cuota usan global)
     if (bolsilloCompra.cuota_num && (_isDif || _isAv)) body.cuota_num = bolsilloCompra.cuota_num;
     api(url, { method: 'PUT', body })
@@ -1745,10 +1800,13 @@ function CardResumen({ tarjeta, onDataChange }) {
   return e('div', null,
     // ──── Fila 1: Info general de la tarjeta ────
     e('div', { className: 'cards-row' },
-      e('div', { className: 'card card-danger' },
-        e('div', { className: 'card-label' }, 'Deuda Total'),
-        e('div', { className: 'card-value' }, fmtCOP(data.deudaTotal)),
-        e('div', { style: { display: 'flex', gap: 14, marginTop: 6, flexWrap: 'wrap' } },
+      bimonCard({
+        variant: 'danger',
+        title: 'Deuda Total',
+        copValue: fmtCOP(data.deudaTotal),
+        usdValue: fmtUsd(data.deudaUsd || 0),
+        hasUsd: !!(data.dualExtracto && data.deudaUsd > 0),
+        copExtra: e('div', { style: { display: 'flex', gap: 14, marginTop: 8, flexWrap: 'wrap' } },
           e('div', null,
             e('div', { style: { fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 } }, 'Avances'),
             e('div', { style: { fontSize: 12, color: 'var(--text-primary)', fontWeight: 600, fontFamily: 'monospace' } }, fmtCOP(data.deudaAvances))
@@ -1760,14 +1818,9 @@ function CardResumen({ tarjeta, onDataChange }) {
           e('div', null,
             e('div', { style: { fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 } }, 'Compras'),
             e('div', { style: { fontSize: 12, color: 'var(--text-primary)', fontWeight: 600, fontFamily: 'monospace' } }, fmtCOP(data.comprasTotalPendientes || data.comprasCiclo))
-          ),
-          // Para tarjetas con extracto dual (Mastercard/Amex Bancolombia): mini-columna USD aparte
-          data.dualExtracto && data.deudaUsd > 0 && e('div', null,
-            e('div', { style: { fontSize: 10, color: '#4FC3F7', textTransform: 'uppercase', letterSpacing: 0.4 } }, 'Deuda USD'),
-            e('div', { style: { fontSize: 12, color: '#4FC3F7', fontWeight: 700, fontFamily: 'monospace' } }, 'USD $' + new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(data.deudaUsd))
           )
         )
-      ),
+      }),
       cupoUsado && e('div', { className: 'card card-accent' },
         e('div', { className: 'card-label' }, 'Cupo Usado'),
         e('div', { className: 'card-value' }, cupoUsado + '%'),
@@ -1809,18 +1862,22 @@ function CardResumen({ tarjeta, onDataChange }) {
         e('div', { className: 'card-sub' }, 'Dia de corte: ' + tarjeta.dia_corte)
       ),
       // Me Deben (total histórico de la tarjeta — viejas y nuevas)
-      e('div', { className: 'card card-success' },
-        e('div', { className: 'card-label' }, 'Me Deben'),
-        e('div', { className: 'card-value' }, fmtCOP(data.meDeben.total)),
-        data.meDeben.detalle.length > 0
-          ? e('div', { style: { display: 'flex', gap: 14, marginTop: 6, flexWrap: 'wrap' } },
+      bimonCard({
+        variant: 'success',
+        title: 'Me Deben',
+        copValue: fmtCOP(data.meDeben.total),
+        usdValue: fmtUsd(data.meDeben.totalUsd || 0),
+        hasUsd: (data.meDeben.totalUsd || 0) > 0,
+        footer: data.meDeben.detalle.length > 0
+          ? e('div', { style: { display: 'flex', gap: 14, flexWrap: 'wrap' } },
               data.meDeben.detalle.map(d => e('div', { key: d.nombre },
                 e('div', { style: { fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 } }, d.nombre),
-                e('div', { style: { fontSize: 12, color: 'var(--text-primary)', fontWeight: 600, fontFamily: 'monospace' } }, fmtCOP(d.total))
+                e('div', { style: { fontSize: 12, color: 'var(--text-primary)', fontWeight: 600, fontFamily: 'monospace' } }, fmtCOP(d.total)),
+                (d.totalUsd || 0) > 0 && e('div', { style: { fontSize: 11, color: '#4FC3F7', fontWeight: 700, fontFamily: 'monospace' } }, fmtUsd(d.totalUsd))
               ))
             )
-          : e('div', { className: 'card-sub' }, 'Sin deudas')
-      )
+          : e('div', { className: 'card-sub', style: { margin: 0 } }, 'Sin deudas')
+      })
     ),
 
     // ──── Divisor: Datos del corte ────
@@ -1833,56 +1890,108 @@ function CardResumen({ tarjeta, onDataChange }) {
       )
     ),
     e('div', { className: 'cards-row' },
-      data.extractoCiclo && data.extractoCiclo.estado === 'pagado'
-        ? e('div', { className: 'card card-success' },
-            e('div', { className: 'card-label' }, 'Pago Minimo'),
-            e('div', { className: 'card-value' }, fmtCOP(data.pagoMinimoBruto || 0)),
-            e('div', null,
-              e('div', { className: 'card-sub', style: { color: 'var(--success)' } }, 'Pagado: ' + fmtCOP(data.montoPagadoExtracto)),
-              e('div', { style: { marginTop: 4, background: 'var(--bg-secondary)', borderRadius: 4, height: 4, overflow: 'hidden' } },
-                e('div', { style: { width: '100%', height: '100%', background: 'var(--success)', borderRadius: 4 } })
+      // \u2500\u2500 Card COP \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+      // El label cambia a "Pago M\u00EDnimo COP" cuando la tarjeta es dual,
+      // para que sea sim\u00E9trico con la card USD que aparece al lado.
+      (function() {
+        const labelCop = data.dualExtracto && data.pagoMinimoUsd > 0 ? 'Pago M\u00EDnimo COP' : 'Pago Minimo';
+        return data.extractoCiclo && data.extractoCiclo.estado === 'pagado'
+          ? e('div', { className: 'card card-success' },
+              e('div', { className: 'card-label' }, labelCop),
+              e('div', { className: 'card-value' }, fmtCOP(data.pagoMinimoBruto || 0)),
+              e('div', null,
+                e('div', { className: 'card-sub', style: { color: 'var(--success)' } }, 'Pagado: ' + fmtCOP(data.montoPagadoExtracto)),
+                e('div', { style: { marginTop: 4, background: 'var(--bg-secondary)', borderRadius: 4, height: 4, overflow: 'hidden' } },
+                  e('div', { style: { width: '100%', height: '100%', background: 'var(--success)', borderRadius: 4 } })
+                )
               )
             )
-          )
-        : e('div', { className: 'card card-warning' },
-            e('div', { className: 'card-label' }, data.montoPagadoExtracto > 0 ? 'Pago Minimo (Restante)' : 'Pago Minimo'),
-            e('div', { className: 'card-value' }, fmtCOP(data.pagoMinimo || 0)),
-            data.montoPagadoExtracto > 0
+          : e('div', { className: 'card card-warning' },
+              e('div', { className: 'card-label' }, data.montoPagadoExtracto > 0 ? labelCop + ' (Restante)' : labelCop),
+              e('div', { className: 'card-value' }, fmtCOP(data.pagoMinimo || 0)),
+              data.montoPagadoExtracto > 0
+                ? e('div', null,
+                    e('div', { className: 'card-sub', style: { color: 'var(--success)' } }, 'Abonado: ' + fmtCOP(data.montoPagadoExtracto) + ' de ' + fmtCOP(data.pagoMinimoBruto)),
+                    e('div', { style: { marginTop: 4, background: 'var(--bg-secondary)', borderRadius: 4, height: 4, overflow: 'hidden' } },
+                      e('div', { style: { width: Math.min(100, Math.round(data.montoPagadoExtracto / data.pagoMinimoBruto * 100)) + '%', height: '100%', background: 'var(--success)', borderRadius: 4 } })
+                    )
+                  )
+                : e('div', { style: { display: 'flex', gap: 14, marginTop: 6 } },
+                    e('div', null,
+                      e('div', { style: { fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 } }, 'Compras'),
+                      e('div', { style: { fontSize: 12, color: 'var(--text-primary)', fontWeight: 600, fontFamily: 'monospace' } }, fmtCOP(data.comprasCiclo))
+                    ),
+                    e('div', null,
+                      e('div', { style: { fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 } }, 'Cuotas'),
+                      e('div', { style: { fontSize: 12, color: 'var(--text-primary)', fontWeight: 600, fontFamily: 'monospace' } }, fmtCOP(data.cuotasCorte || 0))
+                    ),
+                    data.interesesComprasIntl > 0 && e('div', null,
+                      e('div', { style: { fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 } }, 'Int Intl'),
+                      e('div', { style: { fontSize: 12, color: 'var(--text-primary)', fontWeight: 600, fontFamily: 'monospace' } }, fmtCOP(data.interesesComprasIntl))
+                    )
+                  )
+            );
+      })(),
+      // \u2500\u2500 Card USD \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+      // Sim\u00E9trica a la card COP: 3 variantes (pagado / abonado parcial /
+      // pendiente sin abono). Solo se renderiza para tarjetas duales con
+      // saldo USD. Para tarjetas no-duales con `data.minimoUsd > 0` se
+      // conserva la card simple legacy.
+      (function() {
+        const fmtUsd = (n) => 'USD $' + new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n || 0);
+        if (data.dualExtracto && data.pagoMinimoUsd > 0) {
+          const pagadoUsd = data.estadoUsdExtractoCiclo === 'pagado'
+            || (data.extractoCiclo && data.extractoCiclo.estado_usd === 'pagado');
+          const abonadoUsd = data.montoPagadoExtractoUsd || 0;
+          const restanteUsd = Math.max(0, data.pagoMinimoUsd - abonadoUsd);
+          if (pagadoUsd) {
+            return e('div', { className: 'card card-success' },
+              e('div', { className: 'card-label' }, 'Pago M\u00EDnimo USD'),
+              e('div', { className: 'card-value', style: { color: '#4FC3F7' } }, fmtUsd(data.pagoMinimoUsd)),
+              e('div', null,
+                e('div', { className: 'card-sub', style: { color: 'var(--success)' } }, 'Pagado: ' + fmtUsd(abonadoUsd || data.pagoMinimoUsd)),
+                e('div', { style: { marginTop: 4, background: 'var(--bg-secondary)', borderRadius: 4, height: 4, overflow: 'hidden' } },
+                  e('div', { style: { width: '100%', height: '100%', background: 'var(--success)', borderRadius: 4 } })
+                )
+              )
+            );
+          }
+          return e('div', { className: 'card card-warning' },
+            e('div', { className: 'card-label' }, abonadoUsd > 0 ? 'Pago M\u00EDnimo USD (Restante)' : 'Pago M\u00EDnimo USD'),
+            e('div', { className: 'card-value', style: { color: '#4FC3F7' } }, fmtUsd(restanteUsd)),
+            abonadoUsd > 0
               ? e('div', null,
-                  e('div', { className: 'card-sub', style: { color: 'var(--success)' } }, 'Abonado: ' + fmtCOP(data.montoPagadoExtracto) + ' de ' + fmtCOP(data.pagoMinimoBruto)),
+                  e('div', { className: 'card-sub', style: { color: 'var(--success)' } }, 'Abonado: ' + fmtUsd(abonadoUsd) + ' de ' + fmtUsd(data.pagoMinimoUsd)),
                   e('div', { style: { marginTop: 4, background: 'var(--bg-secondary)', borderRadius: 4, height: 4, overflow: 'hidden' } },
-                    e('div', { style: { width: Math.min(100, Math.round(data.montoPagadoExtracto / data.pagoMinimoBruto * 100)) + '%', height: '100%', background: 'var(--success)', borderRadius: 4 } })
+                    e('div', { style: { width: Math.min(100, Math.round(abonadoUsd / data.pagoMinimoUsd * 100)) + '%', height: '100%', background: 'var(--success)', borderRadius: 4 } })
                   )
                 )
               : e('div', { style: { display: 'flex', gap: 14, marginTop: 6 } },
                   e('div', null,
-                    e('div', { style: { fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 } }, 'Compras'),
-                    e('div', { style: { fontSize: 12, color: 'var(--text-primary)', fontWeight: 600, fontFamily: 'monospace' } }, fmtCOP(data.comprasCiclo))
+                    e('div', { style: { fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 } }, 'Compras USD'),
+                    e('div', { style: { fontSize: 12, color: 'var(--text-primary)', fontWeight: 600, fontFamily: 'monospace' } }, fmtUsd(data.minimoUsd || 0))
                   ),
-                  e('div', null,
-                    e('div', { style: { fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 } }, 'Cuotas'),
-                    e('div', { style: { fontSize: 12, color: 'var(--text-primary)', fontWeight: 600, fontFamily: 'monospace' } }, fmtCOP(data.cuotasCorte || 0))
+                  data.interesesComprasUsd > 0 && e('div', null,
+                    e('div', { style: { fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 } }, 'Int Corr USD'),
+                    e('div', { style: { fontSize: 12, color: 'var(--text-primary)', fontWeight: 600, fontFamily: 'monospace' } }, fmtUsd(data.interesesComprasUsd))
                   ),
-                  data.interesesComprasIntl > 0 && e('div', null,
-                    e('div', { style: { fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 } }, 'Int Intl'),
-                    e('div', { style: { fontSize: 12, color: 'var(--text-primary)', fontWeight: 600, fontFamily: 'monospace' } }, fmtCOP(data.interesesComprasIntl))
+                  data.deudaUsd > 0 && e('div', null,
+                    e('div', { style: { fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 } }, 'Deuda Total USD'),
+                    e('div', { style: { fontSize: 12, color: 'var(--text-primary)', fontWeight: 600, fontFamily: 'monospace' } }, fmtUsd(data.deudaUsd))
                   )
                 )
-          ),
-      data.minimoCop > 0 ? e('div', { className: 'card card-warning' },
-        e('div', { className: 'card-label' }, 'Minimo COP'),
-        e('div', { className: 'card-value' }, fmtCOP(data.minimoCop || 0)),
-        e('div', { className: 'card-sub' }, 'Compras en pesos + cuotas')
-      ) : null,
-      data.dualExtracto && data.pagoMinimoUsd > 0 ? e('div', { className: 'card card-warning' },
-        e('div', { className: 'card-label' }, 'Pago M\u00EDnimo USD'),
-        e('div', { className: 'card-value', style: { color: '#4FC3F7' } }, 'USD $' + new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(data.pagoMinimoUsd)),
-        e('div', { className: 'card-sub' }, 'Extracto dual MC/Amex')
-      ) : data.minimoUsd > 0 ? e('div', { className: 'card card-warning' },
-        e('div', { className: 'card-label' }, 'Minimo USD'),
-        e('div', { className: 'card-value', style: { color: '#4FC3F7' } }, 'USD $' + new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(data.minimoUsd)),
-        e('div', { className: 'card-sub' }, 'En COP: ' + fmtCOP(data.minimoUsdEnCop))
-      ) : null,
+          );
+        }
+        // Tarjeta no-dual con minimoUsd > 0 (caso legacy raro).
+        if (data.minimoUsd > 0) {
+          return e('div', { className: 'card card-warning' },
+            e('div', { className: 'card-label' }, 'Minimo USD'),
+            e('div', { className: 'card-value', style: { color: '#4FC3F7' } }, fmtUsd(data.minimoUsd)),
+            e('div', { className: 'card-sub' }, 'En COP: ' + fmtCOP(data.minimoUsdEnCop))
+          );
+        }
+        return null;
+      })(),
       e('div', { className: 'card card-purple' },
         e('div', { className: 'card-label' }, 'Intereses del Mes'),
         e('div', { className: 'card-value' }, fmtCOPDec(data.interesesMes)),
@@ -1902,29 +2011,39 @@ function CardResumen({ tarjeta, onDataChange }) {
         )
       ),
       // Deuda Personal del corte (compras y avances "Personal" del ciclo, sin tercero)
-      e('div', { className: 'card card-danger' },
-        e('div', { className: 'card-label' }, 'Deuda Personal'),
-        e('div', { className: 'card-value' }, fmtCOP(data.deudaPersonal || 0)),
-        e('div', { className: 'card-sub' }, 'Compras y cuotas del corte (sin terceros)')
-      ),
+      bimonCard({
+        variant: 'danger',
+        title: 'Deuda Personal',
+        copValue: fmtCOP(data.deudaPersonal || 0),
+        usdValue: fmtUsd(data.deudaPersonalUsd || 0),
+        hasUsd: (data.deudaPersonalUsd || 0) > 0,
+        footerSub: 'Compras y cuotas del corte (sin terceros)'
+      }),
       // Me Deben Corte (lo que terceros me deben en este ciclo, con desglose por persona)
-      e('div', { className: 'card card-success' },
-        e('div', { className: 'card-label' }, 'Me Deben Corte'),
-        e('div', { className: 'card-value' }, fmtCOP((data.meDebenCorte && data.meDebenCorte.total) || 0)),
-        data.meDebenCorte && data.meDebenCorte.detalle.length > 0
-          ? e('div', { style: { display: 'flex', gap: 14, marginTop: 6, flexWrap: 'wrap' } },
+      bimonCard({
+        variant: 'success',
+        title: 'Me Deben Corte',
+        copValue: fmtCOP((data.meDebenCorte && data.meDebenCorte.total) || 0),
+        usdValue: fmtUsd((data.meDebenCorte && data.meDebenCorte.totalUsd) || 0),
+        hasUsd: ((data.meDebenCorte && data.meDebenCorte.totalUsd) || 0) > 0,
+        footer: data.meDebenCorte && data.meDebenCorte.detalle.length > 0
+          ? e('div', { style: { display: 'flex', gap: 14, flexWrap: 'wrap' } },
               data.meDebenCorte.detalle.map(d => e('div', { key: d.nombre },
                 e('div', { style: { fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 } }, d.nombre),
-                e('div', { style: { fontSize: 12, color: 'var(--text-primary)', fontWeight: 600, fontFamily: 'monospace' } }, fmtCOP(d.total))
+                e('div', { style: { fontSize: 12, color: 'var(--text-primary)', fontWeight: 600, fontFamily: 'monospace' } }, fmtCOP(d.total)),
+                (d.totalUsd || 0) > 0 && e('div', { style: { fontSize: 11, color: '#4FC3F7', fontWeight: 700, fontFamily: 'monospace' } }, fmtUsd(d.totalUsd))
               ))
             )
-          : e('div', { className: 'card-sub' }, 'Nadie debe en este ciclo')
-      ),
-      e('div', { className: 'card card-accent' },
-        e('div', { className: 'card-label' }, 'Saldo en Bolsillo'),
-        e('div', { className: 'card-value' }, fmtCOP(data.saldoBolsillo || 0)),
-        ((data.saldoBolsilloBruto || 0) > 0 || (data.saldoBolsilloAbonado || 0) > 0)
-          ? e('div', { style: { display: 'flex', gap: 14, marginTop: 6, flexWrap: 'wrap' } },
+          : e('div', { className: 'card-sub', style: { margin: 0 } }, 'Nadie debe en este ciclo')
+      }),
+      bimonCard({
+        variant: 'accent',
+        title: 'Saldo en Bolsillo',
+        copValue: fmtCOP(data.saldoBolsillo || 0),
+        usdValue: fmtUsd(data.saldoBolsilloUsd || 0),
+        hasUsd: (data.saldoBolsilloUsd || 0) > 0,
+        footer: ((data.saldoBolsilloBruto || 0) > 0 || (data.saldoBolsilloAbonado || 0) > 0)
+          ? e('div', { style: { display: 'flex', gap: 14, flexWrap: 'wrap' } },
               e('div', null,
                 e('div', { style: { fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 } }, 'Total Apartado'),
                 e('div', { style: { fontSize: 12, color: 'var(--text-primary)', fontWeight: 600, fontFamily: 'monospace' } }, fmtCOP(data.saldoBolsilloBruto || 0))
@@ -1934,8 +2053,8 @@ function CardResumen({ tarjeta, onDataChange }) {
                 e('div', { style: { fontSize: 12, color: 'var(--warning)', fontWeight: 600, fontFamily: 'monospace' } }, '-' + fmtCOP(data.saldoBolsilloAbonado || 0))
               )
             )
-          : e('div', { className: 'card-sub' }, 'Compras apartadas')
-      )
+          : e('div', { className: 'card-sub', style: { margin: 0 } }, 'Compras apartadas')
+      })
     ),
 
     // ──── Registrar Movimiento button ────
@@ -2015,6 +2134,11 @@ function CardResumen({ tarjeta, onDataChange }) {
               fmtCOP(valorMostrar),
               tieneParcial && e('div', { style: { fontSize: 11, color: 'var(--primary)' } }, 'Abonado: ' + fmtCOP(abonado) + ' | Resta: ' + fmtCOP(c.valor_cop - abonado))
             ),
+            e('td', { className: 'text-right text-mono', style: { color: '#4FC3F7', fontWeight: 600 } },
+              c.valor_usd && c.valor_usd > 0
+                ? 'USD $' + new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(c.valor_usd)
+                : e('span', { style: { color: 'var(--text-muted)' } }, '—')
+            ),
             aplicaIntl && e('td', { className: 'text-right text-mono', style: { fontSize: 12 } }, interesIntl > 0 ? fmtCOP(interesIntl) : e('span', { style: { color: 'var(--text-muted)' } }, '—')),
             aplicaIntl && e('td', { className: 'text-right text-mono', style: { fontWeight: interesIntl > 0 ? 600 : undefined } }, fmtCOP(interesIntl > 0 ? valorMostrar + interesIntl : valorMostrar)),
             e('td', null,
@@ -2048,9 +2172,10 @@ function CardResumen({ tarjeta, onDataChange }) {
               e('col', { style: { width: '95px' } }),
               e('col', { style: { width: '280px' } }),
               e('col', { style: { width: '160px' } }),
-              e('col', { style: { width: aplicaIntl ? '140px' : '390px' } }),
-              aplicaIntl && e('col', { style: { width: '110px' } }),
-              aplicaIntl && e('col', { style: { width: '140px' } }),
+              e('col', { style: { width: aplicaIntl ? '120px' : '270px' } }),
+              e('col', { style: { width: '110px' } }), // Valor USD
+              aplicaIntl && e('col', { style: { width: '100px' } }),
+              aplicaIntl && e('col', { style: { width: '130px' } }),
               e('col', { style: { width: '130px' } }),
               e('col', { style: { width: '90px' } })
             ),
@@ -2058,7 +2183,8 @@ function CardResumen({ tarjeta, onDataChange }) {
               e('th', null, 'Fecha'),
               e('th', null, 'Descripcion'),
               e('th', null, 'Responsable'),
-              e('th', { className: 'text-right' }, 'Valor'),
+              e('th', { className: 'text-right' }, 'Valor COP'),
+              e('th', { className: 'text-right', style: { whiteSpace: 'nowrap', color: '#4FC3F7' } }, 'Valor USD'),
               aplicaIntl && e('th', { className: 'text-right', style: { whiteSpace: 'nowrap' } }, 'Int Intl'),
               aplicaIntl && e('th', { className: 'text-right', style: { whiteSpace: 'nowrap' } }, 'Total'),
               e('th', null, 'Estado'),
@@ -2108,6 +2234,14 @@ function CardResumen({ tarjeta, onDataChange }) {
                       e('span', { style: { fontSize: 10, color: 'var(--text-muted)', marginLeft: 6 } }, item.partes.length + ' partes')
                     ),
                     e('td', { className: 'text-right text-mono', style: { fontWeight: 700, color: grupoPaidPast ? 'var(--success)' : undefined } }, fmtCOP(item.total)),
+                    (function() {
+                      const totalUsdGrupo = item.partes.reduce((s, p) => s + (p.valor_usd || 0), 0);
+                      return e('td', { className: 'text-right text-mono', style: { color: '#4FC3F7', fontWeight: 700 } },
+                        totalUsdGrupo > 0
+                          ? 'USD $' + new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(totalUsdGrupo)
+                          : e('span', { style: { color: 'var(--text-muted)' } }, '\u2014')
+                      );
+                    })(),
                     aplicaIntl && e('td', { className: 'text-right text-mono', style: { fontSize: 12 } }, grpInteres > 0 ? fmtCOP(grpInteres) : e('span', { style: { color: 'var(--text-muted)' } }, '\u2014')),
                     aplicaIntl && e('td', { className: 'text-right text-mono', style: { fontWeight: 700 } }, fmtCOP(grpInteres > 0 ? item.total + grpInteres : item.total)),
                     // Estado: cuando el grupo está pagado, el badge "Pagado" vive aquí (estilo unificado).
@@ -2159,6 +2293,11 @@ function CardResumen({ tarjeta, onDataChange }) {
                           e('span', { style: { color: 'var(--text-primary)' } }, c.persona_id ? c.persona_nombre : 'Personal'))
                       ),
                       e('td', { className: 'text-right text-mono', style: { fontSize: 13, color: childPaidPast ? 'var(--success)' : undefined } }, fmtCOP(childValor)),
+                      e('td', { className: 'text-right text-mono', style: { fontSize: 13, color: '#4FC3F7', fontWeight: 600 } },
+                        c.valor_usd && c.valor_usd > 0
+                          ? 'USD $' + new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(c.valor_usd)
+                          : e('span', { style: { color: 'var(--text-muted)' } }, '—')
+                      ),
                       aplicaIntl && e('td', { className: 'text-right text-mono', style: { fontSize: 12 } }, childIntl > 0 ? fmtCOP(childIntl) : e('span', { style: { color: 'var(--text-muted)' } }, '—')),
                       aplicaIntl && e('td', { className: 'text-right text-mono', style: { fontSize: 13, fontWeight: childIntl > 0 ? 600 : undefined } }, fmtCOP(childIntl > 0 ? childValor + childIntl : childValor)),
                       // Estado de la hija: cuando está pagado, el badge "Pagado" vive aquí.
@@ -2589,14 +2728,28 @@ function CardResumen({ tarjeta, onDataChange }) {
       var isAvance = !!bolsilloCompra._isAvance;
       var isDif = bolsilloCompra.estado === 'diferida';
       var isCuotaTarget = isDif || isAvance;
-      var target = bolsilloCompra._bolsilloTarget || (isCuotaTarget ? (bolsilloCompra.cuotaCorte || bolsilloCompra.valor_cop) : bolsilloCompra.valor_cop);
-      var mb = bolsilloCompra.monto_bolsillo || 0;
-      // Helper: construir body con cuota_num para diferidas y avances per-cuota
-      var mkBody = function(monto) { var b = { monto_bolsillo: monto }; if ((isDif || isAvance) && bolsilloCompra.cuota_num) b.cuota_num = bolsilloCompra.cuota_num; return b; };
+      // Detección de moneda: la compra es "USD pura" si valor_usd > 0 y valor_cop = 0/null.
+      // Para diferidas USD, el target USD se calcula prorrateando valor_usd / num_cuotas.
+      var esUsdBol = !!(bolsilloCompra.valor_usd && bolsilloCompra.valor_usd > 0 && !bolsilloCompra.valor_cop);
+      var fmtBol = (n) => esUsdBol
+        ? 'USD $' + new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n || 0)
+        : fmtCOP(n || 0);
+      var targetCop = bolsilloCompra._bolsilloTarget || (isCuotaTarget ? (bolsilloCompra.cuotaCorte || bolsilloCompra.valor_cop) : bolsilloCompra.valor_cop);
+      var targetUsd = isCuotaTarget && bolsilloCompra.cuotas_total
+        ? (bolsilloCompra.valor_usd || 0) / bolsilloCompra.cuotas_total
+        : (bolsilloCompra.valor_usd || 0);
+      var target = esUsdBol ? targetUsd : targetCop;
+      var mb = esUsdBol ? (bolsilloCompra.monto_bolsillo_usd || 0) : (bolsilloCompra.monto_bolsillo || 0);
+      // Helper: construir body con cuota_num y moneda
+      var mkBody = function(monto) {
+        var b = { monto_bolsillo: monto, moneda: esUsdBol ? 'USD' : 'COP' };
+        if ((isDif || isAvance) && bolsilloCompra.cuota_num) b.cuota_num = bolsilloCompra.cuota_num;
+        return b;
+      };
       var bState = isCuotaTarget
         ? (mb >= target ? 'bolsillo' : mb > 0 ? 'bolsillo_parcial' : 'pendiente')
         : bolsilloCompra.estado;
-      var modalTitle = bState === 'pendiente' ? 'Apartar en Bolsillo' : bState === 'bolsillo' ? 'Retirar de Bolsillo' : 'Gestionar Bolsillo';
+      var modalTitle = (bState === 'pendiente' ? 'Apartar en Bolsillo' : bState === 'bolsillo' ? 'Retirar de Bolsillo' : 'Gestionar Bolsillo') + (esUsdBol ? ' (USD)' : '');
       var endpoint = isAvance ? '/avances/' + bolsilloCompra.id + '/bolsillo' : bolsilloCompra._isDiferida ? '/diferidas/' + bolsilloCompra.id + '/bolsillo' : '/compras/' + bolsilloCompra.id + '/bolsillo';
       return e(Modal, { show: showBolsilloModal, onClose: () => setShowBolsilloModal(false), title: modalTitle },
         e('div', null,
@@ -2605,15 +2758,16 @@ function CardResumen({ tarjeta, onDataChange }) {
             isAvance && bolsilloCompra.cuota_num && e('div', { style: { fontSize: 12, color: 'var(--accent)', marginBottom: 4 } }, 'Cuota ' + bolsilloCompra.cuota_num + '/' + (bolsilloCompra.cuotas_total || '?')),
             isDif && bolsilloCompra.cuota_num && e('div', { style: { fontSize: 12, color: 'var(--accent)', marginBottom: 4 } }, 'Cuota ' + bolsilloCompra.cuota_num + '/' + bolsilloCompra.cuotas_total),
             isDif && bolsilloCompra.persona_id && e('div', { style: { fontSize: 12, color: 'var(--text-muted)', marginBottom: 4 } }, 'Parte de: ' + (bolsilloCompra.persona_nombre || 'Tercero')),
-            e('div', { style: { fontSize: 18, fontWeight: 700 } }, (isCuotaTarget ? 'Cuota: ' : 'Total: '), fmtCOP(target)),
-            isDif && target !== bolsilloCompra.valor_cop && e('div', { style: { fontSize: 11, color: 'var(--text-muted)', marginTop: 2 } }, 'Valor total compra: ' + fmtCOP(bolsilloCompra.valor_cop)),
-            mb > 0 && e('div', { style: { fontSize: 13, color: 'var(--success)', marginTop: 4 } }, 'Apartado actualmente: ', fmtCOP(mb))
+            e('div', { style: { fontSize: 18, fontWeight: 700, color: esUsdBol ? '#4FC3F7' : undefined } }, (isCuotaTarget ? 'Cuota: ' : 'Total: '), fmtBol(target)),
+            isDif && !esUsdBol && target !== bolsilloCompra.valor_cop && e('div', { style: { fontSize: 11, color: 'var(--text-muted)', marginTop: 2 } }, 'Valor total compra: ' + fmtCOP(bolsilloCompra.valor_cop)),
+            isDif && esUsdBol && e('div', { style: { fontSize: 11, color: 'var(--text-muted)', marginTop: 2 } }, 'Valor total compra: USD $' + new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(bolsilloCompra.valor_usd)),
+            mb > 0 && e('div', { style: { fontSize: 13, color: 'var(--success)', marginTop: 4 } }, 'Apartado actualmente: ', fmtBol(mb))
           ),
           bState === 'pendiente' && e('div', null,
             e('button', { type: 'button', className: 'btn btn-success', style: { width: '100%', marginBottom: 12, marginTop: 12 }, onClick: () => {
               api(endpoint, { method: 'PUT', body: mkBody(target) })
                 .then(() => { setShowBolsilloModal(false); refreshAll(); toast((isAvance ? 'Cuota' : 'Compra') + ' apartada en bolsillo'); });
-            } }, 'Apartar todo (' + fmtCOP(target) + ')'),
+            } }, 'Apartar todo (' + fmtBol(target) + ')'),
             e('div', { style: { textAlign: 'center', fontSize: 13, color: 'var(--text-muted)', marginBottom: 12 } }, 'o apartar un monto parcial:')
           ),
           bState === 'bolsillo' && e('div', { style: { marginTop: 12, marginBottom: 12, fontSize: 13, color: 'var(--text-secondary)' } },
@@ -2622,21 +2776,21 @@ function CardResumen({ tarjeta, onDataChange }) {
           bState === 'bolsillo_parcial' && e('button', { type: 'button', className: 'btn btn-success', style: { width: '100%', marginBottom: 8, marginTop: 12 }, onClick: () => {
               api(endpoint, { method: 'PUT', body: mkBody(target) })
                 .then(() => { setShowBolsilloModal(false); refreshAll(); toast('Apartado en bolsillo'); });
-            } }, 'Apartar restante (' + fmtCOP(target - mb) + ')'),
+            } }, 'Apartar restante (' + fmtBol(target - mb) + ')'),
           e('div', { className: 'form-group' },
-            e('label', { className: 'form-label' }, bState === 'bolsillo_parcial' ? 'Monto a agregar' : 'Monto apartado'),
-            e(MoneyInput, { value: bolsilloMonto, onChange: val => setBolsilloMonto(val), placeholder: 'Ej: 50.000' }),
+            e('label', { className: 'form-label' }, (bState === 'bolsillo_parcial' ? 'Monto a agregar' : 'Monto apartado') + (esUsdBol ? ' (USD)' : '')),
+            e(MoneyInput, { value: bolsilloMonto, onChange: val => setBolsilloMonto(val), placeholder: esUsdBol ? 'Ej: 50.00' : 'Ej: 50.000' }),
             (() => {
               var val = parseFloat(bolsilloMonto) || 0;
               if (!val) return null;
               if (bState === 'bolsillo_parcial') {
                 var totalR = mb + val;
                 return totalR >= target
-                  ? e('div', { className: 'form-hint', style: { color: 'var(--success)' } }, 'Total resultante: ' + fmtCOP(totalR) + ' — Cubre el total')
-                  : e('div', { className: 'form-hint', style: { color: 'var(--warning)' } }, 'Total resultante: ' + fmtCOP(totalR) + ' · Faltaria: ' + fmtCOP(target - totalR));
+                  ? e('div', { className: 'form-hint', style: { color: 'var(--success)' } }, 'Total resultante: ' + fmtBol(totalR) + ' — Cubre el total')
+                  : e('div', { className: 'form-hint', style: { color: 'var(--warning)' } }, 'Total resultante: ' + fmtBol(totalR) + ' · Faltaria: ' + fmtBol(target - totalR));
               }
               return val < target
-                ? e('div', { className: 'form-hint', style: { color: 'var(--warning)' } }, 'Faltaria: ' + fmtCOP(target - val))
+                ? e('div', { className: 'form-hint', style: { color: 'var(--warning)' } }, 'Faltaria: ' + fmtBol(target - val))
                 : e('div', { className: 'form-hint', style: { color: 'var(--success)' } }, 'Cubre el total — se marcara como Bolsillo completo');
             })()
           ),
@@ -3214,6 +3368,7 @@ function Pagos({ tarjeta, onDataChange }) {
   const [pagoMonto, setPagoMonto] = useState('');
   const [pagoFecha, setPagoFecha] = useState(todayISO());
   const [pagoTipo, setPagoTipo] = useState('pago_minimo');
+  const [pagoMoneda, setPagoMoneda] = useState('COP'); // 'COP' | 'USD'
 
   const loadExtractos = useCallback(() => { api('/extractos?tarjeta_id=' + tarjeta.id).then(setExtractos); }, [tarjeta.id]);
   const loadPagos = useCallback(() => { api('/pagos?tarjeta_id=' + tarjeta.id).then(setPagos); }, [tarjeta.id]);
@@ -3221,8 +3376,18 @@ function Pagos({ tarjeta, onDataChange }) {
 
   function openPagar(ext) {
     setPagoExtracto(ext);
-    var restante = Math.max(0, ext.pago_minimo - (ext.monto_pagado || 0));
-    setPagoMonto(restante);
+    // Si el ciclo es dual y la porción COP ya está pagada, arrancar con USD por default.
+    const monedaInicial = (ext.estado === 'pagado' && ext.dual_extracto && ext.estado_usd === 'pendiente' && ext.pago_minimo_usd > 0)
+      ? 'USD'
+      : 'COP';
+    setPagoMoneda(monedaInicial);
+    if (monedaInicial === 'USD') {
+      const restanteUsd = Math.max(0, (ext.pago_minimo_usd || 0) - (ext.monto_pagado_usd || 0));
+      setPagoMonto(restanteUsd);
+    } else {
+      const restante = Math.max(0, ext.pago_minimo - (ext.monto_pagado || 0));
+      setPagoMonto(restante);
+    }
     setPagoTipo('pago_restante');
     setPagoFecha(todayISO());
     setShowPagoModal(true);
@@ -3234,13 +3399,18 @@ function Pagos({ tarjeta, onDataChange }) {
     if (!monto || monto <= 0) { toast('Ingresa un monto valido'); return; }
     await api('/extractos/' + pagoExtracto.id + '/pagar', {
       method: 'PUT',
-      body: { monto_pagado: monto, fecha_pagado: pagoFecha, tipo: 'abono_extracto' }
+      body: { monto_pagado: monto, fecha_pagado: pagoFecha, tipo: 'abono_extracto', moneda: pagoMoneda }
     });
     setShowPagoModal(false);
     loadExtractos(); loadPagos();
     if (onDataChange) onDataChange();
-    var nuevoTotal = (pagoExtracto.monto_pagado || 0) + monto;
-    toast(nuevoTotal >= pagoExtracto.pago_minimo ? 'Pago minimo completado' : 'Abono registrado');
+    if (pagoMoneda === 'USD') {
+      var nuevoTotalUsd = (pagoExtracto.monto_pagado_usd || 0) + monto;
+      toast(nuevoTotalUsd >= (pagoExtracto.pago_minimo_usd || 0) ? 'Pago USD completado' : 'Abono USD registrado');
+    } else {
+      var nuevoTotal = (pagoExtracto.monto_pagado || 0) + monto;
+      toast(nuevoTotal >= pagoExtracto.pago_minimo ? 'Pago minimo COP completado' : 'Abono COP registrado');
+    }
   }
 
 
@@ -3261,10 +3431,17 @@ function Pagos({ tarjeta, onDataChange }) {
     const isExpanded = expandedExt === ext.id;
     const hasDetail = (ext.compras > 0 || (ext.detalle_avances && ext.detalle_avances.length > 0) || (ext.detalle_diferidas && ext.detalle_diferidas.length > 0));
     const rows = [];
+    // Soporte dual COP/USD: solo cuando la tarjeta es dual y el extracto tiene saldo USD.
+    const tieneUsd = !!(ext.dual_extracto && (ext.pago_minimo_usd || 0) > 0);
+    const usdPagado = ext.estado_usd === 'pagado';
+    const copPagado = ext.estado === 'pagado';
+    const cerradoCompleto = copPagado && (usdPagado || ext.estado_usd === 'no_aplica' || !tieneUsd);
+    const hayPendiente = !copPagado || (tieneUsd && !usdPagado);
+    const fmtUsd = (n) => 'USD $' + new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n || 0);
 
     rows.push(e('tr', {
       key: ext.id,
-      style: Object.assign({}, ext.estado === 'pagado' ? { background: 'rgba(52,211,153,0.08)' } : vencido ? { background: 'rgba(239,68,68,0.08)' } : {}, hasDetail ? { cursor: 'pointer' } : {}),
+      style: Object.assign({}, cerradoCompleto ? { background: 'rgba(52,211,153,0.08)' } : vencido ? { background: 'rgba(239,68,68,0.08)' } : {}, hasDetail ? { cursor: 'pointer' } : {}),
       onClick: hasDetail ? () => setExpandedExt(isExpanded ? null : ext.id) : undefined
     },
       e('td', { style: { fontWeight: 600 } }, hasDetail ? (isExpanded ? '\u25BC ' : '\u25B6 ') : '  ', fmtCiclo(ext.ciclo)),
@@ -3274,8 +3451,14 @@ function Pagos({ tarjeta, onDataChange }) {
         ext.es_fecha_pago_manual && e('span', { style: { fontSize: 9, marginLeft: 6, color: 'var(--accent)', fontWeight: 700, letterSpacing: 0.3 } }, '(MANUAL)'),
         vencido && e('span', { style: { color: 'var(--danger)', fontSize: 11, marginLeft: 6 } }, 'VENCIDO')
       ),
-      e('td', { className: 'text-right text-mono' }, fmtCOP(ext.pago_minimo)),
-      e('td', { className: 'text-right text-mono' }, fmtCOP(ext.pago_total)),
+      e('td', { className: 'text-right text-mono' },
+        fmtCOP(ext.pago_minimo),
+        tieneUsd && e('div', { style: { fontSize: 11, color: '#4FC3F7', fontWeight: 700 } }, fmtUsd(ext.pago_minimo_usd))
+      ),
+      e('td', { className: 'text-right text-mono' },
+        fmtCOP(ext.pago_total),
+        tieneUsd && e('div', { style: { fontSize: 11, color: '#4FC3F7', fontWeight: 700 } }, fmtUsd(ext.pago_total_usd || ext.pago_minimo_usd))
+      ),
       e('td', { className: 'text-right text-mono', style: { fontSize: 12, color: ext.intereses_intl > 0 ? '#14b8a6' : 'var(--text-muted)', fontWeight: ext.intereses_intl > 0 ? 600 : 400 } },
         ext.intereses_intl > 0 ? fmtCOP(ext.intereses_intl) : '\u2014'
       ),
@@ -3284,21 +3467,39 @@ function Pagos({ tarjeta, onDataChange }) {
           ext.estado === 'pendiente' && ext.monto_pagado < ext.pago_minimo
             ? e('div', { style: { fontSize: 10, color: 'var(--text-muted)', fontWeight: 400 } }, 'Falta: ' + fmtCOP(ext.pago_minimo - ext.monto_pagado))
             : null
-        ) : '-'
+        ) : '-',
+        tieneUsd && (ext.monto_pagado_usd || 0) > 0 && e('div', { style: { fontSize: 11, color: '#4FC3F7', fontWeight: 700 } }, fmtUsd(ext.monto_pagado_usd))
       ),
       e('td', null,
-        ext.estado === 'pagado'
-          ? e('span', { className: 'badge badge-pagado' }, 'PAGADO')
-          : ext.monto_pagado > 0 && ext.monto_pagado < ext.pago_minimo
-            ? e('span', { className: 'badge', style: { background: 'rgba(251,191,36,0.15)', color: 'var(--warning)' } }, 'ABONADO')
-            : vencido
-              ? e('span', { className: 'badge badge-vencido' }, 'VENCIDO')
-              : e('span', { className: 'badge badge-pendiente' }, 'PENDIENTE')
+        // Para tarjetas duales con USD: dos badges apilados (COP + USD).
+        tieneUsd
+          ? e('div', { style: { display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-start' } },
+              copPagado
+                ? e('span', { className: 'badge badge-pagado', style: { fontSize: 10 } }, 'COP PAGADO')
+                : ext.monto_pagado > 0 && ext.monto_pagado < ext.pago_minimo
+                  ? e('span', { className: 'badge', style: { background: 'rgba(251,191,36,0.15)', color: 'var(--warning)', fontSize: 10 } }, 'COP ABONADO')
+                  : vencido
+                    ? e('span', { className: 'badge badge-vencido', style: { fontSize: 10 } }, 'COP VENCIDO')
+                    : e('span', { className: 'badge badge-pendiente', style: { fontSize: 10 } }, 'COP PENDIENTE'),
+              usdPagado
+                ? e('span', { className: 'badge badge-pagado', style: { fontSize: 10, background: 'rgba(79,195,247,0.15)', color: '#4FC3F7' } }, 'USD PAGADO')
+                : (ext.monto_pagado_usd || 0) > 0 && (ext.monto_pagado_usd || 0) < (ext.pago_minimo_usd || 0)
+                  ? e('span', { className: 'badge', style: { background: 'rgba(251,191,36,0.15)', color: 'var(--warning)', fontSize: 10 } }, 'USD ABONADO')
+                  : e('span', { className: 'badge badge-pendiente', style: { fontSize: 10 } }, 'USD PENDIENTE')
+            )
+          // Tarjetas no-duales o ciclos sin USD: badge \u00FAnico como antes.
+          : copPagado
+            ? e('span', { className: 'badge badge-pagado' }, 'PAGADO')
+            : ext.monto_pagado > 0 && ext.monto_pagado < ext.pago_minimo
+              ? e('span', { className: 'badge', style: { background: 'rgba(251,191,36,0.15)', color: 'var(--warning)' } }, 'ABONADO')
+              : vencido
+                ? e('span', { className: 'badge badge-vencido' }, 'VENCIDO')
+                : e('span', { className: 'badge badge-pendiente' }, 'PENDIENTE')
       ),
       e('td', { onClick: ev => ev.stopPropagation() },
-        ext.estado === 'pendiente'
+        hayPendiente
           ? e('button', { className: 'btn btn-sm btn-success', onClick: () => openPagar(ext) }, e(Ico, { name: 'dollar', size: 14 }),
-              ext.monto_pagado > 0 ? ' Abonar' : ' Pagar')
+              ext.monto_pagado > 0 || (ext.monto_pagado_usd || 0) > 0 ? ' Abonar' : ' Pagar')
           : null
       )
     ));
@@ -3672,21 +3873,66 @@ function Pagos({ tarjeta, onDataChange }) {
     // Modal de pago
     e(Modal, { show: showPagoModal, onClose: () => setShowPagoModal(false), title: 'Registrar Pago - ' + (pagoExtracto ? fmtCiclo(pagoExtracto.ciclo) : '') },
       pagoExtracto && (function() {
-        var yaPagado = pagoExtracto.monto_pagado || 0;
-        var restante = Math.max(0, pagoExtracto.pago_minimo - yaPagado);
-        var porcentaje = pagoExtracto.pago_minimo > 0 ? Math.min(100, Math.round(yaPagado / pagoExtracto.pago_minimo * 100)) : 0;
+        // Helper de formato según la moneda seleccionada.
+        var esUsd = pagoMoneda === 'USD';
+        var fmtMon = (n) => esUsd
+          ? 'USD $' + new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n || 0)
+          : fmtCOP(n || 0);
+        var pagoMinimoActual = esUsd ? (pagoExtracto.pago_minimo_usd || 0) : pagoExtracto.pago_minimo;
+        var pagoTotalActual  = esUsd ? (pagoExtracto.pago_total_usd  || pagoExtracto.pago_minimo_usd || 0) : pagoExtracto.pago_total;
+        var yaPagado = esUsd ? (pagoExtracto.monto_pagado_usd || 0) : (pagoExtracto.monto_pagado || 0);
+        var restante = Math.max(0, pagoMinimoActual - yaPagado);
+        var porcentaje = pagoMinimoActual > 0 ? Math.min(100, Math.round(yaPagado / pagoMinimoActual * 100)) : 0;
+        var muestraSelector = pagoExtracto.dual_extracto && (pagoExtracto.pago_minimo_usd || 0) > 0;
+        var copYaPagado = pagoExtracto.estado === 'pagado';
+        var usdYaPagado = pagoExtracto.estado_usd === 'pagado';
+        // Helper para renderizar un tab. activo=true marca color y borde inferior.
+        // saldado=true muestra etiqueta y deshabilita.
+        function tabBtn(label, moneda, activo, saldado) {
+          const color = moneda === 'USD' ? '#4FC3F7' : 'var(--accent)';
+          return e('button', {
+            type: 'button',
+            disabled: saldado,
+            onClick: () => {
+              if (saldado) return;
+              setPagoMoneda(moneda);
+              if (moneda === 'USD') {
+                setPagoMonto(Math.max(0, (pagoExtracto.pago_minimo_usd || 0) - (pagoExtracto.monto_pagado_usd || 0)));
+              } else {
+                setPagoMonto(Math.max(0, pagoExtracto.pago_minimo - (pagoExtracto.monto_pagado || 0)));
+              }
+              setPagoTipo('pago_restante');
+            },
+            style: {
+              flex: 1, padding: '12px 16px', background: activo ? 'rgba(255,255,255,0.04)' : 'transparent',
+              border: 'none', borderBottom: activo ? '2px solid ' + color : '2px solid transparent',
+              color: activo ? color : (saldado ? 'var(--text-muted)' : 'var(--text-secondary)'),
+              fontSize: 13, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase',
+              cursor: saldado ? 'not-allowed' : 'pointer', opacity: saldado ? 0.55 : 1,
+              transition: 'all 0.15s', position: 'relative'
+            }
+          },
+            label,
+            saldado && e('span', { style: { display: 'block', fontSize: 9, marginTop: 2, color: 'var(--success)', fontWeight: 700, letterSpacing: 0.6 } }, 'SALDADO')
+          );
+        }
         return e('form', { onSubmit: submitPago },
+          // Tabs (solo para tarjetas duales con saldo USD)
+          muestraSelector && e('div', { style: { display: 'flex', marginBottom: 16, borderBottom: '1px solid var(--border)' } },
+            tabBtn('Pago COP', 'COP', pagoMoneda === 'COP', copYaPagado),
+            tabBtn('Pago USD', 'USD', pagoMoneda === 'USD', usdYaPagado)
+          ),
           e('div', { className: 'summary-box', style: { marginBottom: 16 } },
-            e('div', { className: 'summary-row' }, e('span', { className: 'summary-label' }, 'Pago Minimo'), e('span', { className: 'summary-value' }, fmtCOP(pagoExtracto.pago_minimo))),
-            e('div', { className: 'summary-row' }, e('span', { className: 'summary-label' }, 'Pago Total'), e('span', { className: 'summary-value' }, fmtCOP(pagoExtracto.pago_total))),
-            pagoExtracto.intereses_intl > 0 && e('div', { className: 'summary-row' },
+            e('div', { className: 'summary-row' }, e('span', { className: 'summary-label' }, 'Pago Minimo' + (esUsd ? ' USD' : '')), e('span', { className: 'summary-value' + (esUsd ? '' : ''), style: esUsd ? { color: '#4FC3F7' } : {} }, fmtMon(pagoMinimoActual))),
+            e('div', { className: 'summary-row' }, e('span', { className: 'summary-label' }, 'Pago Total' + (esUsd ? ' USD' : '')), e('span', { className: 'summary-value', style: esUsd ? { color: '#4FC3F7' } : {} }, fmtMon(pagoTotalActual))),
+            !esUsd && pagoExtracto.intereses_intl > 0 && e('div', { className: 'summary-row' },
               e('span', { className: 'summary-label', style: { color: '#14b8a6' } }, 'Intereses Internacionales (incluidos)'),
               e('span', { className: 'summary-value', style: { color: '#14b8a6', fontWeight: 600 } }, fmtCOP(pagoExtracto.intereses_intl))
             ),
             e('div', { className: 'summary-row' }, e('span', { className: 'summary-label' }, 'Fecha Limite'), e('span', { className: 'summary-value' }, fmtDate(pagoExtracto.fecha_pago), pagoExtracto.es_fecha_pago_manual && e('span', { style: { fontSize: 9, marginLeft: 6, color: 'var(--accent)', fontWeight: 700, letterSpacing: 0.3 } }, '(MANUAL)'))),
             yaPagado > 0 && e('div', { style: { marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--border)' } },
-              e('div', { className: 'summary-row' }, e('span', { className: 'summary-label', style: { color: 'var(--success)' } }, 'Ya Abonado'), e('span', { className: 'summary-value', style: { color: 'var(--success)' } }, fmtCOP(yaPagado))),
-              e('div', { className: 'summary-row' }, e('span', { className: 'summary-label', style: { color: 'var(--warning)' } }, 'Restante'), e('span', { className: 'summary-value', style: { color: 'var(--warning)', fontWeight: 700 } }, fmtCOP(restante))),
+              e('div', { className: 'summary-row' }, e('span', { className: 'summary-label', style: { color: 'var(--success)' } }, 'Ya Abonado'), e('span', { className: 'summary-value', style: { color: 'var(--success)' } }, fmtMon(yaPagado))),
+              e('div', { className: 'summary-row' }, e('span', { className: 'summary-label', style: { color: 'var(--warning)' } }, 'Restante'), e('span', { className: 'summary-value', style: { color: 'var(--warning)', fontWeight: 700 } }, fmtMon(restante))),
               e('div', { style: { marginTop: 8, background: 'var(--bg-secondary)', borderRadius: 6, height: 8, overflow: 'hidden' } },
                 e('div', { style: { width: porcentaje + '%', height: '100%', background: 'var(--success)', borderRadius: 6, transition: 'width 0.3s' } })
               ),
@@ -3698,17 +3944,17 @@ function Pagos({ tarjeta, onDataChange }) {
             e('select', { className: 'form-select', value: pagoTipo, onChange: ev => {
               setPagoTipo(ev.target.value);
               if (ev.target.value === 'pago_restante') setPagoMonto(restante);
-              else if (ev.target.value === 'pago_total') setPagoMonto(Math.max(0, pagoExtracto.pago_total - yaPagado));
+              else if (ev.target.value === 'pago_total') setPagoMonto(Math.max(0, pagoTotalActual - yaPagado));
               else setPagoMonto('');
             }},
-              e('option', { value: 'pago_restante' }, restante < pagoExtracto.pago_minimo ? 'Pagar Restante (' + fmtCOP(restante) + ')' : 'Pago Minimo'),
+              e('option', { value: 'pago_restante' }, restante < pagoMinimoActual ? 'Pagar Restante (' + fmtMon(restante) + ')' : 'Pago Minimo'),
               e('option', { value: 'pago_total' }, 'Pago Total'),
               e('option', { value: 'otro' }, 'Otro Valor (Abono Parcial)')
             )
           ),
           e('div', { className: 'form-row' },
             e('div', { className: 'form-group' },
-              e('label', { className: 'form-label' }, 'Monto a Pagar'),
+              e('label', { className: 'form-label' }, 'Monto a Pagar' + (esUsd ? ' (USD)' : '')),
               e(MoneyInput, { value: pagoMonto, onChange: val => setPagoMonto(val), required: true })
             ),
             e('div', { className: 'form-group' },
@@ -3719,7 +3965,7 @@ function Pagos({ tarjeta, onDataChange }) {
           e('div', { className: 'modal-actions' },
             e('button', { type: 'button', className: 'btn', onClick: () => setShowPagoModal(false) }, 'Cancelar'),
             e('button', { type: 'submit', className: 'btn btn-primary' },
-              parseFloat(pagoMonto) >= restante ? 'Completar Pago' : 'Registrar Abono')
+              (parseFloat(pagoMonto) >= restante ? 'Completar Pago ' : 'Registrar Abono ') + (esUsd ? 'USD' : 'COP'))
           )
         );
       })()
@@ -4466,38 +4712,45 @@ function Terceros({ tarjeta }) {
   const grouped = {};
   compras.forEach(c => {
     const key = c.persona_id;
-    if (!grouped[key]) grouped[key] = { nombre: c.persona_nombre, color: c.persona_color, compras: [], totalPendiente: 0, totalRecibido: 0 };
+    if (!grouped[key]) grouped[key] = { nombre: c.persona_nombre, color: c.persona_color, compras: [], totalPendiente: 0, totalPendienteUsd: 0, totalRecibido: 0, totalRecibidoUsd: 0 };
     grouped[key].compras.push(c);
     if (c.tercero_pagado) {
       grouped[key].totalRecibido += c.valor_cop;
+      if (c.valor_usd && c.valor_usd > 0) grouped[key].totalRecibidoUsd += c.valor_usd;
     } else if (c.es_diferida) {
-      // valor_pendiente ya excluye cuotas cubiertas por bolsillo (calculado en backend)
       const cubiertas = (c.cuotas || []).filter(q => q.cubierta_bolsillo).reduce((s, q) => s + q.total, 0);
       grouped[key].totalPendiente += c.valor_pendiente || 0;
+      grouped[key].totalPendienteUsd += c.valor_usd_pendiente || 0;
       grouped[key].totalRecibido += cubiertas;
     } else {
       const bol = c.monto_bolsillo || 0;
       const intl = calcInteresIntlTercero(c);
       grouped[key].totalPendiente += c.valor_cop - bol + intl;
       grouped[key].totalRecibido += bol;
+      if (c.valor_usd && c.valor_usd > 0) grouped[key].totalPendienteUsd += c.valor_usd;
     }
   });
   const personas = Object.values(grouped);
   const totalPendiente = compras.filter(c => !c.tercero_pagado).reduce((s, c) => s + (c.es_diferida ? (c.valor_pendiente || 0) : c.valor_cop - (c.monto_bolsillo || 0) + calcInteresIntlTercero(c)), 0);
+  const totalPendienteUsd = compras.filter(c => !c.tercero_pagado).reduce((s, c) => s + (c.es_diferida ? (c.valor_usd_pendiente || 0) : (c.valor_usd || 0)), 0);
   const totalRecibido = compras.reduce((s, c) => {
     if (c.tercero_pagado) return s + c.valor_cop;
     if (c.es_diferida) return s + (c.cuotas || []).filter(q => q.cubierta_bolsillo).reduce((a, q) => a + q.total, 0);
     return s + (c.monto_bolsillo || 0);
   }, 0);
+  const fmtUsd = (n) => 'USD $' + new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n || 0);
 
   return e('div', null,
     // Summary cards
     e('div', { className: 'cards-row' },
-      e('div', { className: 'card card-warning' },
-        e('div', { className: 'card-label' }, 'Me Deben'),
-        e('div', { className: 'card-value' }, fmtCOP(totalPendiente)),
-        e('div', { className: 'card-sub' }, compras.filter(c => !c.tercero_pagado).length + ' compras pendientes')
-      )
+      bimonCard({
+        variant: 'warning',
+        title: 'Me Deben',
+        copValue: fmtCOP(totalPendiente),
+        usdValue: fmtUsd(totalPendienteUsd),
+        hasUsd: totalPendienteUsd > 0,
+        footerSub: compras.filter(c => !c.tercero_pagado).length + ' compras pendientes'
+      })
     ),
 
     personas.length === 0
@@ -4530,19 +4783,21 @@ function Terceros({ tarjeta }) {
               e('div', { className: 'persona-name' }, e('span', { className: 'persona-dot', style: { background: p.color } }), p.nombre),
               e('div', { style: { display: 'flex', gap: 8, alignItems: 'center' } },
                 e('span', { style: { fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 1, marginRight: 4 } }, 'Total deudor'),
-                p.totalPendiente > 0 && e('div', { style: {
+                (p.totalPendiente > 0 || (p.totalPendienteUsd || 0) > 0) && e('div', { style: {
                   background: 'rgba(251,191,36,0.10)', border: '1px solid rgba(251,191,36,0.25)',
                   borderRadius: 8, padding: '4px 12px', display: 'flex', flexDirection: 'column', alignItems: 'flex-end'
                 } },
                   e('span', { style: { fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 1 } }, 'Pendiente'),
-                  e('span', { style: { fontSize: 14, fontWeight: 700, color: 'var(--warning)', fontFamily: 'monospace' } }, fmtCOP(p.totalPendiente))
+                  e('span', { style: { fontSize: 14, fontWeight: 700, color: 'var(--warning)', fontFamily: 'monospace' } }, fmtCOP(p.totalPendiente)),
+                  (p.totalPendienteUsd || 0) > 0 && e('span', { style: { fontSize: 12, fontWeight: 700, color: '#4FC3F7', fontFamily: 'monospace' } }, fmtUsd(p.totalPendienteUsd))
                 ),
-                p.totalRecibido > 0 && e('div', { style: {
+                (p.totalRecibido > 0 || (p.totalRecibidoUsd || 0) > 0) && e('div', { style: {
                   background: 'rgba(52,211,153,0.10)', border: '1px solid rgba(52,211,153,0.25)',
                   borderRadius: 8, padding: '4px 12px', display: 'flex', flexDirection: 'column', alignItems: 'flex-end'
                 } },
                   e('span', { style: { fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 1 } }, 'Recibido'),
-                  e('span', { style: { fontSize: 14, fontWeight: 700, color: 'var(--success)', fontFamily: 'monospace' } }, fmtCOP(p.totalRecibido))
+                  e('span', { style: { fontSize: 14, fontWeight: 700, color: 'var(--success)', fontFamily: 'monospace' } }, fmtCOP(p.totalRecibido)),
+                  (p.totalRecibidoUsd || 0) > 0 && e('span', { style: { fontSize: 12, fontWeight: 700, color: '#4FC3F7', fontFamily: 'monospace' } }, fmtUsd(p.totalRecibidoUsd))
                 )
               )
             ),
@@ -4567,7 +4822,9 @@ function Terceros({ tarjeta }) {
                   ),
                   e('table', null,
                     e('thead', null, e('tr', null,
-                      e('th', null, 'Fecha'), e('th', null, 'Descripcion'), e('th', { className: 'text-right' }, 'Valor'),
+                      e('th', null, 'Fecha'), e('th', null, 'Descripcion'),
+                      e('th', { className: 'text-right' }, 'Valor COP'),
+                      e('th', { className: 'text-right', style: { whiteSpace: 'nowrap', color: '#4FC3F7' } }, 'Valor USD'),
                       aplicaIntl && e('th', { className: 'text-right', style: { whiteSpace: 'nowrap' } }, 'Int Intl'),
                       aplicaIntl && e('th', { className: 'text-right', style: { whiteSpace: 'nowrap' } }, 'Total'),
                       e('th', null, 'Estado TC'), e('th', null, 'Dinero'), e('th', null, '')
@@ -4587,6 +4844,11 @@ function Terceros({ tarjeta }) {
                               e('span', { style: { fontSize: 10, color: 'var(--accent)', marginLeft: 6 } }, 'Cuota ' + q.num + '/' + c.cuotas.length)
                             ),
                             e('td', { className: 'text-right text-mono', style: { fontWeight: 600, color: hecha ? 'var(--success)' : undefined } }, fmtCOP(q.total)),
+                            e('td', { className: 'text-right text-mono', style: { color: '#4FC3F7', fontWeight: 600 } },
+                              c.valor_usd && c.valor_usd > 0
+                                ? 'USD $' + new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(c.valor_usd / c.cuotas.length)
+                                : e('span', { style: { color: 'var(--text-muted)' } }, '—')
+                            ),
                             aplicaIntl && e('td', null),
                             aplicaIntl && e('td', null),
                             e('td', null, e('span', { className: 'badge badge-' + c.estado }, c.estado.replace(/_/g, ' '))),
@@ -4618,6 +4880,11 @@ function Terceros({ tarjeta }) {
                           e('td', null, fmtDate(c.fecha)),
                           e('td', { style: { fontWeight: 600 } }, c.descripcion),
                           e('td', { className: 'text-right text-mono', style: { fontWeight: 600, color: (c.tercero_pagado || bolCubre) ? 'var(--success)' : undefined } }, fmtCOP(c.valor_cop)),
+                          e('td', { className: 'text-right text-mono', style: { color: '#4FC3F7', fontWeight: 600 } },
+                            c.valor_usd && c.valor_usd > 0
+                              ? 'USD $' + new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(c.valor_usd)
+                              : e('span', { style: { color: 'var(--text-muted)' } }, '—')
+                          ),
                           aplicaIntl && e('td', { className: 'text-right text-mono', style: { fontSize: 12 } }, intlTercero > 0 ? fmtCOP(intlTercero) : e('span', { style: { color: 'var(--text-muted)' } }, '—')),
                           aplicaIntl && e('td', { className: 'text-right text-mono', style: { fontWeight: intlTercero > 0 ? 600 : undefined } }, fmtCOP(intlTercero > 0 ? c.valor_cop + intlTercero : c.valor_cop)),
                           e('td', null, e('span', { className: 'badge badge-' + c.estado }, c.estado.replace(/_/g, ' '))),

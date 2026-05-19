@@ -264,17 +264,22 @@ module.exports = function(db, { logAction, tjNombre }) {
         ext.dual_extracto = calc.dualExtracto || false;
         ext.compras_usd = calc.comprasUsd || 0;
         ext.intereses_compras_usd = calc.interesesComprasUsd || 0;
-        ext.pago_minimo_usd = calc.pagoMinimoUsd || 0;
         ext.detalle_compras_usd = calc.detalleComprasUsd || [];
         if (ext.estado === 'pendiente') {
           ext.pago_minimo = calc.pagoMinimo;
           ext.pago_total = calc.pagoTotal;
           ext.intereses_intl = calc.interesesComprasIntl || 0;
-          db.prepare('UPDATE extractos SET pago_minimo=?, pago_total=?, fecha_corte=?, fecha_pago=?, intereses_intl=? WHERE id=?')
-            .run(calc.pagoMinimo, calc.pagoTotal, calc.fechaCorte, calc.fechaPago, calc.interesesComprasIntl || 0, ext.id);
+          ext.pago_minimo_usd = calc.pagoMinimoUsd || 0;
+          db.prepare('UPDATE extractos SET pago_minimo=?, pago_total=?, fecha_corte=?, fecha_pago=?, intereses_intl=?, pago_minimo_usd=? WHERE id=?')
+            .run(calc.pagoMinimo, calc.pagoTotal, calc.fechaCorte, calc.fechaPago, calc.interesesComprasIntl || 0, calc.pagoMinimoUsd || 0, ext.id);
         }
-        // Para extractos PAGADOS conservamos el intereses_intl que se persistió al cerrar.
-        // Ya viene desde el SELECT inicial y NO se sobreescribe acá.
+        // Para extractos PAGADOS conservamos intereses_intl y pago_minimo_usd que
+        // se persistieron al cerrar. Ya vienen desde el SELECT inicial y NO se
+        // sobreescriben acá.
+
+        // Campo derivado: el ciclo está completamente cerrado cuando ambas porciones
+        // (COP y USD) están al día (o USD es 'no_aplica' para tarjetas no-duales).
+        ext.cerrado_completo = ext.estado === 'pagado' && (ext.estado_usd === 'pagado' || ext.estado_usd === 'no_aplica');
       }
     });
 
@@ -289,38 +294,69 @@ module.exports = function(db, { logAction, tjNombre }) {
   });
 
   router.put('/:id/pagar', (req, res) => {
-    const { monto_pagado, fecha_pagado, tipo } = req.body;
+    const { monto_pagado, fecha_pagado, tipo, moneda } = req.body;
     const ext = db.prepare('SELECT * FROM extractos WHERE id=?').get(req.params.id);
     if (!ext) return res.status(404).json({ error: 'Extracto no encontrado' });
 
-    const montoAbono = parseFloat(monto_pagado) || ext.pago_minimo;
+    const monedaPago = (moneda === 'USD') ? 'USD' : 'COP';
     const fechaPagado = fecha_pagado || hoyLocal();
     const tipoPago = tipo || 'abono_extracto';
-    const nuevoMontoPagado = (ext.monto_pagado || 0) + montoAbono;
-    const pagadoCompleto = nuevoMontoPagado >= ext.pago_minimo;
 
-    if (pagadoCompleto) {
-      // Congelar intereses_intl al cerrar el extracto: usamos el valor calculado
-      // sobre el estado actual de las compras del ciclo. Una vez pagado, el GET
-      // ya no recalcula y este valor queda persistente en el historial.
-      const calcCierre = calcExtracto(ext.tarjeta_id, ext.ciclo, false);
-      const interesesIntlFinal = calcCierre ? (calcCierre.interesesComprasIntl || 0) : (ext.intereses_intl || 0);
-      db.prepare("UPDATE extractos SET estado='pagado', monto_pagado=?, fecha_pagado=?, intereses_intl=? WHERE id=?")
-        .run(nuevoMontoPagado, fechaPagado, interesesIntlFinal, req.params.id);
-      db.prepare("UPDATE compras SET estado='pagado', monto_abonado=valor_cop WHERE tarjeta_id=? AND ciclo=? AND estado NOT IN ('pagado','diferida')")
-        .run(ext.tarjeta_id, ext.ciclo);
-    } else {
-      db.prepare("UPDATE extractos SET monto_pagado=?, fecha_pagado=? WHERE id=?")
-        .run(nuevoMontoPagado, fechaPagado, req.params.id);
+    if (monedaPago === 'COP') {
+      const montoAbono = parseFloat(monto_pagado) || ext.pago_minimo;
+      const nuevoMontoPagado = (ext.monto_pagado || 0) + montoAbono;
+      const pagadoCompleto = nuevoMontoPagado >= ext.pago_minimo;
+
+      if (pagadoCompleto) {
+        const calcCierre = calcExtracto(ext.tarjeta_id, ext.ciclo, false);
+        const interesesIntlFinal = calcCierre ? (calcCierre.interesesComprasIntl || 0) : (ext.intereses_intl || 0);
+        db.prepare("UPDATE extractos SET estado='pagado', monto_pagado=?, fecha_pagado=?, intereses_intl=? WHERE id=?")
+          .run(nuevoMontoPagado, fechaPagado, interesesIntlFinal, req.params.id);
+        // Solo marca como pagadas las compras COP del ciclo (sin USD). Las compras
+        // USD se marcan cuando se cierre la porción USD.
+        db.prepare(`UPDATE compras SET estado='pagado', monto_abonado=valor_cop
+          WHERE tarjeta_id=? AND ciclo=? AND estado NOT IN ('pagado','diferida')
+            AND (valor_usd IS NULL OR valor_usd = 0)`)
+          .run(ext.tarjeta_id, ext.ciclo);
+      } else {
+        db.prepare("UPDATE extractos SET monto_pagado=?, fecha_pagado=? WHERE id=?")
+          .run(nuevoMontoPagado, fechaPagado, req.params.id);
+      }
+
+      db.prepare("INSERT INTO pagos (tarjeta_id, fecha, monto, tipo, ciclo, notas, moneda) VALUES (?,?,?,?,?,?,'COP')")
+        .run(ext.tarjeta_id, fechaPagado, montoAbono, tipoPago, ext.ciclo,
+          (pagadoCompleto ? 'Pago completo extracto COP ' : 'Abono a extracto COP ') + ext.ciclo);
+
+      const fmt = new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',maximumFractionDigits:0}).format(montoAbono);
+      logAction('pago', tjNombre(ext.tarjeta_id) + (pagadoCompleto ? 'Extracto pagado COP: ' : 'Abono a extracto COP: ') + ext.ciclo + ' por ' + fmt);
+      return res.json({ ok: true, pagadoCompleto, nuevoMontoPagado, moneda: 'COP' });
     }
 
-    db.prepare('INSERT INTO pagos (tarjeta_id, fecha, monto, tipo, ciclo, notas) VALUES (?,?,?,?,?,?)')
-      .run(ext.tarjeta_id, fechaPagado, montoAbono, tipoPago, ext.ciclo,
-        (pagadoCompleto ? 'Pago completo extracto ' : 'Abono a extracto ') + ext.ciclo);
+    // moneda === 'USD'
+    const montoAbonoUsd = parseFloat(monto_pagado) || ext.pago_minimo_usd || 0;
+    const nuevoMontoPagadoUsd = (ext.monto_pagado_usd || 0) + montoAbonoUsd;
+    const pagadoCompletoUsd = nuevoMontoPagadoUsd >= (ext.pago_minimo_usd || 0);
 
-    const fmt = new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',maximumFractionDigits:0}).format(montoAbono);
-    logAction('pago', tjNombre(ext.tarjeta_id) + (pagadoCompleto ? 'Extracto pagado: ' : 'Abono a extracto: ') + ext.ciclo + ' por ' + fmt);
-    res.json({ ok: true, pagadoCompleto, nuevoMontoPagado });
+    if (pagadoCompletoUsd) {
+      db.prepare("UPDATE extractos SET estado_usd='pagado', monto_pagado_usd=?, fecha_pagado_usd=? WHERE id=?")
+        .run(nuevoMontoPagadoUsd, fechaPagado, req.params.id);
+      // Solo marca como pagadas las compras USD del ciclo.
+      db.prepare(`UPDATE compras SET estado='pagado', monto_abonado=valor_cop
+        WHERE tarjeta_id=? AND ciclo=? AND estado NOT IN ('pagado','diferida')
+          AND valor_usd IS NOT NULL AND valor_usd > 0`)
+        .run(ext.tarjeta_id, ext.ciclo);
+    } else {
+      db.prepare("UPDATE extractos SET monto_pagado_usd=?, fecha_pagado_usd=? WHERE id=?")
+        .run(nuevoMontoPagadoUsd, fechaPagado, req.params.id);
+    }
+
+    db.prepare("INSERT INTO pagos (tarjeta_id, fecha, monto, tipo, ciclo, notas, moneda) VALUES (?,?,?,?,?,?,'USD')")
+      .run(ext.tarjeta_id, fechaPagado, montoAbonoUsd, tipoPago, ext.ciclo,
+        (pagadoCompletoUsd ? 'Pago completo extracto USD ' : 'Abono a extracto USD ') + ext.ciclo);
+
+    const fmtUsd = 'USD $' + new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(montoAbonoUsd);
+    logAction('pago', tjNombre(ext.tarjeta_id) + (pagadoCompletoUsd ? 'Extracto pagado USD: ' : 'Abono a extracto USD: ') + ext.ciclo + ' por ' + fmtUsd);
+    return res.json({ ok: true, pagadoCompleto: pagadoCompletoUsd, nuevoMontoPagado: nuevoMontoPagadoUsd, moneda: 'USD' });
   });
 
   // ── Override manual de fecha de pago por ciclo ──────────────────────

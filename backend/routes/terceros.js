@@ -9,7 +9,7 @@ module.exports = function(db, { logAction, tjNombre }) {
 
   router.get('/', (req, res) => {
     const { tarjeta_id } = req.query;
-    let sql = `SELECT c.id, c.fecha, c.descripcion, c.valor_cop, c.estado, c.ciclo, c.tercero_pagado,
+    let sql = `SELECT c.id, c.fecha, c.descripcion, c.valor_cop, c.valor_usd, c.estado, c.ciclo, c.tercero_pagado,
                COALESCE(c.tercero_monto_abonado, 0) as tercero_monto_abonado,
                COALESCE(c.monto_bolsillo, 0) as monto_bolsillo,
                COALESCE(c.es_internacional, 0) as es_internacional,
@@ -50,7 +50,12 @@ module.exports = function(db, { logAction, tjNombre }) {
         cubierta_bolsillo: (bolMap[q.num] || 0) >= q.total
       }));
       const pendiente = cuotas.filter(q => !q.pagada && !q.cubierta_bolsillo).reduce((s, q) => s + q.total, 0);
-      return { ...c, es_diferida: true, cuotas, valor_pendiente: Math.round(pendiente) };
+      // USD: prorrateo del valor_usd entre cuotas pendientes (mismo plazo que COP)
+      const pendientesCount = cuotas.filter(q => !q.pagada && !q.cubierta_bolsillo).length;
+      const valor_usd_pendiente = (c.valor_usd && c.valor_usd > 0)
+        ? Math.round((c.valor_usd / dif.num_cuotas) * pendientesCount * 100) / 100
+        : 0;
+      return { ...c, es_diferida: true, cuotas, valor_pendiente: Math.round(pendiente), valor_usd_pendiente };
     });
 
     res.json(result);

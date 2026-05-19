@@ -169,33 +169,48 @@ module.exports = function(db, { logAction, tjNombre }) {
   });
 
   router.put('/:id/bolsillo', (req, res) => {
-    const { monto_bolsillo, cuota_num } = req.body;
+    const { monto_bolsillo, cuota_num, moneda } = req.body;
     const c = db.prepare('SELECT * FROM compras WHERE id=?').get(req.params.id);
     if (!c) return res.status(404).json({ error: 'Compra no encontrada' });
-    const nuevoMonto = Math.round(parseFloat(monto_bolsillo) || 0);
+    // Inferir moneda: explícita > heurística (compra USD pura).
+    const compraEsUsd = (c.valor_usd && c.valor_usd > 0) && !c.valor_cop;
+    const monedaPago = moneda === 'USD' ? 'USD' : (moneda === 'COP' ? 'COP' : (compraEsUsd ? 'USD' : 'COP'));
+    const nuevoMonto = monedaPago === 'USD'
+      ? (Math.round((parseFloat(monto_bolsillo) || 0) * 100) / 100)
+      : Math.round(parseFloat(monto_bolsillo) || 0);
 
     if (cuota_num != null && c.estado === 'diferida') {
       // Per-cuota bolsillo para diferidas
       if (nuevoMonto > 0) {
-        db.prepare('INSERT INTO bolsillo_cuotas (compra_id, cuota_num, monto) VALUES (?,?,?) ON CONFLICT(compra_id, cuota_num) DO UPDATE SET monto=?')
-          .run(c.id, cuota_num, nuevoMonto, nuevoMonto);
+        db.prepare('INSERT INTO bolsillo_cuotas (compra_id, cuota_num, monto, moneda) VALUES (?,?,?,?) ON CONFLICT(compra_id, cuota_num) DO UPDATE SET monto=?, moneda=?')
+          .run(c.id, cuota_num, nuevoMonto, monedaPago, nuevoMonto, monedaPago);
       } else {
         db.prepare('DELETE FROM bolsillo_cuotas WHERE compra_id=? AND cuota_num=?').run(c.id, cuota_num);
       }
-      // Actualizar cache en compras.monto_bolsillo como suma total
-      const sum = db.prepare('SELECT COALESCE(SUM(monto),0) as total FROM bolsillo_cuotas WHERE compra_id=?').get(c.id);
-      db.prepare('UPDATE compras SET monto_bolsillo=? WHERE id=?').run(sum.total, c.id);
-      const fmt = new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',maximumFractionDigits:0}).format(nuevoMonto);
-      logAction('editar', tjNombre(c.tarjeta_id) + 'Bolsillo cuota ' + cuota_num + ': ' + c.descripcion + ' - Apartado: ' + fmt);
-      res.json({ ok: true, estado: 'diferida', monto_bolsillo: sum.total, cuota_num, monto_cuota: nuevoMonto });
+      // Caches separados por moneda
+      const sumCop = db.prepare("SELECT COALESCE(SUM(monto),0) as total FROM bolsillo_cuotas WHERE compra_id=? AND COALESCE(moneda,'COP')='COP'").get(c.id);
+      const sumUsd = db.prepare("SELECT COALESCE(SUM(monto),0) as total FROM bolsillo_cuotas WHERE compra_id=? AND moneda='USD'").get(c.id);
+      db.prepare('UPDATE compras SET monto_bolsillo=?, monto_bolsillo_usd=? WHERE id=?').run(sumCop.total, sumUsd.total, c.id);
+      const fmt = monedaPago === 'USD'
+        ? 'USD $' + new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(nuevoMonto)
+        : new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(nuevoMonto);
+      logAction('editar', tjNombre(c.tarjeta_id) + 'Bolsillo cuota ' + cuota_num + ' (' + monedaPago + '): ' + c.descripcion + ' - Apartado: ' + fmt);
+      res.json({ ok: true, estado: 'diferida', moneda: monedaPago, monto_bolsillo: sumCop.total, monto_bolsillo_usd: sumUsd.total, cuota_num, monto_cuota: nuevoMonto });
     } else {
-      // Non-diferida: bolsillo global
+      // Non-diferida: bolsillo global. Para compras USD comparamos contra valor_usd; COP contra valor_cop.
+      const target = monedaPago === 'USD' ? (c.valor_usd || 0) : c.valor_cop;
       const nuevoEstado = c.estado === 'diferida' ? 'diferida'
-        : nuevoMonto >= c.valor_cop ? 'bolsillo' : nuevoMonto > 0 ? 'bolsillo_parcial' : 'pendiente';
-      db.prepare('UPDATE compras SET monto_bolsillo=?, estado=? WHERE id=?').run(nuevoMonto, nuevoEstado, c.id);
-      const fmt = new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',maximumFractionDigits:0}).format(nuevoMonto);
-      logAction('editar', tjNombre(c.tarjeta_id) + 'Bolsillo actualizado: ' + c.descripcion + ' - Apartado: ' + fmt);
-      res.json({ ok: true, estado: nuevoEstado, monto_bolsillo: nuevoMonto });
+        : nuevoMonto >= target ? 'bolsillo' : nuevoMonto > 0 ? 'bolsillo_parcial' : 'pendiente';
+      if (monedaPago === 'USD') {
+        db.prepare('UPDATE compras SET monto_bolsillo_usd=?, estado=? WHERE id=?').run(nuevoMonto, nuevoEstado, c.id);
+      } else {
+        db.prepare('UPDATE compras SET monto_bolsillo=?, estado=? WHERE id=?').run(nuevoMonto, nuevoEstado, c.id);
+      }
+      const fmt = monedaPago === 'USD'
+        ? 'USD $' + new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(nuevoMonto)
+        : new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(nuevoMonto);
+      logAction('editar', tjNombre(c.tarjeta_id) + 'Bolsillo (' + monedaPago + '): ' + c.descripcion + ' - Apartado: ' + fmt);
+      res.json({ ok: true, estado: nuevoEstado, moneda: monedaPago, monto_bolsillo: monedaPago === 'COP' ? nuevoMonto : (c.monto_bolsillo || 0), monto_bolsillo_usd: monedaPago === 'USD' ? nuevoMonto : (c.monto_bolsillo_usd || 0) });
     }
   });
 
