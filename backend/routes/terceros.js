@@ -9,15 +9,54 @@ module.exports = function(db, { logAction, tjNombre }) {
 
   router.get('/', (req, res) => {
     const { tarjeta_id } = req.query;
+    // Regla de visibilidad: una compra de tercero se OCULTA solo si cumple AMBAS:
+    //   (1) El ciclo/corte ya está pagado al banco (extracto del ciclo en 'pagado' COP,
+    //       o estado_usd='pagado' para compras USD puras; para diferidas el equivalente
+    //       es diferida.estado='liquidado' — todas sus cuotas billed y pagadas).
+    //   (2) La deuda del tercero está cerrada — el usuario interpreta esto como:
+    //       a) tercero_pagado=1 (toggle explícito "Recibido"), O
+    //       b) monto_bolsillo cubre el total de la compra (apartó todo via bolsillo).
+    //       Bolsillo PARCIAL (monto_bolsillo > 0 pero < total) NO cuenta como saldado.
+    //
+    // Para diferidas solo aceptamos tercero_pagado=1 (rastrear "bolsillo cubre todas
+    // las cuotas" via SQL agregado a bolsillo_cuotas sería costoso y poco común).
     let sql = `SELECT c.id, c.fecha, c.descripcion, c.valor_cop, c.valor_usd, c.estado, c.ciclo, c.tercero_pagado,
                COALESCE(c.tercero_monto_abonado, 0) as tercero_monto_abonado,
                COALESCE(c.monto_bolsillo, 0) as monto_bolsillo,
+               COALESCE(c.monto_bolsillo_usd, 0) as monto_bolsillo_usd,
                COALESCE(c.es_internacional, 0) as es_internacional,
                c.diferida_id, c.tarjeta_id,
                p.nombre as persona_nombre, p.color as persona_color, p.id as persona_id
                FROM compras c JOIN personas p ON c.persona_id = p.id
                WHERE c.persona_id IS NOT NULL
-                 AND NOT (c.estado = 'pagado' AND c.tercero_pagado = 1)`;
+                 AND NOT (
+                   -- (a) Compra 1-cuota COP: extracto COP pagado Y (tercero pagó O bolsillo cubre total).
+                   (c.estado != 'diferida'
+                    AND c.valor_cop > 0
+                    AND (c.tercero_pagado = 1 OR COALESCE(c.monto_bolsillo, 0) >= c.valor_cop)
+                    AND EXISTS (SELECT 1 FROM extractos ext
+                                 WHERE ext.tarjeta_id = c.tarjeta_id AND ext.ciclo = c.ciclo
+                                   AND ext.estado = 'pagado'))
+                   OR
+                   -- (b) Compra 1-cuota USD pura: extracto USD pagado Y (tercero pagó O bolsillo USD cubre total).
+                   (c.estado != 'diferida'
+                    AND c.valor_usd > 0 AND (c.valor_cop IS NULL OR c.valor_cop = 0)
+                    AND (c.tercero_pagado = 1 OR COALESCE(c.monto_bolsillo_usd, 0) >= c.valor_usd)
+                    AND EXISTS (SELECT 1 FROM extractos ext
+                                 WHERE ext.tarjeta_id = c.tarjeta_id AND ext.ciclo = c.ciclo
+                                   AND ext.estado_usd = 'pagado'))
+                   OR
+                   -- (c) Diferida (COP o USD): la diferida vinculada quedó liquidada
+                   --     (todas sus cuotas billed y pagadas via extractos cerrados, es decir
+                   --     la cuota N/N pasó por su extracto y se cerró) Y la deuda del tercero
+                   --     se saldó (tercero_pagado=1 O monto_bolsillo total cubre el valor de
+                   --     la compra — equivalente a "todas las cuotas tienen bolsillo per-cuota
+                   --     suficiente", aproximación al capital total).
+                   (c.estado = 'diferida' AND c.diferida_id IS NOT NULL
+                    AND (c.tercero_pagado = 1 OR COALESCE(c.monto_bolsillo, 0) >= c.valor_cop)
+                    AND EXISTS (SELECT 1 FROM diferidas d
+                                 WHERE d.id = c.diferida_id AND d.estado = 'liquidado'))
+                 )`;
     const params = [];
     if (tarjeta_id) { sql += ' AND c.tarjeta_id = ?'; params.push(tarjeta_id); }
     sql += ' ORDER BY c.tercero_pagado ASC, c.fecha DESC';

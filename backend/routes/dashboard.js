@@ -150,22 +150,27 @@ module.exports = function(db) {
     const saldoBolsillo = { total: (saldoBolsilloCompras.total || 0) + bolsilloAvancesCiclo + (saldoBolsilloDiferidas.total || 0) };
 
     const diferidasActivas = db.prepare("SELECT * FROM diferidas WHERE estado='activo'" + tjFilter).all(...tjParams);
-    let deudaDiferidas = 0, interesesMesDiferidas = 0;
+    let deudaDiferidas = 0, deudaDiferidasUsd = 0;
+    let interesesMesDiferidas = 0, interesesMesDiferidasUsd = 0;
     // Para "Deuda Personal del corte": suma de la cuota del ciclo de diferidas SIN persona vinculada (personal o RappiCard directa)
     let cuotasDiferidasPersonalCorte = 0;
 
     diferidasActivas.forEach(d => {
       const abonosDif = db.prepare('SELECT * FROM abonos_diferida WHERE diferida_id=? ORDER BY fecha').all(d.id);
       const amort = calcularAmortizacionDiferida(d.monto, d.tasa_mv, d.num_cuotas, d.fecha_compra, d.fecha_primer_corte, abonosDif, nuOpts(db, d.tarjeta_id));
-      deudaDiferidas += amort.resumen.saldoActual;
+      // Detección de moneda: si la compra vinculada tiene valor_usd > 0, es diferida USD.
+      const compraVinc = db.prepare('SELECT persona_id, valor_usd FROM compras WHERE diferida_id=? LIMIT 1').get(d.id);
+      const esDifUsd = !!(compraVinc && compraVinc.valor_usd > 0);
+      if (esDifUsd) deudaDiferidasUsd += amort.resumen.saldoActual;
+      else deudaDiferidas += amort.resumen.saldoActual;
       const cuotaActual = cicloParam
         ? amort.tabla.find(r => r.fechaCorte.slice(0, 7) === cicloActual)
         : amort.tabla.find(r => r.fechaCorte >= hoy);
       if (cuotaActual) {
-        interesesMesDiferidas += cuotaActual.interesTotal;
+        if (esDifUsd) interesesMesDiferidasUsd += cuotaActual.interesTotal;
+        else interesesMesDiferidas += cuotaActual.interesTotal;
         proximosPagos.push({ tipo: 'diferida', etiqueta: d.etiqueta, fechaCorte: cuotaActual.fechaCorte, interes: cuotaActual.interesTotal, capital: cuotaActual.cuotaCapital, total: cuotaActual.totalPagar });
         // Si la diferida no tiene compra de tercero vinculada, su cuota suma a deuda personal
-        const compraVinc = db.prepare('SELECT persona_id FROM compras WHERE diferida_id=? LIMIT 1').get(d.id);
         if (!compraVinc || !compraVinc.persona_id) {
           cuotasDiferidasPersonalCorte += cuotaActual.totalPagar;
         }
@@ -188,6 +193,8 @@ module.exports = function(db) {
 
     const comprasPendientesCiclo = db.prepare("SELECT COALESCE(SUM(valor_cop - COALESCE(monto_abonado,0)),0) as total FROM compras WHERE ciclo=? AND estado NOT IN ('pagado','diferida')" + tjFilter).get(cicloActual, ...tjParams);
     const todasComprasPendientes = db.prepare("SELECT COALESCE(SUM(valor_cop - COALESCE(monto_abonado,0)),0) as total FROM compras WHERE estado NOT IN ('pagado','diferida')" + tjFilter).get(...tjParams);
+    // USD: para el desglose "Compras" de la card Deuda Total USD.
+    const todasComprasPendientesUsd = db.prepare("SELECT COALESCE(SUM(valor_usd),0) as total FROM compras WHERE estado NOT IN ('pagado','diferida') AND valor_usd IS NOT NULL AND valor_usd > 0" + tjFilter).get(...tjParams);
 
     // Ajustes de deuda: capital de cuotas en extractos pendientes pasados
     // y monto pagado a esos extractos. Antes solo corrían en vista per-card,
@@ -335,6 +342,15 @@ module.exports = function(db) {
     const deudaDelCorte = comprasPendientesCiclo.total + cuotasCorte;
     const deudaTotal = todasComprasPendientes.total + deudaAvances + deudaDiferidas - montoPagadoExtractoTotal;
 
+    // Para tarjetas duales: convertimos la deuda USD a COP equivalente con la TRM
+    // configurada, sumando al cupo usado total. La TRM es una aproximación — el banco
+    // calcula al día del pago con su propia tasa, pero para uso interno (cuánto cupo
+    // queda) este estimado es suficiente.
+    const trmRow = db.prepare("SELECT value FROM config WHERE key='trm_usd_cop'").get();
+    const trmUsdCop = trmRow && trmRow.value ? parseFloat(trmRow.value) || 4200 : 4200;
+    const deudaTotalUsdEquivCop = deudaUsdDash * trmUsdCop;
+    const deudaTotalEnCop = deudaTotal + (dualExtractoDash ? deudaTotalUsdEquivCop : 0);
+
     let pagoMinimoBruto = comprasPendientesCiclo.total + cuotasCorte + interesesComprasIntl;
     let pagoMinimo = Math.max(0, pagoMinimoBruto - montoPagadoExtractoCiclo);
 
@@ -429,11 +445,16 @@ module.exports = function(db) {
     // USD: para tarjetas duales, las compras personales del ciclo en USD se suman aparte.
     // Por ahora no incluimos cuotas USD de avances/diferidas (raros: solo compras 1-cuota USD).
     const deudaPersonalCorteUsd = Math.round((comprasPersonalCicloUsd.total || 0) * 100) / 100;
-    // Saldo Bolsillo USD: suma de monto_bolsillo_usd de compras del ciclo con USD apartado.
+    // Saldo Bolsillo USD: bruto = suma de monto_bolsillo_usd; abonado = monto_pagado_usd del
+    // extracto del ciclo; neto = max(0, bruto - abonado). Espejo de la lógica COP.
     const saldoBolsilloComprasUsd = db.prepare(
       "SELECT COALESCE(SUM(monto_bolsillo_usd),0) as total FROM compras WHERE ciclo=? AND estado IN ('bolsillo','bolsillo_parcial','diferida') AND COALESCE(monto_bolsillo_usd,0) > 0" + tjFilter
     ).get(cicloActual, ...tjParams);
-    const saldoBolsilloUsd = Math.round((saldoBolsilloComprasUsd.total || 0) * 100) / 100;
+    const saldoBolsilloUsdBruto = Math.round((saldoBolsilloComprasUsd.total || 0) * 100) / 100;
+    const saldoBolsilloUsdAbonado = Math.round((montoPagadoUsdExtractoCiclo || 0) * 100) / 100;
+    const saldoBolsilloUsd = Math.max(0, Math.round((saldoBolsilloUsdBruto - saldoBolsilloUsdAbonado) * 100) / 100);
+    // Intereses del mes USD: suma de intereses USD de diferidas + revolving USD (= 0 por ahora).
+    const interesesMesUsd = Math.round((interesesMesDiferidasUsd + interesesComprasUsdDash) * 100) / 100;
 
     // Me Deben Corte: lo que cada tercero debe en este ciclo. Resta abono del tercero y bolsillo del usuario.
     const meDebenCorteMap = {};
@@ -531,8 +552,17 @@ module.exports = function(db) {
       interesesComprasIntl: Math.round(interesesComprasIntl),
       dualExtracto: dualExtractoDash,
       interesesComprasUsd: interesesComprasUsdDash,
+      interesesMesUsd: interesesMesUsd,
+      interesesMesDiferidasUsd: Math.round(interesesMesDiferidasUsd * 100) / 100,
       pagoMinimoUsd: pagoMinimoUsdDash,
       deudaUsd: deudaUsdDash,
+      // Desglose USD para la card Deuda Total (espejo de los campos COP):
+      deudaAvancesUsd: 0, // No hay avances USD en el modelo actual; expuesto para futuro.
+      deudaDiferidasUsd: Math.round(deudaDiferidasUsd * 100) / 100,
+      comprasTotalPendientesUsd: Math.round((todasComprasPendientesUsd.total || 0) * 100) / 100,
+      // Para el cálculo de Cupo Usado en tarjetas duales: TRM + deuda total en COP equiv.
+      trmUsdCop: trmUsdCop,
+      deudaTotalEnCop: Math.round(deudaTotalEnCop),
       montoPagadoExtractoUsd: Math.round((montoPagadoUsdExtractoCiclo || 0) * 100) / 100,
       estadoUsdExtractoCiclo: estadoUsdExtractoCiclo,
       // Card "Saldo en Bolsillo": valor neto + desglose para transparencia.
@@ -542,6 +572,8 @@ module.exports = function(db) {
       saldoBolsillo: Math.round(Math.max(0, saldoBolsillo.total - montoPagadoExtractoCiclo)),
       saldoBolsilloBruto: Math.round(saldoBolsillo.total),
       saldoBolsilloAbonado: Math.round(montoPagadoExtractoCiclo),
+      saldoBolsilloUsdBruto: saldoBolsilloUsdBruto,
+      saldoBolsilloUsdAbonado: saldoBolsilloUsdAbonado,
       totalAbonos: Math.round(totalAbonosHist.total),
       totalPagos: Math.round(totalPagos.total),
       proximosPagos: proximosPagos.sort((a, b) => a.fechaCorte.localeCompare(b.fechaCorte)),

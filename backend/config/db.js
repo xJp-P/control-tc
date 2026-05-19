@@ -712,6 +712,11 @@ function initDb(dbPathOverride) {
 
   const insertConfig = db.prepare('INSERT OR IGNORE INTO config (key, value) VALUES (?, ?)');
   insertConfig.run('theme', 'dark');
+  // TRM (Tasa Representativa del Mercado) USD→COP. Solo se usa para estimar el
+  // cupo usado de tarjetas duales (la deuda USD se convierte a COP equivalentes
+  // para calcular el % de cupo). El usuario puede actualizarla via SQL o futura UI.
+  // Default ~4200 COP/USD (rango típico Colombia 2024-2026).
+  insertConfig.run('trm_usd_cop', '4200');
 
   return db;
 }

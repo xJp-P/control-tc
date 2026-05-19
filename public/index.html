@@ -248,6 +248,22 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '3.1.1': [
+    'Bolsillo en dólares: ahora puedes apartar dinero en USD para compras internacionales de tus tarjetas Mastercard y Amex Bancolombia. El modal detecta automáticamente la moneda y la card "Saldo en Bolsillo" muestra el total apartado en pesos y dólares por separado.',
+    'TRM del día automática: la app consulta diariamente la Tasa Representativa del Mercado oficial publicada por el Banco de la República y la usa para estimar el cupo usado de tus tarjetas con cuenta en dólares.',
+    'Al registrar una compra internacional en Mastercard o Amex, el campo "Valor USD" ahora es obligatorio (la moneda nativa de la deuda) y el campo "Valor COP" pasa a opcional. Si dejas "Tasa USD" vacía, la app la completa con la TRM del día.',
+    'Rediseño visual de las cards principales del dashboard: cuando hay deuda en dólares, Deuda Total, Deuda Personal, Me Deben, Me Deben Corte, Saldo en Bolsillo e Intereses del Mes ahora se ven en formato "dos pisos" — pesos arriba, dólares abajo, separados por una línea limpia. Las tarjetas sin saldo USD mantienen su diseño compacto original.',
+    'Cards "Me Deben" y "Me Deben Corte": el desglose por persona ahora se ve como una tabla compacta con columnas Persona / COP / USD. Si una persona solo te debe en una moneda, la otra columna muestra un guion discreto.',
+    'Card "Cupo Usado" ahora considera la deuda en dólares: la convierte a pesos con la TRM de referencia para mostrarte un porcentaje real de ocupación del cupo. Debajo aparece una nota cyan con el cálculo usado para que sea transparente.',
+    'Card "Deuda Total" en tarjetas con dólares: el desglose por tipo de movimiento (Avances, Diferidas, Compras) aparece tanto en pesos como en dólares. En dólares omitimos Avances porque la app no los maneja en USD.',
+    'Card "Intereses del Mes" ahora muestra los intereses en pesos y los intereses en dólares por separado cuando aplica.',
+    'Card "Pago Mínimo USD": la barra de progreso de pago ahora es cian (coherente con la moneda) y el valor del monto se pone cian solo cuando la deuda USD está totalmente saldada, igual que la card COP cambia de amarillo a verde.',
+    'En tarjetas duales, ahora siempre aparecen ambas cards "Pago Mínimo COP" y "Pago Mínimo USD", aunque el valor sea $0. Antes la card USD desaparecía cuando no había saldo.',
+    'Tablas de compras (tarjeta y terceros): la columna "Valor" se renombró a "Valor COP" y se agregó una nueva columna "Valor USD" en cian. Las celdas de la moneda que no aplica a la compra muestran un guion suave en lugar de $0.',
+    'Limpieza visual: se quitó la repetición del valor USD junto a la descripción de la compra. Ahora cada moneda vive en su propia columna sin redundancia.',
+    'Pestaña Terceros: corregido el filtro de visibilidad. Una deuda ahora se oculta de la lista solo cuando el ciclo de la tarjeta ya se pagó al banco Y el tercero ya te saldó la compra (sea porque tocaste el botón "Recibido" o porque cubriste el total con bolsillo). Las compras en bolsillo parcial siempre siguen visibles. Para diferidas, se ocultan cuando todas sus cuotas terminaron de pagarse y el tercero saldó la deuda.',
+    'Bug fix: el badge "Recibido" en una compra con bolsillo completo ya no engaña — ahora el filtro lo reconoce correctamente como saldado y la oculta.',
+  ],
   '3.1.0': [
     'Soporte bimonetario integral para las tarjetas con cuentas en pesos y dólares (Mastercard y Amex Bancolombia). El banco emite un solo extracto por ciclo pero con la deuda dividida, y ahora la app refleja esa realidad: puedes saldar primero la parte en pesos y dejar los dólares para otro día, o viceversa.',
     'Al darle al botón Pagar de un ciclo con saldo en ambas monedas, el modal muestra dos pestañas — Pago COP y Pago USD — con su propio monto mínimo, restante y barra de progreso. La pestaña ya saldada se marca como "SALDADO" y queda deshabilitada. El ciclo solo se considera totalmente cerrado cuando ambas monedas están al día (o cuando no hay saldo en dólares).',
@@ -798,8 +814,59 @@ function fmtDate(d) {
 function fmtUsd(n) {
   return 'USD $' + new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n || 0);
 }
+
+// Tabla compacta para desglose por persona en cards bimonetarias (Me Deben / Me Deben Corte).
+// Header: Persona | COP | USD. Cada fila muestra un punto de color, nombre y los dos valores.
+// Si una persona solo debe en una moneda, la otra columna muestra "—" discreto.
+// Aplica el "estilo Opción A" elegido para v3.1.1.
+//
+// Tipografía: los NOMBRES heredan la sans-serif del sistema (Segoe UI en Windows) —
+// se ven como nombres propios. Los VALORES numéricos sí usan monospace para alinear
+// los montos verticalmente.
+function personasTableBimon(detalle) {
+  const e = React.createElement;
+  const hayUsd = detalle.some(d => (d.totalUsd || 0) > 0);
+  const cellBase = { padding: '6px 4px', fontSize: 12 };
+  const cellMono = Object.assign({}, cellBase, { fontFamily: 'monospace' });
+  const headStyle = {
+    padding: '4px 4px 8px',
+    fontSize: 9, color: 'var(--text-muted)',
+    textTransform: 'uppercase', letterSpacing: 0.8, fontWeight: 600,
+    borderBottom: '1px solid var(--border)'
+  };
+  return e('div', { style: { width: '100%' } },
+    e('table', { style: { width: '100%', borderCollapse: 'collapse' } },
+      e('thead', null,
+        e('tr', null,
+          e('th', { style: Object.assign({}, headStyle, { textAlign: 'left' }) }, 'Persona'),
+          e('th', { style: Object.assign({}, headStyle, { textAlign: 'right' }) }, 'COP'),
+          hayUsd && e('th', { style: Object.assign({}, headStyle, { textAlign: 'right', color: '#4FC3F7' }) }, 'USD')
+        )
+      ),
+      e('tbody', null,
+        detalle.map(d => e('tr', { key: d.nombre, style: { borderBottom: '1px solid rgba(255,255,255,0.04)' } },
+          // Columna Persona: sans-serif heredada (sin monospace) para nombres propios.
+          e('td', { style: Object.assign({}, cellBase, { textAlign: 'left', color: 'var(--text-primary)' }) },
+            e('span', { style: {
+              display: 'inline-block', width: 7, height: 7, borderRadius: '50%',
+              background: d.color || 'var(--success)', marginRight: 6, verticalAlign: 'middle'
+            } }),
+            d.nombre
+          ),
+          // Columnas COP y USD: monospace para alinear los dígitos.
+          e('td', { style: Object.assign({}, cellMono, { textAlign: 'right', color: 'var(--text-primary)', fontWeight: 600 }) },
+            (d.total || 0) > 0 ? fmtCOP(d.total) : e('span', { style: { color: 'var(--text-muted)' } }, '—')
+          ),
+          hayUsd && e('td', { style: Object.assign({}, cellMono, { textAlign: 'right', color: '#4FC3F7', fontWeight: 700 }) },
+            (d.totalUsd || 0) > 0 ? fmtUsd(d.totalUsd) : e('span', { style: { color: 'var(--text-muted)' } }, '—')
+          )
+        ))
+      )
+    )
+  );
+}
 function bimonCard(opts) {
-  // opts: { variant, title, copValue, usdValue, hasUsd, copExtra, footer, footerSub }
+  // opts: { variant, title, copValue, usdValue, hasUsd, copExtra, usdExtra, footer, footerSub }
   // variant -> 'success' | 'danger' | 'warning' | 'accent' | 'purple'
   // Diseño "dos pisos": title arriba, valor COP con prefix inline, divisor horizontal,
   // valor USD con prefix inline en cyan. Footer y footerSub opcionales separados.
@@ -822,7 +889,8 @@ function bimonCard(opts) {
       opts.copExtra || null
     ),
     opts.hasUsd ? e('div', { style: dividerTier },
-      e('div', { style: valueStyleUsd }, opts.usdValue)
+      e('div', { style: valueStyleUsd }, opts.usdValue),
+      opts.usdExtra || null
     ) : null,
     opts.footer ? e('div', { style: { borderTop: '1px solid var(--border)', padding: '10px 16px' } }, opts.footer) : null,
     opts.footerSub ? e('div', { style: { borderTop: '1px solid var(--border)', padding: '8px 16px 12px', fontSize: 11, color: 'var(--text-muted)' } }, opts.footerSub) : null
@@ -940,7 +1008,9 @@ function GlobalDashboard({ tarjetas, onSelectCard, onNewCard }) {
     // Mega card: Cupo Total con barra de progreso
     dashData && (() => {
       var cupo = dashData.cupoTotal || 0;
-      var deuda = dashData.deudaTotal || 0;
+      // Para vista global: si alguna tarjeta es dual, deudaTotalEnCop incluye conversión USD.
+      // Por ahora la vista global no diferencia (la TRM se aplica por tarjeta en su vista).
+      var deuda = dashData.deudaTotalEnCop != null ? dashData.deudaTotalEnCop : (dashData.deudaTotal || 0);
       var disponible = Math.max(0, cupo - deuda);
       var pct = cupo > 0 ? Math.min(Math.round(deuda / cupo * 100), 100) : 0;
       var barColor = pct >= 80 ? 'var(--danger)' : pct >= 50 ? 'var(--warning)' : 'var(--success)';
@@ -1012,15 +1082,7 @@ function GlobalDashboard({ tarjetas, onSelectCard, onNewCard }) {
             usdValue: fmtUsd(dashData.meDeben.totalUsd || 0),
             hasUsd: (dashData.meDeben.totalUsd || 0) > 0,
             footer: dashData.meDeben.detalle.length > 0
-              ? e('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '8px 16px' } },
-                  dashData.meDeben.detalle.map(d =>
-                    e('div', { key: d.nombre },
-                      e('div', { style: { fontSize: 11, color: 'var(--text-muted)' } }, d.nombre),
-                      e('div', { style: { fontSize: 14, fontWeight: 400, color: d.color || 'var(--success)' } }, fmtCOP(d.total)),
-                      (d.totalUsd || 0) > 0 && e('div', { style: { fontSize: 12, color: '#4FC3F7', fontWeight: 700, fontFamily: 'monospace' } }, fmtUsd(d.totalUsd))
-                    )
-                  )
-                )
+              ? personasTableBimon(dashData.meDeben.detalle)
               : e('div', { className: 'card-sub', style: { margin: 0 } }, 'Sin deudas pendientes')
           })
         )
@@ -1753,7 +1815,11 @@ function CardResumen({ tarjeta, onDataChange }) {
 
   if (!data) return e('div', { className: 'loading' }, 'Cargando...');
 
-  const cupoUsado = tarjeta.cupo_total > 0 ? (data.deudaTotal / tarjeta.cupo_total * 100).toFixed(1) : null;
+  // Para tarjetas duales, deudaTotalEnCop incluye la deuda USD convertida a COP via TRM.
+  // Para no-duales es igual a deudaTotal. Así el % de cupo refleja realmente cuánto ocupa
+  // la deuda total (en moneda local equivalente) sobre el cupo de la tarjeta.
+  const deudaParaCupo = data.deudaTotalEnCop != null ? data.deudaTotalEnCop : data.deudaTotal;
+  const cupoUsado = tarjeta.cupo_total > 0 ? (deudaParaCupo / tarjeta.cupo_total * 100).toFixed(1) : null;
   const hoy = todayISO();
 
   // Group split compras by grupo_id, singles stay individual
@@ -1800,31 +1866,46 @@ function CardResumen({ tarjeta, onDataChange }) {
   return e('div', null,
     // ──── Fila 1: Info general de la tarjeta ────
     e('div', { className: 'cards-row' },
-      bimonCard({
-        variant: 'danger',
-        title: 'Deuda Total',
-        copValue: fmtCOP(data.deudaTotal),
-        usdValue: fmtUsd(data.deudaUsd || 0),
-        hasUsd: !!(data.dualExtracto && data.deudaUsd > 0),
-        copExtra: e('div', { style: { display: 'flex', gap: 14, marginTop: 8, flexWrap: 'wrap' } },
-          e('div', null,
-            e('div', { style: { fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 } }, 'Avances'),
-            e('div', { style: { fontSize: 12, color: 'var(--text-primary)', fontWeight: 600, fontFamily: 'monospace' } }, fmtCOP(data.deudaAvances))
-          ),
-          e('div', null,
-            e('div', { style: { fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 } }, 'Diferidas'),
-            e('div', { style: { fontSize: 12, color: 'var(--text-primary)', fontWeight: 600, fontFamily: 'monospace' } }, fmtCOP(data.deudaDiferidas))
-          ),
-          e('div', null,
-            e('div', { style: { fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 } }, 'Compras'),
-            e('div', { style: { fontSize: 12, color: 'var(--text-primary)', fontWeight: 600, fontFamily: 'monospace' } }, fmtCOP(data.comprasTotalPendientes || data.comprasCiclo))
-          )
-        )
-      }),
+      (function() {
+        // Helper para renderizar mini-cols a partir de una lista [{label, value}].
+        // Permite mostrar 3 cols (COP: Avances/Diferidas/Compras) y 2 cols (USD: Diferidas/Compras)
+        // sin código duplicado. flex: 1 distribuye proporcionalmente cuando son pocos items.
+        const miniCols = (cols) => e('div', { style: { display: 'flex', gap: 14, marginTop: 8, flexWrap: 'wrap' } },
+          cols.map(c => e('div', { key: c.label, style: { flex: '1 1 auto', minWidth: 90 } },
+            e('div', { style: { fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 } }, c.label),
+            e('div', { style: { fontSize: 12, color: 'var(--text-primary)', fontWeight: 600, fontFamily: 'monospace' } }, c.value)
+          ))
+        );
+        return bimonCard({
+          variant: 'danger',
+          title: 'Deuda Total',
+          copValue: fmtCOP(data.deudaTotal),
+          usdValue: fmtUsd(data.deudaUsd || 0),
+          hasUsd: !!(data.dualExtracto && data.deudaUsd > 0),
+          copExtra: miniCols([
+            { label: 'Avances',   value: fmtCOP(data.deudaAvances) },
+            { label: 'Diferidas', value: fmtCOP(data.deudaDiferidas) },
+            { label: 'Compras',   value: fmtCOP(data.comprasTotalPendientes || data.comprasCiclo) }
+          ]),
+          // USD: sin "Avances" — en dólares no se hacen avances en MC/Amex Bancolombia.
+          // Orden: Compras primero (movimiento principal) → Diferidas después.
+          usdExtra: miniCols([
+            { label: 'Compras',   value: fmtUsd(data.comprasTotalPendientesUsd || 0) },
+            { label: 'Diferidas', value: fmtUsd(data.deudaDiferidasUsd || 0) }
+          ])
+        });
+      })(),
       cupoUsado && e('div', { className: 'card card-accent' },
         e('div', { className: 'card-label' }, 'Cupo Usado'),
         e('div', { className: 'card-value' }, cupoUsado + '%'),
-        e('div', { className: 'card-sub' }, fmtCOP(data.deudaTotal) + ' de ' + fmtCOP(tarjeta.cupo_total)),
+        e('div', { className: 'card-sub' }, fmtCOP(deudaParaCupo) + ' de ' + fmtCOP(tarjeta.cupo_total)),
+        // Si es dual y hay deuda USD, mostramos la TRM usada para que sea transparente.
+        // Tipografía: hereda la sans-serif del sistema (Segoe UI en Windows) para
+        // armonizar con el subtexto gris inferior. Color cyan para identificar USD.
+        data.dualExtracto && data.deudaUsd > 0 && e('div', { style: { fontSize: 11, color: '#4FC3F7', marginTop: 4, lineHeight: 1.4 } },
+          'Incluye USD $' + new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(data.deudaUsd) +
+          ' × $' + new Intl.NumberFormat('es-CO').format(data.trmUsdCop) + ' (TRM ref.)'
+        ),
         e('div', { style: { fontSize: 10, color: 'var(--text-muted)', marginTop: 6, fontStyle: 'italic', lineHeight: 1.3 } }, 'El disponible puede diferir del banco por intereses devengados sin facturar y cuota de manejo del mes.')
       ),
       e('div', { className: 'card card-warning' },
@@ -1867,15 +1948,9 @@ function CardResumen({ tarjeta, onDataChange }) {
         title: 'Me Deben',
         copValue: fmtCOP(data.meDeben.total),
         usdValue: fmtUsd(data.meDeben.totalUsd || 0),
-        hasUsd: (data.meDeben.totalUsd || 0) > 0,
+        hasUsd: !!(data.dualExtracto && (data.meDeben.totalUsd || 0) > 0),
         footer: data.meDeben.detalle.length > 0
-          ? e('div', { style: { display: 'flex', gap: 14, flexWrap: 'wrap' } },
-              data.meDeben.detalle.map(d => e('div', { key: d.nombre },
-                e('div', { style: { fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 } }, d.nombre),
-                e('div', { style: { fontSize: 12, color: 'var(--text-primary)', fontWeight: 600, fontFamily: 'monospace' } }, fmtCOP(d.total)),
-                (d.totalUsd || 0) > 0 && e('div', { style: { fontSize: 11, color: '#4FC3F7', fontWeight: 700, fontFamily: 'monospace' } }, fmtUsd(d.totalUsd))
-              ))
-            )
+          ? personasTableBimon(data.meDeben.detalle)
           : e('div', { className: 'card-sub', style: { margin: 0 } }, 'Sin deudas')
       })
     ),
@@ -1894,7 +1969,9 @@ function CardResumen({ tarjeta, onDataChange }) {
       // El label cambia a "Pago M\u00EDnimo COP" cuando la tarjeta es dual,
       // para que sea sim\u00E9trico con la card USD que aparece al lado.
       (function() {
-        const labelCop = data.dualExtracto && data.pagoMinimoUsd > 0 ? 'Pago M\u00EDnimo COP' : 'Pago Minimo';
+        // Para tarjetas duales SIEMPRE renombramos a "Pago M\u00EDnimo COP" (aunque USD est\u00E9 en 0),
+        // para que sea coherente con la card USD que tambi\u00E9n se muestra siempre.
+        const labelCop = data.dualExtracto ? 'Pago M\u00EDnimo COP' : 'Pago Minimo';
         return data.extractoCiclo && data.extractoCiclo.estado === 'pagado'
           ? e('div', { className: 'card card-success' },
               e('div', { className: 'card-label' }, labelCop),
@@ -1938,32 +2015,38 @@ function CardResumen({ tarjeta, onDataChange }) {
       // saldo USD. Para tarjetas no-duales con `data.minimoUsd > 0` se
       // conserva la card simple legacy.
       (function() {
-        const fmtUsd = (n) => 'USD $' + new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n || 0);
-        if (data.dualExtracto && data.pagoMinimoUsd > 0) {
+        // Para tarjetas DUALES, la card USD siempre se renderiza (aunque pagoMinimoUsd=0).
+        // El borde sigue la misma convenci\u00F3n de la COP: warning (amarillo) cuando pendiente,
+        // success (verde) cuando 100% saldado. El valor num\u00E9rico es BLANCO por defecto
+        // y pasa a CYAN solo cuando el USD est\u00E1 totalmente saldado (espejo invertido del
+        // patr\u00F3n COP que es blanco \u2192 verde via borde de card).
+        if (data.dualExtracto) {
           const pagadoUsd = data.estadoUsdExtractoCiclo === 'pagado'
             || (data.extractoCiclo && data.extractoCiclo.estado_usd === 'pagado');
           const abonadoUsd = data.montoPagadoExtractoUsd || 0;
-          const restanteUsd = Math.max(0, data.pagoMinimoUsd - abonadoUsd);
+          const restanteUsd = Math.max(0, (data.pagoMinimoUsd || 0) - abonadoUsd);
+          // Cyan solo cuando est\u00E1 al 100% saldado; sino white default.
+          const valStyle = pagadoUsd ? { color: '#4FC3F7' } : undefined;
           if (pagadoUsd) {
             return e('div', { className: 'card card-success' },
               e('div', { className: 'card-label' }, 'Pago M\u00EDnimo USD'),
-              e('div', { className: 'card-value', style: { color: '#4FC3F7' } }, fmtUsd(data.pagoMinimoUsd)),
+              e('div', { className: 'card-value', style: valStyle }, fmtUsd(data.pagoMinimoUsd || 0)),
               e('div', null,
-                e('div', { className: 'card-sub', style: { color: 'var(--success)' } }, 'Pagado: ' + fmtUsd(abonadoUsd || data.pagoMinimoUsd)),
+                e('div', { className: 'card-sub', style: { color: '#4FC3F7' } }, 'Pagado: ' + fmtUsd(abonadoUsd || data.pagoMinimoUsd || 0)),
                 e('div', { style: { marginTop: 4, background: 'var(--bg-secondary)', borderRadius: 4, height: 4, overflow: 'hidden' } },
-                  e('div', { style: { width: '100%', height: '100%', background: 'var(--success)', borderRadius: 4 } })
+                  e('div', { style: { width: '100%', height: '100%', background: '#4FC3F7', borderRadius: 4 } })
                 )
               )
             );
           }
           return e('div', { className: 'card card-warning' },
             e('div', { className: 'card-label' }, abonadoUsd > 0 ? 'Pago M\u00EDnimo USD (Restante)' : 'Pago M\u00EDnimo USD'),
-            e('div', { className: 'card-value', style: { color: '#4FC3F7' } }, fmtUsd(restanteUsd)),
+            e('div', { className: 'card-value', style: valStyle }, fmtUsd(restanteUsd)),
             abonadoUsd > 0
               ? e('div', null,
-                  e('div', { className: 'card-sub', style: { color: 'var(--success)' } }, 'Abonado: ' + fmtUsd(abonadoUsd) + ' de ' + fmtUsd(data.pagoMinimoUsd)),
+                  e('div', { className: 'card-sub', style: { color: '#4FC3F7' } }, 'Abonado: ' + fmtUsd(abonadoUsd) + ' de ' + fmtUsd(data.pagoMinimoUsd || 0)),
                   e('div', { style: { marginTop: 4, background: 'var(--bg-secondary)', borderRadius: 4, height: 4, overflow: 'hidden' } },
-                    e('div', { style: { width: Math.min(100, Math.round(abonadoUsd / data.pagoMinimoUsd * 100)) + '%', height: '100%', background: 'var(--success)', borderRadius: 4 } })
+                    e('div', { style: { width: Math.min(100, Math.round(abonadoUsd / (data.pagoMinimoUsd || 1) * 100)) + '%', height: '100%', background: '#4FC3F7', borderRadius: 4 } })
                   )
                 )
               : e('div', { style: { display: 'flex', gap: 14, marginTop: 6 } },
@@ -1992,10 +2075,13 @@ function CardResumen({ tarjeta, onDataChange }) {
         }
         return null;
       })(),
-      e('div', { className: 'card card-purple' },
-        e('div', { className: 'card-label' }, 'Intereses del Mes'),
-        e('div', { className: 'card-value' }, fmtCOPDec(data.interesesMes)),
-        e('div', { style: { display: 'flex', gap: 14, marginTop: 6 } },
+      bimonCard({
+        variant: 'purple',
+        title: 'Intereses del Mes',
+        copValue: fmtCOPDec(data.interesesMes),
+        usdValue: fmtUsd(data.interesesMesUsd || 0),
+        hasUsd: !!(data.dualExtracto && (data.interesesMesUsd || 0) > 0),
+        copExtra: e('div', { style: { display: 'flex', gap: 14, marginTop: 8, flexWrap: 'wrap' } },
           e('div', null,
             e('div', { style: { fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 } }, 'Diferidas'),
             e('div', { style: { fontSize: 12, color: 'var(--text-primary)', fontWeight: 600, fontFamily: 'monospace' } }, fmtCOPDec(data.interesesMesDiferidas || 0))
@@ -2008,8 +2094,20 @@ function CardResumen({ tarjeta, onDataChange }) {
             e('div', { style: { fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 } }, 'Int Intl'),
             e('div', { style: { fontSize: 12, color: 'var(--text-primary)', fontWeight: 600, fontFamily: 'monospace' } }, fmtCOP(data.interesesComprasIntl))
           )
-        )
-      ),
+        ),
+        usdExtra: ((data.interesesMesDiferidasUsd || 0) > 0 || (data.interesesComprasUsd || 0) > 0)
+          ? e('div', { style: { display: 'flex', gap: 14, marginTop: 8, flexWrap: 'wrap' } },
+              (data.interesesMesDiferidasUsd || 0) > 0 && e('div', null,
+                e('div', { style: { fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 } }, 'Diferidas'),
+                e('div', { style: { fontSize: 12, color: 'var(--text-primary)', fontWeight: 600, fontFamily: 'monospace' } }, fmtUsd(data.interesesMesDiferidasUsd))
+              ),
+              (data.interesesComprasUsd || 0) > 0 && e('div', null,
+                e('div', { style: { fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 } }, 'Compras'),
+                e('div', { style: { fontSize: 12, color: 'var(--text-primary)', fontWeight: 600, fontFamily: 'monospace' } }, fmtUsd(data.interesesComprasUsd))
+              )
+            )
+          : null
+      }),
       // Deuda Personal del corte (compras y avances "Personal" del ciclo, sin tercero)
       bimonCard({
         variant: 'danger',
@@ -2025,15 +2123,9 @@ function CardResumen({ tarjeta, onDataChange }) {
         title: 'Me Deben Corte',
         copValue: fmtCOP((data.meDebenCorte && data.meDebenCorte.total) || 0),
         usdValue: fmtUsd((data.meDebenCorte && data.meDebenCorte.totalUsd) || 0),
-        hasUsd: ((data.meDebenCorte && data.meDebenCorte.totalUsd) || 0) > 0,
+        hasUsd: !!(data.dualExtracto && ((data.meDebenCorte && data.meDebenCorte.totalUsd) || 0) > 0),
         footer: data.meDebenCorte && data.meDebenCorte.detalle.length > 0
-          ? e('div', { style: { display: 'flex', gap: 14, flexWrap: 'wrap' } },
-              data.meDebenCorte.detalle.map(d => e('div', { key: d.nombre },
-                e('div', { style: { fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 } }, d.nombre),
-                e('div', { style: { fontSize: 12, color: 'var(--text-primary)', fontWeight: 600, fontFamily: 'monospace' } }, fmtCOP(d.total)),
-                (d.totalUsd || 0) > 0 && e('div', { style: { fontSize: 11, color: '#4FC3F7', fontWeight: 700, fontFamily: 'monospace' } }, fmtUsd(d.totalUsd))
-              ))
-            )
+          ? personasTableBimon(data.meDebenCorte.detalle)
           : e('div', { className: 'card-sub', style: { margin: 0 } }, 'Nadie debe en este ciclo')
       }),
       bimonCard({
@@ -2041,9 +2133,9 @@ function CardResumen({ tarjeta, onDataChange }) {
         title: 'Saldo en Bolsillo',
         copValue: fmtCOP(data.saldoBolsillo || 0),
         usdValue: fmtUsd(data.saldoBolsilloUsd || 0),
-        hasUsd: (data.saldoBolsilloUsd || 0) > 0,
-        footer: ((data.saldoBolsilloBruto || 0) > 0 || (data.saldoBolsilloAbonado || 0) > 0)
-          ? e('div', { style: { display: 'flex', gap: 14, flexWrap: 'wrap' } },
+        hasUsd: !!(data.dualExtracto && ((data.saldoBolsilloUsdBruto || 0) > 0 || (data.saldoBolsilloUsdAbonado || 0) > 0 || (data.saldoBolsilloUsd || 0) > 0)),
+        copExtra: ((data.saldoBolsilloBruto || 0) > 0 || (data.saldoBolsilloAbonado || 0) > 0)
+          ? e('div', { style: { display: 'flex', gap: 14, marginTop: 8, flexWrap: 'wrap' } },
               e('div', null,
                 e('div', { style: { fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 } }, 'Total Apartado'),
                 e('div', { style: { fontSize: 12, color: 'var(--text-primary)', fontWeight: 600, fontFamily: 'monospace' } }, fmtCOP(data.saldoBolsilloBruto || 0))
@@ -2053,7 +2145,22 @@ function CardResumen({ tarjeta, onDataChange }) {
                 e('div', { style: { fontSize: 12, color: 'var(--warning)', fontWeight: 600, fontFamily: 'monospace' } }, '-' + fmtCOP(data.saldoBolsilloAbonado || 0))
               )
             )
-          : e('div', { className: 'card-sub', style: { margin: 0 } }, 'Compras apartadas')
+          : null,
+        usdExtra: ((data.saldoBolsilloUsdBruto || 0) > 0 || (data.saldoBolsilloUsdAbonado || 0) > 0)
+          ? e('div', { style: { display: 'flex', gap: 14, marginTop: 8, flexWrap: 'wrap' } },
+              e('div', null,
+                e('div', { style: { fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 } }, 'Total Apartado'),
+                e('div', { style: { fontSize: 12, color: 'var(--text-primary)', fontWeight: 600, fontFamily: 'monospace' } }, fmtUsd(data.saldoBolsilloUsdBruto || 0))
+              ),
+              e('div', null,
+                e('div', { style: { fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 } }, 'Abonos Realizados'),
+                e('div', { style: { fontSize: 12, color: 'var(--warning)', fontWeight: 600, fontFamily: 'monospace' } }, '-' + fmtUsd(data.saldoBolsilloUsdAbonado || 0))
+              )
+            )
+          : null,
+        footerSub: !((data.saldoBolsilloBruto || 0) > 0 || (data.saldoBolsilloAbonado || 0) > 0 || (data.saldoBolsilloUsdBruto || 0) > 0)
+          ? 'Compras apartadas'
+          : null
       })
     ),
 
@@ -2117,7 +2224,8 @@ function CardResumen({ tarjeta, onDataChange }) {
             e('td', null, fmtDate(c.fecha)),
             e('td', null,
               c.descripcion,
-              c.valor_usd ? e('span', { style: { color: 'var(--text-muted)', fontSize: 11, marginLeft: 6 } }, 'USD $' + c.valor_usd + (c.tasa_usd ? ' x ' + c.tasa_usd : '')) : null,
+              // El valor USD ahora vive en su propia columna "Valor USD" — quitamos
+              // la concatenación redundante en la descripción.
               isDif && c.cuota_num && e('span', { style: { fontSize: 10, color: 'var(--accent)', marginLeft: 8 } }, 'Cuota ' + c.cuota_num + '/' + c.cuotas_total),
               // Nombre del responsable se movió a su propia columna.
               tieneParcial && e('span', { className: 'badge badge-active', style: { marginLeft: 8, fontSize: 10 } }, 'abono parcial')
@@ -2131,7 +2239,10 @@ function CardResumen({ tarjeta, onDataChange }) {
                 : e('span', { style: { color: 'var(--text-muted)' } }, '—')
             ),
             e('td', { className: 'text-right text-mono' },
-              fmtCOP(valorMostrar),
+              // Si la compra es USD-pura (valor_cop=0 y valor_usd>0) mostramos "—".
+              (c.valor_usd && c.valor_usd > 0 && !valorMostrar)
+                ? e('span', { style: { color: 'var(--text-muted)' } }, '—')
+                : fmtCOP(valorMostrar),
               tieneParcial && e('div', { style: { fontSize: 11, color: 'var(--primary)' } }, 'Abonado: ' + fmtCOP(abonado) + ' | Resta: ' + fmtCOP(c.valor_cop - abonado))
             ),
             e('td', { className: 'text-right text-mono', style: { color: '#4FC3F7', fontWeight: 600 } },
@@ -2223,8 +2334,7 @@ function CardResumen({ tarjeta, onDataChange }) {
                     e('td', null, fmtDate(item.fecha)),
                     e('td', { style: { fontWeight: 700 } },
                       item.descripcion,
-                      item.valor_usd ? e('span', { style: { color: 'var(--text-muted)', fontSize: 11, marginLeft: 6 } }, 'USD $' + item.valor_usd + (item.tasa_usd ? ' x ' + item.tasa_usd : '')) : null,
-                      // Cuota info se mantiene en descripcion (es info de cuota, no de responsable).
+                      // El valor USD vive en su propia columna; ya no se concatena aquí.
                       item.esDiferida && e('span', { style: { fontSize: 10, color: 'var(--accent)', marginLeft: 8, fontWeight: 600 } }, 'Cuota ' + item.cuota_num + '/' + item.cuotas_total)
                     ),
                     // Responsable: badge "Dividida" en azul (reservamos verde para "pagado") + cantidad de partes.
@@ -2233,7 +2343,13 @@ function CardResumen({ tarjeta, onDataChange }) {
                         e(Ico, { name: 'users', size: 10, color: 'currentColor' }), 'Dividida'),
                       e('span', { style: { fontSize: 10, color: 'var(--text-muted)', marginLeft: 6 } }, item.partes.length + ' partes')
                     ),
-                    e('td', { className: 'text-right text-mono', style: { fontWeight: 700, color: grupoPaidPast ? 'var(--success)' : undefined } }, fmtCOP(item.total)),
+                    (function() {
+                      const totalUsdGrupo = item.partes.reduce((s, p) => s + (p.valor_usd || 0), 0);
+                      const esUsdPuro = totalUsdGrupo > 0 && !item.total;
+                      return e('td', { className: 'text-right text-mono', style: { fontWeight: 700, color: grupoPaidPast ? 'var(--success)' : undefined } },
+                        esUsdPuro ? e('span', { style: { color: 'var(--text-muted)' } }, '\u2014') : fmtCOP(item.total)
+                      );
+                    })(),
                     (function() {
                       const totalUsdGrupo = item.partes.reduce((s, p) => s + (p.valor_usd || 0), 0);
                       return e('td', { className: 'text-right text-mono', style: { color: '#4FC3F7', fontWeight: 700 } },
@@ -2292,7 +2408,11 @@ function CardResumen({ tarjeta, onDataChange }) {
                           e('span', { className: 'persona-dot', style: { background: c.persona_id ? c.persona_color : '#666', width: 8, height: 8, display: 'inline-block', borderRadius: '50%' } }),
                           e('span', { style: { color: 'var(--text-primary)' } }, c.persona_id ? c.persona_nombre : 'Personal'))
                       ),
-                      e('td', { className: 'text-right text-mono', style: { fontSize: 13, color: childPaidPast ? 'var(--success)' : undefined } }, fmtCOP(childValor)),
+                      e('td', { className: 'text-right text-mono', style: { fontSize: 13, color: childPaidPast ? 'var(--success)' : undefined } },
+                        (c.valor_usd && c.valor_usd > 0 && !childValor)
+                          ? e('span', { style: { color: 'var(--text-muted)' } }, '—')
+                          : fmtCOP(childValor)
+                      ),
                       e('td', { className: 'text-right text-mono', style: { fontSize: 13, color: '#4FC3F7', fontWeight: 600 } },
                         c.valor_usd && c.valor_usd > 0
                           ? 'USD $' + new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(c.valor_usd)
@@ -2880,14 +3000,28 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
     api('/compras/intl-descripciones').then(setIntlDescripciones).catch(() => setIntlDescripciones([]));
   }, []);
 
+  // TRM del día (Tasa Representativa del Mercado) — se consulta del backend que la trae
+  // del dataset abierto del Banco República. Si no responde, usa el valor guardado en config.
+  // Se usa como fallback automático cuando el usuario marca compra internacional en una
+  // tarjeta dual (Mastercard/Amex Bancolombia) y deja vacío el campo Tasa USD.
+  const [trmInfo, setTrmInfo] = useState(null);
+  useEffect(() => {
+    api('/trm-actual').then(setTrmInfo).catch(() => setTrmInfo(null));
+  }, []);
+
   function onUsdChange(val) { lastUsdField.current = 'usd'; setValorUsd(val); }
   function onTasaChange(val) { lastUsdField.current = 'tasa'; setTasaUsd(val); }
   function onCopUsdChange(val) { lastUsdField.current = 'cop'; setValorCop(val); }
 
   // Auto-calculate the missing field based on the other two — solo si la compra es intl
   // y el usuario está completando los campos USD opcionales.
+  // En tarjetas duales (MC/Amex) la moneda nativa es USD y valor_cop puede quedar en 0,
+  // por lo que NO auto-calculamos COP a partir de USD*tasa (evita pisar el 0 esperado).
+  const _frEarly = tarjeta && tarjeta.franquicia ? tarjeta.franquicia.toLowerCase() : '';
+  const _isDualEarly = _frEarly.includes('mastercard') || _frEarly.includes('amex') || _frEarly.includes('american express');
   useEffect(() => {
     if (!esInternacional) return;
+    if (_isDualEarly) return; // no auto-cálculo recíproco en tarjetas duales
     const field = lastUsdField.current;
     if (!field) return;
     const usd = parseFloat(valorUsd);
@@ -2900,7 +3034,7 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
       const calc = Math.round(usd * tasa);
       if (calc !== Math.round(cop)) setValorCop(calc);
     }
-  }, [valorUsd, tasaUsd, valorCop, esInternacional]);
+  }, [valorUsd, tasaUsd, valorCop, esInternacional, _isDualEarly]);
 
   async function submit(ev) {
     ev.preventDefault();
@@ -2908,7 +3042,12 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
 
     // USD/Tasa son opcionales — solo se guardan si la compra es intl y el usuario los proveyó.
     const usdNum = esInternacional && valorUsd !== '' && !isNaN(parseFloat(valorUsd)) ? parseFloat(valorUsd) : null;
-    const tasaNum = esInternacional && tasaUsd !== '' && !isNaN(parseFloat(tasaUsd)) ? parseFloat(tasaUsd) : null;
+    // Fallback de tasa: si la compra es internacional + tarjeta dual + tasaUsd vacía,
+    // usamos la TRM del día (consultada en mount). Se guarda como tasa_usd informativa.
+    let tasaNum = esInternacional && tasaUsd !== '' && !isNaN(parseFloat(tasaUsd)) ? parseFloat(tasaUsd) : null;
+    if (tasaNum == null && esInternacional && _isDualEarly && trmInfo && trmInfo.trm) {
+      tasaNum = Math.round(trmInfo.trm);
+    }
 
     // Edicion de grupo existente: diff splits vs originales, sin crear nuevas diferidas
     if (dividir && splits.length > 0 && item && item._isGrupo) {
@@ -3076,21 +3215,67 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
           : 'Esta tarjeta no genera intereses internacionales en este sistema, pero puedes registrar el valor en USD y la tasa abajo (opcional).'
       )
     ),
-    e('div', { className: 'form-group' },
-      e('label', { className: 'form-label' }, 'Valor COP'),
-      e(MoneyInput, { value: valorCop, onChange: val => esInternacional ? onCopUsdChange(val) : setValorCop(val), required: true }),
-      esInternacional && lastUsdField.current === 'cop' && tasaUsd && e('div', { className: 'form-hint' }, 'Tasa calculada: ' + fmtCOP(tasaUsd) + ' por USD')
-    ),
-    esInternacional && e('div', { className: 'form-row' },
-      e('div', { className: 'form-group' },
-        e('label', { className: 'form-label' }, 'Valor USD ', e('span', { style: { color: 'var(--text-muted)', fontWeight: 400 } }, '(opcional)')),
-        e('input', { type: 'number', step: '0.01', className: 'form-input', value: valorUsd, onChange: ev => onUsdChange(ev.target.value), placeholder: 'Ej: 9.99' })
-      ),
-      e('div', { className: 'form-group' },
-        e('label', { className: 'form-label' }, 'Tasa USD ', e('span', { style: { color: 'var(--text-muted)', fontWeight: 400 } }, '(opcional)')),
-        e(MoneyInput, { value: tasaUsd, onChange: val => onTasaChange(val), placeholder: 'Ej: 4.150' })
-      )
-    ),
+    // ── Inputs de valores según moneda ──────────────────────────────
+    // Para tarjetas duales (Mastercard/Amex Bancolombia) + compra internacional:
+    // el VALOR USD es la moneda nativa de la deuda → obligatorio. Valor COP queda
+    // opcional (default 0, ya que el banco no convierte a pesos).
+    // Para no-duales (Visa, etc.): comportamiento original — COP obligatorio,
+    // USD/Tasa opcionales con auto-cálculo recíproco.
+    (function() {
+      const isDualIntl = _dualForm && esInternacional;
+      // Si es dual+intl, mostramos USD primero (obligatorio), tasa al lado, COP al final opcional.
+      if (isDualIntl) {
+        return [
+          e('div', { key: 'usd-row', className: 'form-row' },
+            e('div', { className: 'form-group' },
+              e('label', { className: 'form-label' }, 'Valor USD ',
+                e('span', { style: { color: '#4FC3F7', fontWeight: 700, fontSize: 10, letterSpacing: 0.5 } }, '(obligatorio)')
+              ),
+              e('input', { type: 'number', step: '0.01', className: 'form-input', value: valorUsd, onChange: ev => onUsdChange(ev.target.value), placeholder: 'Ej: 9.99', required: true, style: { borderColor: '#4FC3F7' } })
+            ),
+            e('div', { className: 'form-group' },
+              e('label', { className: 'form-label' }, 'Tasa USD ',
+                e('span', { style: { color: 'var(--text-muted)', fontWeight: 400 } }, '(recomendado)')
+              ),
+              e(MoneyInput, { value: tasaUsd, onChange: val => onTasaChange(val), placeholder: trmInfo && trmInfo.trm ? 'TRM día: ' + new Intl.NumberFormat('es-CO').format(Math.round(trmInfo.trm)) : 'Ej: 4.150' }),
+              !tasaUsd && trmInfo && trmInfo.trm && e('div', { className: 'form-hint', style: { color: '#4FC3F7' } },
+                'Si lo dejas vacío, se usará la TRM del día: $' + new Intl.NumberFormat('es-CO').format(Math.round(trmInfo.trm)) +
+                (trmInfo.fecha ? ' (' + trmInfo.fecha + ')' : '') +
+                (trmInfo.ok === false ? ' [valor de caché — sin conexión]' : '')
+              )
+            )
+          ),
+          e('div', { key: 'cop-row', className: 'form-group' },
+            e('label', { className: 'form-label' }, 'Valor COP ',
+              e('span', { style: { color: 'var(--text-muted)', fontWeight: 400 } }, '(opcional — el banco facturará en USD)')
+            ),
+            e(MoneyInput, { value: valorCop, onChange: val => setValorCop(val), placeholder: '0' })
+          )
+        ];
+      }
+      // Caso no-dual o no internacional: COP obligatorio + USD/Tasa opcionales si aplica.
+      return [
+        e('div', { key: 'cop-row', className: 'form-group' },
+          e('label', { className: 'form-label' }, 'Valor COP'),
+          e(MoneyInput, { value: valorCop, onChange: val => esInternacional ? onCopUsdChange(val) : setValorCop(val), required: true }),
+          esInternacional && lastUsdField.current === 'cop' && tasaUsd && e('div', { className: 'form-hint' }, 'Tasa calculada: ' + fmtCOP(tasaUsd) + ' por USD')
+        ),
+        esInternacional && e('div', { key: 'usd-row', className: 'form-row' },
+          e('div', { className: 'form-group' },
+            e('label', { className: 'form-label' }, 'Valor USD ',
+              e('span', { style: { color: 'var(--text-muted)', fontWeight: 400 } }, '(opcional)')
+            ),
+            e('input', { type: 'number', step: '0.01', className: 'form-input', value: valorUsd, onChange: ev => onUsdChange(ev.target.value), placeholder: 'Ej: 9.99' })
+          ),
+          e('div', { className: 'form-group' },
+            e('label', { className: 'form-label' }, 'Tasa USD ',
+              e('span', { style: { color: 'var(--text-muted)', fontWeight: 400 } }, '(opcional)')
+            ),
+            e(MoneyInput, { value: tasaUsd, onChange: val => onTasaChange(val), placeholder: 'Ej: 4.150' })
+          )
+        )
+      ];
+    })(),
     e('div', { style: { marginBottom: dividir ? 6 : 12 } },
       e('label', { style: { cursor: item && item._isGrupo ? 'default' : 'pointer', fontSize: 13, opacity: item && item._isGrupo ? 0.7 : 1 } },
         e('input', { type: 'checkbox', checked: dividir, onChange: ev => { if (!(item && item._isGrupo)) setDividir(ev.target.checked); }, disabled: !!(item && item._isGrupo), style: { marginRight: 6 } }),
@@ -4843,7 +5028,11 @@ function Terceros({ tarjeta }) {
                               c.descripcion,
                               e('span', { style: { fontSize: 10, color: 'var(--accent)', marginLeft: 6 } }, 'Cuota ' + q.num + '/' + c.cuotas.length)
                             ),
-                            e('td', { className: 'text-right text-mono', style: { fontWeight: 600, color: hecha ? 'var(--success)' : undefined } }, fmtCOP(q.total)),
+                            e('td', { className: 'text-right text-mono', style: { fontWeight: 600, color: hecha ? 'var(--success)' : undefined } },
+                              (c.valor_usd && c.valor_usd > 0 && !q.total)
+                                ? e('span', { style: { color: 'var(--text-muted)' } }, '—')
+                                : fmtCOP(q.total)
+                            ),
                             e('td', { className: 'text-right text-mono', style: { color: '#4FC3F7', fontWeight: 600 } },
                               c.valor_usd && c.valor_usd > 0
                                 ? 'USD $' + new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(c.valor_usd / c.cuotas.length)
@@ -4879,7 +5068,11 @@ function Terceros({ tarjeta }) {
                         return e('tr', { key: c.id, style: c.tercero_pagado ? { background: 'rgba(52,211,153,0.08)' } : bol > 0 && !bolCubre ? { background: 'rgba(167,139,250,0.06)' } : null },
                           e('td', null, fmtDate(c.fecha)),
                           e('td', { style: { fontWeight: 600 } }, c.descripcion),
-                          e('td', { className: 'text-right text-mono', style: { fontWeight: 600, color: (c.tercero_pagado || bolCubre) ? 'var(--success)' : undefined } }, fmtCOP(c.valor_cop)),
+                          e('td', { className: 'text-right text-mono', style: { fontWeight: 600, color: (c.tercero_pagado || bolCubre) ? 'var(--success)' : undefined } },
+                            (c.valor_usd && c.valor_usd > 0 && !c.valor_cop)
+                              ? e('span', { style: { color: 'var(--text-muted)' } }, '—')
+                              : fmtCOP(c.valor_cop)
+                          ),
                           e('td', { className: 'text-right text-mono', style: { color: '#4FC3F7', fontWeight: 600 } },
                             c.valor_usd && c.valor_usd > 0
                               ? 'USD $' + new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(c.valor_usd)
