@@ -543,6 +543,11 @@ module.exports = function(db) {
       meDebenCorte: { total: totalMeDebenCorte, totalUsd: totalMeDebenCorteUsd, detalle: meDebenCorteList },
       deudaPersonal: deudaPersonalCorte,
       deudaPersonalUsd: deudaPersonalCorteUsd,
+      // Desglose de Deuda Personal (sin terceros): para mostrar a qué corresponde el total.
+      deudaPersonalCompras: Math.round(comprasPersonalCiclo.total || 0),
+      deudaPersonalAvances: Math.round(cuotasAvancesPersonalCorte),
+      deudaPersonalDiferidas: Math.round(cuotasDiferidasPersonalCorte),
+      deudaPersonalIntIntl: Math.round(interesesComprasIntlPersonal || 0),
       saldoBolsilloUsd: saldoBolsilloUsd,
       proximoCorte: { fecha: proximoCorteDate.toISOString().slice(0, 10), diasFaltan: diasParaCorte },
       fechaPago: { fecha: fechaPago.toISOString().slice(0, 10), diasFaltan: diasParaPago, esManual: esFechaPagoManual },

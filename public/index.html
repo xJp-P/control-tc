@@ -248,6 +248,9 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '3.1.2': [
+    'Card "Deuda Personal" ahora muestra el desglose de a qué corresponde el valor (Compras, Avances, Diferidas e Int Intl cuando aplique), igual que ya lo hace la card "Pago Mínimo". Así puedes ver de un vistazo qué parte de tu deuda del corte viene de cada concepto.'
+  ],
   '3.1.1': [
     'Bolsillo en dólares: ahora puedes apartar dinero en USD para compras internacionales de tus tarjetas Mastercard y Amex Bancolombia. El modal detecta automáticamente la moneda y la card "Saldo en Bolsillo" muestra el total apartado en pesos y dólares por separado.',
     'TRM del día automática: la app consulta diariamente la Tasa Representativa del Mercado oficial publicada por el Banco de la República y la usa para estimar el cupo usado de tus tarjetas con cuenta en dólares.',
@@ -2115,6 +2118,24 @@ function CardResumen({ tarjeta, onDataChange }) {
         copValue: fmtCOP(data.deudaPersonal || 0),
         usdValue: fmtUsd(data.deudaPersonalUsd || 0),
         hasUsd: (data.deudaPersonalUsd || 0) > 0,
+        copExtra: e('div', { style: { display: 'flex', gap: 14, marginTop: 6, flexWrap: 'wrap' } },
+          (data.deudaPersonalCompras || 0) > 0 && e('div', null,
+            e('div', { style: { fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 } }, 'Compras'),
+            e('div', { style: { fontSize: 12, color: 'var(--text-primary)', fontWeight: 600, fontFamily: 'monospace' } }, fmtCOP(data.deudaPersonalCompras))
+          ),
+          (data.deudaPersonalAvances || 0) > 0 && e('div', null,
+            e('div', { style: { fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 } }, 'Avances'),
+            e('div', { style: { fontSize: 12, color: 'var(--text-primary)', fontWeight: 600, fontFamily: 'monospace' } }, fmtCOP(data.deudaPersonalAvances))
+          ),
+          (data.deudaPersonalDiferidas || 0) > 0 && e('div', null,
+            e('div', { style: { fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 } }, 'Diferidas'),
+            e('div', { style: { fontSize: 12, color: 'var(--text-primary)', fontWeight: 600, fontFamily: 'monospace' } }, fmtCOP(data.deudaPersonalDiferidas))
+          ),
+          (data.deudaPersonalIntIntl || 0) > 0 && e('div', null,
+            e('div', { style: { fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 } }, 'Int Intl'),
+            e('div', { style: { fontSize: 12, color: 'var(--text-primary)', fontWeight: 600, fontFamily: 'monospace' } }, fmtCOP(data.deudaPersonalIntIntl))
+          )
+        ),
         footerSub: 'Compras y cuotas del corte (sin terceros)'
       }),
       // Me Deben Corte (lo que terceros me deben en este ciclo, con desglose por persona)
