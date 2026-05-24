@@ -249,7 +249,8 @@ const API = 'http://127.0.0.1:3500/api';
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
   '3.1.2': [
-    'Card "Deuda Personal" ahora muestra el desglose de a qué corresponde el valor (Compras, Avances, Diferidas e Int Intl cuando aplique), igual que ya lo hace la card "Pago Mínimo". Así puedes ver de un vistazo qué parte de tu deuda del corte viene de cada concepto.'
+    'Card "Deuda Personal" ahora muestra el desglose de a qué corresponde el valor (Compras, Avances, Diferidas e Int Intl cuando aplique), igual que ya lo hace la card "Pago Mínimo". Así puedes ver de un vistazo qué parte de tu deuda del corte viene de cada concepto.',
+    'Ventana de "Novedades de la Versión" arreglada: cuando hay muchos cambios, ahora la ventana mantiene un tamaño compacto y solo la lista del medio hace scroll. El título y el botón "Entendido" quedan siempre visibles.'
   ],
   '3.1.1': [
     'Bolsillo en dólares: ahora puedes apartar dinero en USD para compras internacionales de tus tarjetas Mastercard y Amex Bancolombia. El modal detecta automáticamente la moneda y la card "Saldo en Bolsillo" muestra el total apartado en pesos y dólares por separado.',
@@ -5658,14 +5659,17 @@ function App() {
     ),
 
     // Changelog dialog
+    // Layout flex-column con maxHeight 70vh: header y botón quedan fijos,
+    // solo la lista de items hace scroll cuando hay muchos cambios. Override
+    // de .modal { overflow-y: auto } via overflow:hidden en el contenedor.
     changelogDlg && e('div', { className: 'modal-overlay', onClick: () => setChangelogDlg(null) },
-      e('div', { className: 'modal', onClick: (ev) => ev.stopPropagation(), style: { maxWidth: 380 } },
-        e('div', { className: 'modal-handle' }),
-        e('div', { style: { textAlign: 'center', marginBottom: 14 } },
+      e('div', { className: 'modal', onClick: (ev) => ev.stopPropagation(), style: { maxWidth: 380, maxHeight: '70vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' } },
+        e('div', { className: 'modal-handle', style: { flexShrink: 0 } }),
+        e('div', { style: { textAlign: 'center', marginBottom: 14, flexShrink: 0 } },
           e('div', { style: { marginBottom: 6 } }, e(Ico, { name: 'check', size: 28, color: 'var(--success)' })),
           e('div', { style: { fontWeight: 700, fontSize: 17, color: 'var(--text-primary)' } }, 'Actualizado a v' + changelogDlg.version)
         ),
-        e('div', { style: { marginBottom: 16 } },
+        e('div', { style: { marginBottom: 16, overflowY: 'auto', flex: '1 1 auto', minHeight: 0, paddingRight: 6 } },
           changelogDlg.items.map((item, i) =>
             e('div', { key: i, style: { display: 'flex', alignItems: 'flex-start', gap: 10, padding: '8px 0', fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.45 } },
               // Icono más grande y con un poco de margen superior para alinear con la primera línea del texto.
@@ -5674,7 +5678,7 @@ function App() {
             )
           )
         ),
-        e('button', { onClick: () => setChangelogDlg(null), style: { width: '100%', padding: '10px 0', background: 'var(--success)', color: '#fff', border: 'none', borderRadius: 10, fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'inherit' } }, 'Entendido')
+        e('button', { onClick: () => setChangelogDlg(null), style: { width: '100%', padding: '10px 0', background: 'var(--success)', color: '#fff', border: 'none', borderRadius: 10, fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'inherit', flexShrink: 0 } }, 'Entendido')
       )
     ),
 
