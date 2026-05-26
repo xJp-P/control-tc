@@ -127,11 +127,20 @@ button:hover{opacity:0.88;}
 <button id="btnQuit">Cerrar app</button>
 </div>
 </div>
+<div id="vUpdateError" style="display:none;">
+<div class="warnIcon">!</div>
+<div class="offTitle">Error al actualizar</div>
+<div class="offMsg" id="updateErrorMsg">No se pudo descargar la actualizacion. Por favor cierra la app y abrela de nuevo para reintentar.</div>
+<div class="btnRow">
+<button id="btnQuitUpdate">Cerrar app</button>
+</div>
+</div>
 </div>
 <script>
 var ipc=require('electron').ipcRenderer;
 document.getElementById('btnContinue').addEventListener('click',function(){ipc.send('splash-decision','continue');});
 document.getElementById('btnQuit').addEventListener('click',function(){ipc.send('splash-decision','quit');});
+document.getElementById('btnQuitUpdate').addEventListener('click',function(){ipc.send('splash-update-error-quit');});
 </script></body></html>`;
 }
 
@@ -189,6 +198,20 @@ function updateSplashCountdown(seconds) {
   splashWin.webContents.executeJavaScript(
     `(function(){var c=document.getElementById('countdown');if(c)c.textContent='${s}s';})();`
   ).catch(() => {});
+}
+
+function showUpdateErrorInSplash(version) {
+  return new Promise((resolve) => {
+    if (!splashAlive()) return resolve();
+    const v = String(version || '').replace(/'/g, "\\'");
+    const msg = v
+      ? `No se pudo descargar la actualizacion v${v}. Por favor cierra la app y abrela de nuevo para reintentar.`
+      : `No se pudo descargar la actualizacion. Por favor cierra la app y abrela de nuevo para reintentar.`;
+    splashWin.webContents.executeJavaScript(
+      `(function(){var a=document.getElementById('vLoading');var b=document.getElementById('vOffline');var c=document.getElementById('vUpdateError');if(a)a.style.display='none';if(b)b.style.display='none';if(c)c.style.display='flex';var m=document.getElementById('updateErrorMsg');if(m)m.textContent='${msg.replace(/'/g, "\\'")}';})();`
+    ).catch(() => {});
+    ipcMain.once('splash-update-error-quit', () => resolve());
+  });
 }
 
 function showOfflineDecisionInSplash() {
@@ -710,9 +733,12 @@ app.whenReady().then(async () => {
       // El proceso de instalación reinicia/reemplaza la app. No continuamos.
       return;
     }
-    updateSplashMessage('Error al descargar la actualizacion. Continuando con la version actual...');
-    await sleep(3000);
-    // Caemos a FASE 4b
+    // FASE 4a falló: forzar al usuario a cerrar y reabrir para reintentar.
+    // No caemos a FASE 4b con la versión vieja — eso defeatea el propósito
+    // del boot protegido (la actualización podía contener un fix crítico de BD).
+    await showUpdateErrorInSplash(version);
+    app.quit();
+    return;
   } else if (decision === 'timeout') {
     // FASE 4-OFFLINE: usuario decide
     const choice = await showOfflineDecisionInSplash();
