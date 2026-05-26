@@ -248,6 +248,11 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '3.2.0': [
+    'Nueva pantalla de carga al iniciar la app: antes de abrir tus datos, ahora primero busca actualizaciones disponibles (espera hasta 60 segundos). Si hay una actualización pendiente, se descarga e instala automáticamente — esto protege tu información de bugs que podrían afectarla.',
+    'Si no tienes conexión a internet, la app te muestra una ventana donde puedes elegir entre "Continuar" (abrir la app con la versión actual) o "Cerrar app" (salir sin abrir nada).',
+    'Durante la descarga e instalación de actualizaciones automáticas, la pantalla de carga muestra el progreso para que sepas qué está pasando.'
+  ],
   '3.1.2': [
     'Card "Deuda Personal" ahora muestra el desglose de a qué corresponde el valor (Compras, Avances, Diferidas e Int Intl cuando aplique), igual que ya lo hace la card "Pago Mínimo". Así puedes ver de un vistazo qué parte de tu deuda del corte viene de cada concepto.',
     'Ventana de "Novedades de la Versión" arreglada: cuando hay muchos cambios, ahora la ventana mantiene un tamaño compacto y solo la lista del medio hace scroll. El título y el botón "Entendido" quedan siempre visibles.'
