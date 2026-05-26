@@ -248,6 +248,10 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '3.2.1': [
+    'Pantalla de carga arreglada: ahora se ve correctamente durante todo el chequeo de actualizaciones, sin parpadeos. La ventana principal solo aparece cuando la pantalla de carga termina y se cierra.',
+    'Vista de "Problemas de conexión" arreglada: ahora aparece correctamente cuando no hay internet (antes la app pensaba que un error de red rápido era "no hay actualización disponible" y arrancaba sin preguntar).'
+  ],
   '3.2.0': [
     'Nueva pantalla de carga al iniciar la app: antes de abrir tus datos, ahora primero busca actualizaciones disponibles (espera hasta 60 segundos). Si hay una actualización pendiente, se descarga e instala automáticamente — esto protege tu información de bugs que podrían afectarla.',
     'Si no tienes conexión a internet, la app te muestra una ventana donde puedes elegir entre "Continuar" (abrir la app con la versión actual) o "Cerrar app" (salir sin abrir nada).',

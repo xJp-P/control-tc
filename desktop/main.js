@@ -67,11 +67,9 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false
     },
-    show: false
+    show: false   // se muestra explícitamente desde whenReady DESPUÉS de cerrar el splash
   });
 
-  mainWindow.maximize();
-  mainWindow.show();
   mainWindow.loadURL(`http://127.0.0.1:${PORT}`);
 
   if (process.env.NODE_ENV === 'development') {
@@ -261,8 +259,10 @@ async function checkMacUpdateAvailable() {
     }
     return 'skip';
   } catch (e) {
-    console.log('Mac update check error:', e.message);
-    return 'skip';
+    // Error de red (sin internet, DNS roto, etc) → tratar como 'timeout' para que
+    // aparezca la vista offline en vez de saltar silenciosamente al arranque.
+    console.log('Mac update check error (treating as offline):', e.message);
+    return 'timeout';
   }
 }
 
@@ -294,9 +294,11 @@ function checkWindowsUpdateAvailable() {
     const onErr = (err) => {
       if (settled) return;
       settled = true;
-      console.log('Win update check error:', err && err.message);
+      // Error de red / 404 / latest.yml ausente → tratar como 'timeout' para que
+      // aparezca la vista offline en vez de saltar silenciosamente al arranque.
+      console.log('Win update check error (treating as offline):', err && err.message);
       cleanup();
-      resolve('skip');
+      resolve('timeout');
     };
     function cleanup() {
       autoUpdater.removeListener('update-available', onAvail);
@@ -728,17 +730,23 @@ app.whenReady().then(async () => {
   createWindow();
   setupAutoUpdater();   // listeners + IPC handlers para el banner in-app
 
-  // Cerrar splash cuando la ventana principal esté lista
-  const closeSplash = () => {
-    if (splashAlive()) { splashWin.close(); }
-    splashWin = null;
-  };
-  if (mainWindow) {
-    mainWindow.once('ready-to-show', closeSplash);
-    // Fallback por si ready-to-show no dispara (ej. carga muy rápida ya pasada)
-    setTimeout(closeSplash, 4000);
-  } else {
-    closeSplash();
+  // Esperar a que la ventana principal esté lista (HTML cargado), luego cerrar
+  // el splash y RECIÉN AHÍ mostrar/maximizar el mainWindow. Esto evita que la
+  // ventana maximizada aparezca encima del splash y le robe foco visual.
+  await new Promise((resolve) => {
+    if (!mainWindow) return resolve();
+    let done = false;
+    const finish = () => { if (done) return; done = true; resolve(); };
+    mainWindow.once('ready-to-show', finish);
+    setTimeout(finish, 5000); // fallback hard cap
+  });
+
+  if (splashAlive()) { splashWin.close(); }
+  splashWin = null;
+
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.maximize();
+    mainWindow.show();
   }
 
   app.on('activate', () => {
