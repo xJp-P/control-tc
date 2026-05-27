@@ -130,8 +130,9 @@ button:hover{opacity:0.88;}
 <div id="vUpdateError" style="display:none;">
 <div class="warnIcon">!</div>
 <div class="offTitle">Error al actualizar</div>
-<div class="offMsg" id="updateErrorMsg">No se pudo descargar la actualizacion. Por favor cierra la app y abrela de nuevo para reintentar.</div>
+<div class="offMsg" id="updateErrorMsg">No se pudo descargar la nueva version. Puedes cerrar la app e intentar nuevamente, o continuar usando la version actual bajo tu propio riesgo.</div>
 <div class="btnRow">
+<button id="btnContinueUpdate">Continuar de todos modos</button>
 <button id="btnQuitUpdate">Cerrar app</button>
 </div>
 </div>
@@ -140,7 +141,8 @@ button:hover{opacity:0.88;}
 var ipc=require('electron').ipcRenderer;
 document.getElementById('btnContinue').addEventListener('click',function(){ipc.send('splash-decision','continue');});
 document.getElementById('btnQuit').addEventListener('click',function(){ipc.send('splash-decision','quit');});
-document.getElementById('btnQuitUpdate').addEventListener('click',function(){ipc.send('splash-update-error-quit');});
+document.getElementById('btnQuitUpdate').addEventListener('click',function(){ipc.send('splash-update-error','quit');});
+document.getElementById('btnContinueUpdate').addEventListener('click',function(){ipc.send('splash-update-error','continue');});
 </script></body></html>`;
 }
 
@@ -202,15 +204,24 @@ function updateSplashCountdown(seconds) {
 
 function showUpdateErrorInSplash(version) {
   return new Promise((resolve) => {
-    if (!splashAlive()) return resolve();
+    if (!splashAlive()) return resolve('quit');
     const v = String(version || '').replace(/'/g, "\\'");
     const msg = v
-      ? `No se pudo descargar la actualizacion v${v}. Por favor cierra la app y abrela de nuevo para reintentar.`
-      : `No se pudo descargar la actualizacion. Por favor cierra la app y abrela de nuevo para reintentar.`;
+      ? `No se pudo descargar la nueva version v${v}. Puedes cerrar la app e intentar nuevamente, o continuar usando la version actual bajo tu propio riesgo.`
+      : `No se pudo descargar la nueva version. Puedes cerrar la app e intentar nuevamente, o continuar usando la version actual bajo tu propio riesgo.`;
     splashWin.webContents.executeJavaScript(
       `(function(){var a=document.getElementById('vLoading');var b=document.getElementById('vOffline');var c=document.getElementById('vUpdateError');if(a)a.style.display='none';if(b)b.style.display='none';if(c)c.style.display='flex';var m=document.getElementById('updateErrorMsg');if(m)m.textContent='${msg.replace(/'/g, "\\'")}';})();`
     ).catch(() => {});
-    ipcMain.once('splash-update-error-quit', () => resolve());
+    ipcMain.once('splash-update-error', (_, choice) => {
+      if (choice === 'continue' && splashAlive()) {
+        // Restaurar vista loading antes de caer a FASE 4b (mismo patrón estético
+        // que showOfflineDecisionInSplash con 'continue').
+        splashWin.webContents.executeJavaScript(
+          `(function(){var a=document.getElementById('vLoading');var c=document.getElementById('vUpdateError');if(c)c.style.display='none';if(a)a.style.display='flex';var m=document.getElementById('splashMsg');if(m)m.textContent='Iniciando...';var cd=document.getElementById('countdown');if(cd)cd.textContent='';var b=document.getElementById('barWrap');if(b)b.classList.remove('show');var bar=document.getElementById('splashBar');if(bar)bar.style.width='0%';})();`
+        ).catch(() => {});
+      }
+      resolve(choice === 'continue' ? 'continue' : 'quit');
+    });
   });
 }
 
@@ -374,7 +385,7 @@ function macDownloadAndInstallAtBoot(version) {
     const zipPath = path.join(tmpDir, 'update.zip');
 
     try { fs.mkdirSync(tmpDir, { recursive: true }); } catch (_) {}
-    updateSplashMessage(`Descargando v${version}...`, 0);
+    updateSplashMessage(`Descargando v${version}... 0%`, 0);
 
     httpsGet(zipUrl).then((res) => {
       const total = parseInt(res.headers['content-length'] || '0', 10);
@@ -383,7 +394,8 @@ function macDownloadAndInstallAtBoot(version) {
       res.on('data', (chunk) => {
         downloaded += chunk.length;
         if (total > 0) {
-          updateSplashMessage(`Descargando v${version}...`, Math.round((downloaded / total) * 100));
+          const pct = Math.round((downloaded / total) * 100);
+          updateSplashMessage(`Descargando v${version}... ${pct}%`, pct);
         }
       });
       res.pipe(file);
@@ -442,7 +454,8 @@ function winDownloadAndInstallAtBoot() {
 
     const onProgress = (p) => {
       const pct = Math.round((p && p.percent) || 0);
-      updateSplashMessage(`Descargando v${pendingUpdateVersion || ''}...`, pct);
+      const v = pendingUpdateVersion || '';
+      updateSplashMessage(`Descargando v${v}... ${pct}%`, pct);
     };
     const onDownloaded = () => {
       cleanup();
@@ -722,7 +735,7 @@ app.whenReady().then(async () => {
   if (decision === 'install') {
     // FASE 4a: descargar + instalar (NO toca BD)
     const version = pendingUpdateVersion || '';
-    updateSplashMessage(`Descargando v${version}...`, 0);
+    updateSplashMessage(`Descargando v${version}... 0%`, 0);
     let ok;
     if (process.platform === 'darwin') {
       ok = await macDownloadAndInstallAtBoot(version);
@@ -733,12 +746,16 @@ app.whenReady().then(async () => {
       // El proceso de instalación reinicia/reemplaza la app. No continuamos.
       return;
     }
-    // FASE 4a falló: forzar al usuario a cerrar y reabrir para reintentar.
-    // No caemos a FASE 4b con la versión vieja — eso defeatea el propósito
-    // del boot protegido (la actualización podía contener un fix crítico de BD).
-    await showUpdateErrorInSplash(version);
-    app.quit();
-    return;
+    // FASE 4a falló. Damos al usuario la opción de cerrar y reintentar (default,
+    // recomendado por seguridad de datos) o continuar bajo su propio riesgo —
+    // útil cuando el servidor de releases tiene un problema temporal y el
+    // usuario necesita usar la app igual.
+    const choice = await showUpdateErrorInSplash(version);
+    if (choice === 'quit') {
+      app.quit();
+      return;
+    }
+    // choice === 'continue' → cae a FASE 4b con la versión actual.
   } else if (decision === 'timeout') {
     // FASE 4-OFFLINE: usuario decide
     const choice = await showOfflineDecisionInSplash();

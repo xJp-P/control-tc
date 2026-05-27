@@ -248,6 +248,10 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '3.2.3': [
+    'Si la descarga de una actualización falla, ahora puedes elegir entre dos opciones: "Cerrar app" (lo recomendado, para reintentar luego) o "Continuar de todos modos" (abrir la app con la versión actual cuando necesitas usarla sí o sí, por ejemplo si el servidor de actualizaciones está temporalmente caído). Antes solo podías cerrar.',
+    'Durante la descarga, el splash ahora muestra el porcentaje en texto junto a la barra (ej. "Descargando v3.2.3... 45%"), no solo en la barra de progreso.'
+  ],
   '3.2.2': [
     'Si la descarga de una actualización falla, la app ya no arranca silenciosamente con la versión anterior. Ahora muestra un mensaje claro y un único botón "Cerrar app" para que la abras de nuevo y reintente — así no te quedas atrapado en una versión vieja sin darte cuenta.'
   ],
