@@ -1,16 +1,16 @@
 # Estado del Proyecto — Control TC
 
-**Versión:** 2.7.4  
-**Fecha de pausa:** 2026-05-XX  
+**Versión:** 3.3.0  
+**Última actualización:** 2026-05-28  
 **Repositorio:** https://github.com/xJp-P/control-tc
 
 ---
 
 ## Resumen Ejecutivo
 
-App de escritorio (Electron + React + SQLite) para gestión personal de tarjetas de crédito. Soporta múltiples bancos con motores de cálculo diferenciados, extractos mensuales, amortización de avances y diferidas, bolsillo, deudas de terceros y actualizaciones automáticas desde GitHub Releases.
+App de escritorio (Electron + React + SQLite) para gestión personal de tarjetas de crédito. Soporta múltiples bancos con motores de cálculo diferenciados, extractos mensuales bimonetarios (COP/USD), amortización de avances y diferidas, bolsillo, deudas de terceros y actualizaciones automáticas desde GitHub Releases.
 
-La versión 2.6.5 es la última versión funcional y estable. Este archivo documenta el estado exacto en que se archivó el proyecto.
+Proyecto **activo**. La versión actual es **3.3.0**. Este archivo documenta el estado vigente y el historial de versiones.
 
 ---
 
@@ -77,9 +77,10 @@ npm run server     # Solo el backend Express (para depurar sin Electron)
 │       ├── terceros.js      # /api/terceros (toggle + abonar)
 │       ├── dashboard.js     # /api/dashboard
 │       ├── proyecciones.js  # /api/proyecciones
-│       └── misc.js          # /api/backup, /api/log, /api/sync, /api/scrape-tasas
+│       ├── calculadora.js   # /api/calculadora (amortización avances/diferidas)
+│       └── misc.js          # /api/backup, /api/log, /api/sync, /api/scrape-tasas, /api/trm-actual
 ├── public/
-│   └── index.html       # UI completa en React 18 UMD (un solo archivo, ~9500 líneas)
+│   └── index.html       # UI completa en React 18 UMD (un solo archivo, ~5800 líneas)
 ├── build/
 │   ├── icon.ico         # Icono Windows
 │   └── icon.png         # Icono general (Mac y otros)
@@ -87,7 +88,7 @@ npm run server     # Solo el backend Express (para depurar sin Electron)
 │   └── workflows/
 │       └── build.yml    # CI/CD: compila y publica releases en GitHub
 ├── .claudesignore       # Excluye node_modules, dist, build, archivos .db
-├── package.json         # v2.3.0 — main: "desktop/main.js", files apunta a desktop/ y backend/
+├── package.json         # v3.3.0 — main: "desktop/main.js", files apunta a desktop/ y backend/
 └── ESTADO_DEL_PROYECTO.md  # Este archivo — versión actual, changelog y arquitectura
 ```
 
@@ -102,14 +103,23 @@ npm run server     # Solo el backend Express (para depurar sin Electron)
 | Nu Colombia            | Mastercard        | 1-de-1 sin intereses corrientes     | Cuota 1 sin intereses | COP único               | PDF oficial       |
 | RappiCard (Davivienda) | Visa              | 1-de-1 COP sin intereses corrientes | Interés desde cuota 1 | COP único               | PDF               |
 
+> **Bimonetario (desde v3.1.0):** Mastercard y Amex Bancolombia manejan extracto dual — la deuda USD se rastrea y salda aparte de la COP (`extractos.estado` vs `estado_usd`). La tasa USD por defecto se toma de la **TRM diaria** del Banco de la República (`GET /api/trm-actual`, dataset abierto de datos.gov.co), con fallback a config.
+>
+> **Intereses internacionales (INTL):** el cobro de intereses sobre compras intl pagadas en COP (Apple, Rappi, MercadoPago) está validado solo con extracto real de **Bancolombia Visa** (`aplicaIntInternacional`). Para otras franquicias/bancos se omite hasta tener evidencia.
+
 ---
 
-## Funcionalidades Completas y Operativas (v2.3.0)
+## Funcionalidades Completas y Operativas (v3.3.0)
 
 ### Multi-banco y Multi-tarjeta
 - Motor de cálculo diferenciado por banco y franquicia
 - Tasas MV independientes por tarjeta (avances y diferidas)
 - Actualización automática de tasas desde web/PDF de cada banco
+
+### Bimonetario (COP/USD) — desde v3.1.0
+- Soporte nativo de deuda en dólares para Mastercard/Amex Bancolombia (extracto dual): saldar la porción COP y la USD por separado
+- TRM diaria automática del Banco de la República (datos.gov.co) como tasa por defecto y para estimar cupo usado en COP
+- Bolsillo en USD (`monto_bolsillo_usd`, `bolsillo_cuotas.moneda`)
 
 ### Compras
 - Compras en COP y USD con conversión automática por tasa
@@ -117,6 +127,9 @@ npm run server     # Solo el backend Express (para depurar sin Electron)
 - **Bolsillo per-cuota para diferidas**: cada cuota (1/3, 2/3, 3/3) tiene su propio estado de bolsillo independiente, almacenado en tabla `bolsillo_cuotas`
 - **Dividir compras** entre varias personas con desglose visual
 - Bolsillo por parte individual en compras divididas (incluyendo cuotas de diferidas divididas)
+- **Convertir compra dividida → 100% personal** (v3.3.0): funde las partes en una sola compra propia; bloquea la conversión si un tercero ya reembolsó (con confirmación destructiva para forzarla)
+- Número de cuotas inmutable al editar (solo se define al crear); el estado de bolsillo se preserva/recalcula al editar otros campos
+- Validaciones de división: no permite filas sin persona ni personas duplicadas
 
 ### Avances
 - Tabla de amortización completa (capital fijo + interés por tramos)
@@ -137,7 +150,7 @@ npm run server     # Solo el backend Express (para depurar sin Electron)
 - Se ejecuta al iniciar la app para corregir inconsistencias
 - Redistribuye abonos a capital cronológicamente
 - Compras de extractos pagados no se revierten en sincronización
-- Pasos 1-10 bien definidos en `server.js`
+- Pasos definidos en `backend/config/db.js` (función `syncData`)
 
 ### Dashboard
 - Mega card Cupo Total con barra de progreso (color dinámico según uso)
@@ -160,6 +173,7 @@ npm run server     # Solo el backend Express (para depurar sin Electron)
 - Backup y restauración de la base de datos
 - Mover BD a ubicación personalizada (iCloud, OneDrive, etc.)
 - Actualizaciones automáticas desde GitHub Releases (Windows y Mac)
+- **Boot protegido (v3.2.0)**: al abrir, un splash chequea actualizaciones (max 60s) ANTES de conectar la BD; si hay una nueva versión se instala primero, blindando los datos de bugs en código viejo. Maneja sin-internet (vista offline) y errores de descarga (cerrar o continuar)
 - Changelog en-app al actualizar
 - Historial de acciones (log de operaciones)
 
@@ -168,8 +182,9 @@ npm run server     # Solo el backend Express (para depurar sin Electron)
 ## Pendientes y Decisiones de Diseño Conocidas
 
 ### Pendientes menores (no bloqueantes)
-- El cache `_nuCache` en `server.js` no se invalida si cambia el banco de una tarjeta — requiere reiniciar la app para reflejar el cambio.
+- Cache de banco/franquicia `_bancoCache` en `backend/helpers/banco.js`: invalidar con `clearBancoCache(id)` al editar una tarjeta; de lo contrario el cambio de banco/flag se refleja hasta reiniciar.
 - El workflow `build.yml` en Windows no declara explícitamente `setup-python` (aunque `windows-latest` lo trae preinstalado). No ha causado problemas.
+- **Próxima sesión pendiente:** parser de extractos (`backend/helpers/extractoParser.js` + `POST /api/extractos/import` + UI de subida) para importar histórico de tarjetas antiguas. Pedir formato/muestra al usuario antes de implementar.
 
 ### Decisiones de diseño importantes
 - **Pago mínimo es indivisible**: las compras solo se marcan como `pagado` cuando se paga el pago mínimo completo, respetando la lógica real de Bancolombia (el pago mínimo cubre compras + cuotas + intereses como un bloque).
@@ -180,11 +195,9 @@ npm run server     # Solo el backend Express (para depurar sin Electron)
 
 ## Base de Datos
 
-El esquema SQLite se crea y migra automáticamente en `server.js` al iniciar. Las migraciones están implementadas con bloques `try/catch` sobre `ALTER TABLE`.
+El esquema SQLite se crea y migra automáticamente en `backend/config/db.js` (función `initDb`) al iniciar. Las migraciones están implementadas con bloques `try/catch` sobre `ALTER TABLE`.
 
-**La BD NO está en el repositorio.** El usuario gestiona sus propios backups. La ruta por defecto es:
-- Windows: `%APPDATA%\control-tc\data.db`
-- Mac: `~/Library/Application Support/control-tc/data.db`
+**La BD NO está en el repositorio.** El usuario gestiona sus propios backups. La ruta por defecto es `%APPDATA%\CreditCardManager\data.db` (Windows). La ruta real se resuelve dinámicamente vía `db_location.json` en esa misma carpeta, que puede apuntar a una ubicación personalizada (Desktop/backup, iCloud, OneDrive, etc.).
 
 ---
 
@@ -192,6 +205,13 @@ El esquema SQLite se crea y migra automáticamente en `server.js` al iniciar. La
 
 | Versión | Cambios clave |
 |---------|---------------|
+| 3.3.0   | **Convertir compra dividida → 100% personal**: endpoint `merge-personal` transaccional (funde partes de un grupo, suma valores+bolsillo, soporta 1 cuota y diferidas) · Bloqueo 409 si un tercero ya reembolsó, con escape hatch `force:true` + doble confirmación destructiva · Fix: editar una compra ya no resetea el estado de bolsillo a pendiente (se recalcula dinámicamente) · Campo "Cuotas" bloqueado en edición (1↔N solo al crear) · Validaciones de división: sin filas vacías ni personas duplicadas |
+| 3.2.0–3.2.3 | **Boot protegido**: el arranque pasa por un splash que chequea actualizaciones (max 60s) ANTES de conectar la BD (4 fases en `desktop/main.js`), blindando los datos de bugs en código viejo · Vista offline sin internet (Continuar/Cerrar) · Error de descarga con "Cerrar app"/"Continuar de todos modos" · Porcentaje de descarga visible · `createApp` con lazy require dentro de `startBackend()` |
+| 3.1.0–3.1.2 | **Soporte bimonetario (COP/USD)** integral en compras, extractos, pagos y bolsillo (Mastercard/Amex Bancolombia con extracto dual) · TRM diaria del Banco de la República (datos.gov.co) · Rediseño de cards del dashboard "dos pisos" con saldo USD · Bolsillo en USD · Desglose de la card "Deuda Personal" (Compras/Avances/Diferidas/Int Intl) |
+| 3.0.0   | Convenciones para agentes (`CLAUDE.md`) · Campo `orden` en tarjetas (migration + backfill) · Sección colapsable "Historial / Inactivas" en nav · Exclusión de inactivas en aggregates del dashboard global |
+| 2.9.0   | Asistente INTL proactivo en `CompraForm` (aviso cuando la descripción coincide con histórico intl en Bancolombia Visa) · Iconos del changelog más legibles |
+| 2.8.0–2.8.3 | Inmutabilidad de registros (403 backend + ocultar botones edit/delete) · Badge "Pagado" unificado en columna Estado · Sync compra↔diferida + auto-heal retroactivo · Columna "Responsable" · Fusión columnas Bolsillo+Estado en Diferidas/Avances · Alineación pixel-perfect Compras↔Diferidas |
+| 2.7.x   | Integración Nu (`esNu`, interés $0 cuota 1) · Fixes de inmutabilidad temporal en navegación · Fechas de pago manuales (`fechas_pago_custom`) · Refactor bolsillo per-cuota para avances |
 | 2.6.5   | **Reconciliación matemática con extracto Bancolombia abril 2026 Visa Platinum**: cerramos ~80% del desfase histórico ($32,790 → $6,801 en pago mínimo) · **Modelo "saldo facturado" para avances Bancolombia**: el banco cobra intereses sobre `saldoInicio + cuotaCapital` (cycle 2+), no sobre saldo amortizado — confirmado matemáticamente vs extracto · Nuevo helper `avanceOpts(db, tarjetaId)` similar a `nuOpts` para diferidas · Engine `calcularAmortizacionAvance` acepta opts.esBancolombia · Todas las rutas que llaman al engine pasan los opts correctos · **Nuevo flag `es_internacional` en compras**: marca compras de Apple/Rappi/MercadoPago etc. que cobran en COP pero el banco trata como intl (acumulan intereses MV) · Migration en db.js, columna en SQL, checkbox UI debajo de "Compra en USD" · Fix syncData diferidas: solo liquidar si TODOS los ciclos involucrados tienen extracto pagado (antes liquidaba apenas las cuotas pasaban su corte, ocultando cuotas pendientes en el ciclo activo) |
 | 2.6.4   | Bolsillo per-cuota + cambios v2.6.2 (mismo changelog que 2.6.2 — bump para forzar update) |
 | 2.6.3   | Docs: actualización de ESTADO_DEL_PROYECTO con changelog completo de v2.6.1 y v2.6.2 |

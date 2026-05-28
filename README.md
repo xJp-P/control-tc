@@ -20,7 +20,8 @@ App de escritorio para gestión personal de tarjetas de crédito. Soporta múlti
 ## Funcionalidades
 
 - **Multi-banco y multi-tarjeta** — motor de cálculo diferenciado por banco y franquicia, tasas MV independientes por tarjeta
-- **Compras** — COP y USD, bolsillo (total o parcial), dividir entre personas; flag `Compra internacional` para procesadores intl que cobran en COP (Apple, Rappi, MercadoPago); registro USD opcional
+- **Bimonetario (COP/USD)** — deuda nativa en dólares para Mastercard/Amex Bancolombia (extracto dual: saldar la porción COP y la USD por separado), bolsillo en USD, y TRM diaria automática del Banco de la República (datos.gov.co) como tasa por defecto y para estimar el cupo usado en COP
+- **Compras** — COP y USD, bolsillo (total o parcial), dividir entre personas; flag `Compra internacional` para procesadores intl que cobran en COP (Apple, Rappi, MercadoPago); registro USD opcional. Una compra dividida puede convertirse de vuelta a **100% personal** (fusiona las partes; protege el dinero ya reembolsado por terceros con doble confirmación)
 - **Intereses internacionales (INTL)** — cálculo automático de intereses corrientes sobre compras marcadas como `es_internacional` en tarjetas que aplican (hoy: Bancolombia Visa). Desglose en cards "Deuda Personal" (porción propia) y "Me Deben Corte" (porción de terceros). En compras divididas, cada parte recibe su porción proporcional del interés
 - **Avances** — tabla de amortización completa, abonos a capital con redistribución cronológica; modelo "saldo facturado" para Bancolombia
 - **Diferidas** — amortización a X cuotas con badge de progreso (1/3, 2/3…), diferidas divididas, bolsillo per-cuota (cada cuota guarda monto apartado independiente)
@@ -28,7 +29,8 @@ App de escritorio para gestión personal de tarjetas de crédito. Soporta múlti
 - **Dashboard** — cupo total con barra de progreso, deuda vs disponible, desglose por tarjeta, intereses del mes con detalle "Int Intl", me deben (vista global y por tarjeta)
 - **Terceros** — tracking de deudas por persona, abonos parciales, intl interest atribuido al tercero correspondiente
 - **Proyecciones** — pagos futuros a N meses
-- **Sistema** — tema claro/oscuro, backup y restauración de BD, mover BD a ubicación personalizada (iCloud, OneDrive…), actualizaciones automáticas, changelog en-app, historial de acciones
+- **Sistema** — tema claro/oscuro, backup y restauración de BD, mover BD a ubicación personalizada (iCloud, OneDrive…), changelog en-app, historial de acciones
+- **Boot protegido** — al abrir, una pantalla de carga busca actualizaciones (hasta 60s) **antes** de conectar la base de datos; si hay una nueva versión se instala primero, protegiendo tus datos de bugs en código viejo. Maneja sin-internet (vista offline con Continuar/Cerrar) y errores de descarga (cerrar o continuar bajo tu riesgo)
 
 ---
 
@@ -57,9 +59,7 @@ xattr -cr /Applications/Control\ TC.app
 
 El esquema SQLite se crea y migra automáticamente al iniciar la app. La BD **no** está en el repositorio — cada usuario gestiona sus propios backups.
 
-Ruta por defecto:
-- **Windows:** `%APPDATA%\control-tc\data.db`
-- **Mac:** `~/Library/Application Support/control-tc/data.db`
+Ruta por defecto: `%APPDATA%\CreditCardManager\data.db` (Windows). La ubicación real se resuelve vía `db_location.json` en esa carpeta y puede apuntarse a un destino personalizado (Desktop, iCloud, OneDrive, etc.) desde la app.
 
 ---
 
