@@ -248,6 +248,14 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '3.3.0': [
+    'Ahora puedes convertir una compra dividida entre personas de vuelta a una compra 100% personal: abre la compra dividida, desmarca "Dividir entre personas" y guarda. Las partes se fusionan en una sola compra tuya y el dinero que tuvieras apartado en el bolsillo se conserva sumado. Antes tocaba borrar la compra y volverla a crear.',
+    'Funciona igual para compras de una sola cuota y para compras a cuotas (diferidas).',
+    'Protección de datos: si alguno de tus terceros ya te había reembolsado dinero por esa compra, la app te avisa con el detalle de cuánto y de quién, y te pide una confirmación extra antes de eliminar ese registro al convertir.',
+    'Corregido: al editar una compra (fecha, descripción, monto, persona, etc.) el estado de Bolsillo ya no se pierde. Antes, editar cualquier detalle de una compra que tenías en "Bolsillo" o "Bolsillo Parcial" la devolvía a "Pendiente" aunque el dinero apartado siguiera ahí. Ahora el estado se recalcula solo según lo que tengas apartado frente al total.',
+    'Al editar una compra, el número de cuotas queda fijo (solo se define al crear). Para cambiar una compra de contado a cuotas o viceversa, elimínala y créala de nuevo. Esto evita que una compra quede "a medias" entre los dos tipos.',
+    'Compras divididas más seguras: ahora la app no te deja guardar si dejas una división sin persona asignada, ni si repites a la misma persona en varias filas (te pide sumar sus montos en una sola). Así no se crean registros incompletos o duplicados.'
+  ],
   '3.2.3': [
     'Si la descarga de una actualización falla, ahora puedes elegir entre dos opciones: "Cerrar app" (lo recomendado, para reintentar luego) o "Continuar de todos modos" (abrir la app con la versión actual cuando necesitas usarla sí o sí, por ejemplo si el servidor de actualizaciones está temporalmente caído). Antes solo podías cerrar.',
     'Durante la descarga, el splash ahora muestra el porcentaje en texto junto a la barra (ej. "Descargando v3.2.3... 45%"), no solo en la barra de progreso.'
@@ -1623,6 +1631,11 @@ function CardResumen({ tarjeta, onDataChange }) {
       });
       return;
     }
+    // Conversión grupo dividido → 100% personal
+    if (compraData._mergePersonal) {
+      handleMergePersonal(compraData._grupoId);
+      return;
+    }
     // Edición de grupo existente
     if (compraData._editGrupo) {
       handleEditGrupo(compraData).then(() => { setShowCompraModal(false); refreshAll(); toast('Compra dividida actualizada'); });
@@ -1632,6 +1645,32 @@ function CardResumen({ tarjeta, onDataChange }) {
     const method = editCompra ? 'PUT' : 'POST';
     const url = editCompra ? '/compras/' + editCompra.id : '/compras';
     api(url, { method, body: compraData }).then(() => { setShowCompraModal(false); setShowMovModal(false); refreshAll(); toast('Compra guardada'); });
+  }
+  async function handleMergePersonal(grupoId) {
+    // Primera confirmación (no destructiva).
+    if (!await confirmDialog(
+      'Esta compra dividida se fusionará en una sola compra 100% personal. El dinero que tengas apartado (bolsillo) de cada parte se conserva sumado. ¿Continuar?',
+      { confirmText: 'Convertir a personal' }
+    )) return;
+    // Intento sin force.
+    let resp = await api('/compras/grupo/' + grupoId + '/merge-personal', { method: 'POST', body: { force: false } });
+    // Bloqueo crítico: hay reembolsos reales de terceros → segunda confirmación destructiva.
+    if (resp && resp.needsForce) {
+      const lista = (resp.detalle || []).map(d => '• ' + d.persona_nombre + ': ' + fmtCOP(d.monto)).join('\n');
+      const ok = await confirmDialog(
+        'ATENCIÓN: hay dinero que tus terceros ya te reembolsaron registrado en esta compra:\n\n' + lista +
+        '\n\nTotal: ' + fmtCOP(resp.total) +
+        '\n\nSi continúas, estos abonos se ELIMINARÁN y la compra quedará 100% personal. Esta acción no se puede deshacer.',
+        { title: 'Confirmar conversión destructiva', confirmText: 'Eliminar abonos y convertir' }
+      );
+      if (!ok) return;
+      resp = await api('/compras/grupo/' + grupoId + '/merge-personal', { method: 'POST', body: { force: true } });
+    }
+    if (resp && resp.ok) {
+      setShowCompraModal(false); refreshAll(); toast('Compra convertida a 100% personal');
+    } else {
+      toastErr((resp && resp.error) || 'No se pudo convertir la compra');
+    }
   }
   async function handleEditGrupo({ _grupoId, _partesOriginales, fecha, descripcion, valor_usd, tasa_usd, es_internacional, splits, remainder }) {
     // Construir lista completa de nuevas partes: personas asignadas + parte personal
@@ -3019,7 +3058,10 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
   // Checkbox unificado: marca la compra como internacional (acumula intereses) y opcionalmente
   // permite registrar valor USD + tasa (datos informativos, no obligatorios).
   const [esInternacional, setEsInternacional] = useState(item ? !!(item.es_internacional || item.valor_usd) : false);
-  const [numCuotas, setNumCuotas] = useState(item ? (item.num_cuotas || 1) : 1);
+  // Al editar una diferida, el número real de cuotas viene en cuotas_total (num_cuotas no
+  // existe en la fila compra). Lo usamos para que el campo (bloqueado en edición) muestre
+  // el valor correcto y la lógica de estado trate la compra como diferida.
+  const [numCuotas, setNumCuotas] = useState(item ? (item.num_cuotas || item.cuotas_total || 1) : 1);
   const [cobrarIntereses, setCobrarIntereses] = useState(true);
   const [dividir, setDividir] = useState(item && item._isGrupo ? true : false);
   const [splits, setSplits] = useState(() => {
@@ -3085,6 +3127,29 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
     let tasaNum = esInternacional && tasaUsd !== '' && !isNaN(parseFloat(tasaUsd)) ? parseFloat(tasaUsd) : null;
     if (tasaNum == null && esInternacional && _isDualEarly && trmInfo && trmInfo.trm) {
       tasaNum = Math.round(trmInfo.trm);
+    }
+
+    // Conversión: grupo dividido con "Dividir" DESMARCADO → fusionar en compra personal.
+    // El backend hace el merge transaccional (suma valores + bolsillo, maneja diferidas).
+    if (item && item._isGrupo && !dividir) {
+      onSave({ _mergePersonal: true, _grupoId: item._grupoId });
+      return;
+    }
+
+    // ── Validaciones estrictas del modo dividido (blindan la BD contra registros corruptos) ──
+    // Aplican tanto al crear como al editar un grupo. NO aplican al merge-personal (dividir=false).
+    if (dividir) {
+      // 1) Toda fila debe tener una persona asignada (evita "registros fantasma" sin nombre).
+      if (splits.length === 0 || splits.some(sp => !sp.persona_id)) {
+        toastErr('Debes asignar una persona a cada división, elimina las divisiones sobrantes o desmarca la casilla de dividir.');
+        return;
+      }
+      // 2) No se puede repetir la misma persona en varias filas.
+      const idsSeleccionados = splits.map(sp => String(sp.persona_id));
+      if (new Set(idsSeleccionados).size !== idsSeleccionados.length) {
+        toastErr('No puedes asignar a la misma persona varias veces en una compra dividida. Por favor, suma sus montos en una sola fila.');
+        return;
+      }
     }
 
     // Edicion de grupo existente: diff splits vs originales, sin crear nuevas diferidas
@@ -3183,13 +3248,32 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
       toast('Diferida creada a ' + numCuotas + ' cuotas' + (cobrarIntereses ? '' : ' (sin intereses)'));
     }
 
+    // Estado dinámico:
+    //  - Diferida (cuotas > 1, o se edita una compra que ya es diferida): siempre 'diferida'.
+    //    Nota: al editar una diferida, item.num_cuotas viene undefined (el dato real es
+    //    cuotas_total), por eso numCuotas cae a 1 — de ahí el chequeo de item.estado/diferida_id.
+    //  - 1 cuota: se DERIVA del bolsillo ya apartado vs el total. Evita el bug de resetear
+    //    'bolsillo'/'bolsillo_parcial' a 'pendiente' al editar cualquier detalle de la compra.
+    const esDiferidaFinal = numCuotas > 1 || (item && (item.estado === 'diferida' || item.diferida_id));
+    let estadoCalculado;
+    if (esDiferidaFinal) {
+      estadoCalculado = 'diferida';
+    } else {
+      const mbCop = item ? (item.monto_bolsillo || 0) : 0;
+      const mbUsd = item ? (item.monto_bolsillo_usd || 0) : 0;
+      const esUsdPura = (usdNum > 0) && !totalCop;
+      const target = esUsdPura ? usdNum : totalCop;
+      const bol = esUsdPura ? mbUsd : mbCop;
+      estadoCalculado = (target > 0 && bol >= target) ? 'bolsillo' : (bol > 0 ? 'bolsillo_parcial' : 'pendiente');
+    }
+
     // Save the compra con diferida_id vinculado
     const compraData = {
       fecha, descripcion, valor_cop: totalCop,
       valor_usd: usdNum,
       tasa_usd: tasaNum,
       persona_id: personaId ? parseInt(personaId) : null,
-      estado: numCuotas > 1 ? 'diferida' : 'pendiente', ciclo,
+      estado: estadoCalculado, ciclo,
       notas: numCuotas > 1 ? (notas ? notas + ' | ' : '') + 'Diferida a ' + numCuotas + ' cuotas' : notas,
       diferida_id,
       es_internacional: esInternacional ? 1 : 0
@@ -3223,7 +3307,7 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
         e('label', { className: 'form-label' }, 'Fecha'),
         e('input', { type: 'date', className: 'form-input', value: fecha, onChange: ev => setFecha(ev.target.value), required: true })
       ),
-      !dividir && e('div', { className: 'form-group' },
+      !dividir && !(item && item._isGrupo) && e('div', { className: 'form-group' },
         e('label', { className: 'form-label' }, 'Persona'),
         e('select', { className: 'form-select', value: personaId, onChange: ev => setPersonaId(ev.target.value) },
           e('option', { value: '' }, 'Personal'),
@@ -3315,15 +3399,19 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
       ];
     })(),
     e('div', { style: { marginBottom: dividir ? 6 : 12 } },
-      e('label', { style: { cursor: item && item._isGrupo ? 'default' : 'pointer', fontSize: 13, opacity: item && item._isGrupo ? 0.7 : 1 } },
-        e('input', { type: 'checkbox', checked: dividir, onChange: ev => { if (!(item && item._isGrupo)) setDividir(ev.target.checked); }, disabled: !!(item && item._isGrupo), style: { marginRight: 6 } }),
+      e('label', { style: { cursor: 'pointer', fontSize: 13 } },
+        e('input', { type: 'checkbox', checked: dividir, onChange: ev => setDividir(ev.target.checked), style: { marginRight: 6 } }),
         'Dividir entre personas'
       ),
       dividir && e('div', { style: { fontSize: 11, color: 'var(--text-muted)', marginTop: 4, marginLeft: 20 } },
         item && item._isGrupo
           ? 'Edita los montos por persona o agrega/quita personas. Cuotas no se modifican.'
           : 'Se crean entradas separadas por cada parte. Si los montos suman el total exacto, tu parte queda en $0 y toda la compra le corresponde a los terceros.'
-      )
+      ),
+      // Aviso de conversión: grupo dividido con el check desmarcado.
+      item && item._isGrupo && !dividir && e('div', {
+        style: { fontSize: 11, color: '#fb923c', marginTop: 6, marginLeft: 20, padding: '6px 10px', background: 'rgba(251,146,60,0.08)', border: '1px solid rgba(251,146,60,0.25)', borderRadius: 6 }
+      }, 'Al guardar, esta compra dividida se fusionará en una sola compra 100% personal. Las partes de terceros desaparecerán.')
     ),
     dividir && e('div', { style: { background: 'var(--bg-tertiary)', borderRadius: 8, padding: '12px', marginBottom: 12 } },
       splits.map((sp, i) => e('div', { key: i, style: { display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 } },
@@ -3374,8 +3462,14 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
     e('div', { className: 'form-row' },
       !(item && item._isGrupo) && e('div', { className: 'form-group' },
         e('label', { className: 'form-label' }, 'Cuotas'),
-        e('input', { type: 'number', className: 'form-input', value: numCuotas, onChange: ev => setNumCuotas(ev.target.value), min: 1, max: 60 }),
-        numCuotas > 1 && e('div', null,
+        // En modo edición el campo se BLOQUEA: cambiar la naturaleza de la deuda
+        // (1 cuota ↔ diferida) durante una edición no construye/destruye los registros
+        // hijos en la BD y deja datos inconsistentes. Las cuotas solo se definen al crear.
+        e('input', { type: 'number', className: 'form-input', value: numCuotas, onChange: ev => setNumCuotas(ev.target.value), min: 1, max: 60, disabled: !!item, style: item ? { opacity: 0.6, cursor: 'not-allowed' } : undefined }),
+        item && e('div', { className: 'form-hint', style: { color: 'var(--text-muted)' } },
+          'El número de cuotas no se puede cambiar al editar. Para cambiarlo, elimina la compra y créala de nuevo.'
+        ),
+        !item && numCuotas > 1 && e('div', null,
           e('div', { style: { marginTop: 6, marginBottom: 4 } },
             e('label', { style: { cursor: 'pointer', fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 } },
               e('input', { type: 'checkbox', checked: cobrarIntereses, onChange: ev => setCobrarIntereses(ev.target.checked) }),

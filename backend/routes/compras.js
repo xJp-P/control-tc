@@ -214,6 +214,126 @@ module.exports = function(db, { logAction, tjNombre }) {
     }
   });
 
+  // ── Convertir compra dividida (grupo) → 100% personal ──────────────
+  // Fusiona todas las partes de un grupo_id en una sola compra personal
+  // (persona_id=NULL). Suma valores y bolsillo (= mi plata apartada, se conserva).
+  // Soporta compras a 1 cuota y diferidas (merge matemáticamente limpio: la
+  // amortización es lineal en el monto, así que el resultado per-cuota = suma
+  // de las partes).
+  //
+  // Bloqueo crítico: si alguna parte tiene reembolso REAL de tercero
+  // (tercero_pagado=1 o tercero_monto_abonado>0), responde 409 con el detalle y
+  // NO procede — salvo que el cliente envíe { force: true } (escape hatch con
+  // doble confirmación en la UI). force borra esos abonos de terceros.
+  router.post('/grupo/:grupoId/merge-personal', (req, res) => {
+    const grupoId = req.params.grupoId;
+    const force = !!(req.body && req.body.force);
+
+    const partes = db.prepare('SELECT * FROM compras WHERE grupo_id=?').all(grupoId);
+    if (!partes || partes.length === 0) return res.status(404).json({ error: 'Grupo no encontrado' });
+
+    // Inmutabilidad: ninguna parte puede caer en un ciclo con extracto pagado.
+    for (const p of partes) {
+      const ext = db.prepare("SELECT estado FROM extractos WHERE tarjeta_id=? AND ciclo=?").get(p.tarjeta_id, p.ciclo);
+      if (ext && ext.estado === 'pagado') {
+        return res.status(403).json({ error: 'No se puede convertir: el extracto del ciclo ' + p.ciclo + ' ya está pagado.' });
+      }
+    }
+
+    // Bloqueo crítico: reembolsos reales de terceros (no confundir con bolsillo, que es mi plata).
+    const conAbono = partes.filter(p => p.persona_id && (p.tercero_pagado || (p.tercero_monto_abonado || 0) > 0));
+    if (conAbono.length > 0 && !force) {
+      const detalle = conAbono.map(p => {
+        const per = db.prepare('SELECT nombre FROM personas WHERE id=?').get(p.persona_id);
+        const monto = (p.tercero_monto_abonado || 0) > 0 ? p.tercero_monto_abonado : p.valor_cop;
+        return { persona_nombre: per ? per.nombre : 'Tercero', monto: Math.round(monto) };
+      });
+      const total = detalle.reduce((s, d) => s + d.monto, 0);
+      return res.status(409).json({
+        error: 'tercero_abonos',
+        needsForce: true,
+        detalle,
+        total,
+        message: 'Hay dinero reembolsado por terceros que se eliminará si continúas.'
+      });
+    }
+
+    const esDiferida = partes.some(p => p.estado === 'diferida' && p.diferida_id);
+
+    const compraIdFinal = db.transaction(() => {
+      // Survivor: la parte personal si existe; si no, la primera parte.
+      const survivor = partes.find(p => p.persona_id == null) || partes[0];
+      const otras = partes.filter(p => p.id !== survivor.id);
+
+      const sumCop = partes.reduce((s, p) => s + (p.valor_cop || 0), 0);
+      const sumUsd = partes.reduce((s, p) => s + (p.valor_usd || 0), 0);
+
+      let survivorDiferidaId = survivor.diferida_id || null;
+      let bolsilloCop, bolsilloUsd;
+
+      if (esDiferida) {
+        // Diferida base: la del survivor, o la de cualquier parte que tenga.
+        let baseDif = survivor.diferida_id ? db.prepare('SELECT * FROM diferidas WHERE id=?').get(survivor.diferida_id) : null;
+        if (!baseDif) {
+          const anyP = partes.find(p => p.diferida_id);
+          if (anyP) baseDif = db.prepare('SELECT * FROM diferidas WHERE id=?').get(anyP.diferida_id);
+        }
+        if (baseDif) {
+          survivorDiferidaId = baseDif.id;
+          db.prepare('UPDATE diferidas SET monto=? WHERE id=?').run(sumCop, baseDif.id);
+          // Merge bolsillo_cuotas por (cuota_num, moneda) hacia el survivor.
+          const ph = partes.map(() => '?').join(',');
+          const allBol = db.prepare(`SELECT cuota_num, monto, COALESCE(moneda,'COP') as moneda FROM bolsillo_cuotas WHERE compra_id IN (${ph})`).all(...partes.map(p => p.id));
+          const agg = {};
+          allBol.forEach(b => { const k = b.cuota_num + '|' + b.moneda; agg[k] = (agg[k] || 0) + b.monto; });
+          db.prepare('DELETE FROM bolsillo_cuotas WHERE compra_id=?').run(survivor.id);
+          const insBol = db.prepare('INSERT INTO bolsillo_cuotas (compra_id, cuota_num, monto, moneda) VALUES (?,?,?,?)');
+          Object.keys(agg).forEach(k => {
+            if (agg[k] <= 0) return;
+            const [cn, mon] = k.split('|');
+            insBol.run(survivor.id, parseInt(cn), agg[k], mon);
+          });
+        }
+        // Recompute caches desde las cuotas agregadas del survivor.
+        const cCop = db.prepare("SELECT COALESCE(SUM(monto),0) as t FROM bolsillo_cuotas WHERE compra_id=? AND COALESCE(moneda,'COP')='COP'").get(survivor.id);
+        const cUsd = db.prepare("SELECT COALESCE(SUM(monto),0) as t FROM bolsillo_cuotas WHERE compra_id=? AND moneda='USD'").get(survivor.id);
+        bolsilloCop = cCop.t;
+        bolsilloUsd = cUsd.t;
+      } else {
+        // 1-cuota: bolsillo = suma de los caches de las partes.
+        bolsilloCop = partes.reduce((s, p) => s + (p.monto_bolsillo || 0), 0);
+        bolsilloUsd = partes.reduce((s, p) => s + (p.monto_bolsillo_usd || 0), 0);
+      }
+
+      // Survivor → personal.
+      db.prepare(`UPDATE compras SET persona_id=NULL, valor_cop=?, valor_usd=?, monto_bolsillo=?, monto_bolsillo_usd=?, grupo_id=NULL, tercero_pagado=0, tercero_monto_abonado=0, diferida_id=? WHERE id=?`)
+        .run(sumCop, sumUsd || null, bolsilloCop, bolsilloUsd, survivorDiferidaId, survivor.id);
+
+      // Recompute estado para 1-cuota (las diferidas conservan estado='diferida').
+      if (!esDiferida) {
+        const esUsdPura = (sumUsd > 0) && !sumCop;
+        const target = esUsdPura ? sumUsd : sumCop;
+        const bolCmp = esUsdPura ? bolsilloUsd : bolsilloCop;
+        const nuevoEstado = (target > 0 && bolCmp >= target) ? 'bolsillo' : (bolCmp > 0 ? 'bolsillo_parcial' : 'pendiente');
+        db.prepare('UPDATE compras SET estado=? WHERE id=?').run(nuevoEstado, survivor.id);
+      }
+
+      // Borrar las otras partes (cascade limpia sus bolsillo_cuotas) y sus diferidas huérfanas.
+      for (const p of otras) {
+        db.prepare('DELETE FROM compras WHERE id=?').run(p.id);
+        if (p.diferida_id && p.diferida_id !== survivorDiferidaId) {
+          const ref = db.prepare('SELECT COUNT(*) as n FROM compras WHERE diferida_id=?').get(p.diferida_id);
+          if (!ref || ref.n === 0) db.prepare('DELETE FROM diferidas WHERE id=?').run(p.diferida_id);
+        }
+      }
+
+      return survivor.id;
+    })();
+
+    logAction('editar', tjNombre(partes[0].tarjeta_id) + 'Compra dividida convertida a 100% personal: ' + partes[0].descripcion + (force && conAbono.length > 0 ? ' (abonos de terceros eliminados)' : ''));
+    res.json({ ok: true, compraId: compraIdFinal });
+  });
+
   router.delete('/:id', (req, res) => {
     const c = db.prepare('SELECT descripcion, tarjeta_id, diferida_id, ciclo FROM compras WHERE id=?').get(req.params.id);
     // Inmutabilidad: bloquear si el extracto del ciclo ya está pagado.
