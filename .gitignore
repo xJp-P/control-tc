@@ -16,3 +16,7 @@ scripts/
 *.log
 .DS_Store
 Thumbs.db
+
+# Documentos internos del proyecto (NO publicar — solo README.md es publico)
+CLAUDE.md
+ESTADO_DEL_PROYECTO.md
