@@ -248,6 +248,9 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '3.3.1': [
+    'La card "Cupo Usado" ahora muestra también cuánto cupo te queda disponible, resaltado en verde (ej. "Disponible: $1.500.000"). Si la deuda supera el cupo, aparece en rojo como "Sobrecupo". Antes solo veías cuánto habías usado del total.'
+  ],
   '3.3.0': [
     'Ahora puedes convertir una compra dividida entre personas de vuelta a una compra 100% personal: abre la compra dividida, desmarca "Dividir entre personas" y guarda. Las partes se fusionan en una sola compra tuya y el dinero que tuvieras apartado en el bolsillo se conserva sumado. Antes tocaba borrar la compra y volverla a crear.',
     'Funciona igual para compras de una sola cuota y para compras a cuotas (diferidas).',
@@ -1879,6 +1882,9 @@ function CardResumen({ tarjeta, onDataChange }) {
   // la deuda total (en moneda local equivalente) sobre el cupo de la tarjeta.
   const deudaParaCupo = data.deudaTotalEnCop != null ? data.deudaTotalEnCop : data.deudaTotal;
   const cupoUsado = tarjeta.cupo_total > 0 ? (deudaParaCupo / tarjeta.cupo_total * 100).toFixed(1) : null;
+  // Cupo disponible = cupo total - deuda (en COP equivalente). Puede ser negativo si la
+  // deuda supera el cupo (sobrecupo), caso que se muestra aparte en rojo.
+  const cupoDisponible = (tarjeta.cupo_total || 0) - deudaParaCupo;
   const hoy = todayISO();
 
   // Group split compras by grupo_id, singles stay individual
@@ -1965,6 +1971,12 @@ function CardResumen({ tarjeta, onDataChange }) {
           'Incluye USD $' + new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(data.deudaUsd) +
           ' × $' + new Intl.NumberFormat('es-CO').format(data.trmUsdCop) + ' (TRM ref.)'
         ),
+        // Disponible destacado, con separación visual ("salto de línea", marginTop mayor)
+        // respecto a lo de arriba — sea el subtexto gris (tarjetas COP) o la nota cyan USD
+        // (tarjetas duales). Es el dato que el usuario quiere de un vistazo: cuánto puede
+        // gastar aún. Verde si hay cupo, rojo si la deuda superó el cupo (sobrecupo).
+        e('div', { className: 'card-sub', style: { color: cupoDisponible >= 0 ? 'var(--success)' : 'var(--danger)', fontWeight: 600, marginTop: 10 } },
+          cupoDisponible >= 0 ? 'Disponible: ' + fmtCOP(cupoDisponible) : 'Sobrecupo: ' + fmtCOP(Math.abs(cupoDisponible))),
         e('div', { style: { fontSize: 10, color: 'var(--text-muted)', marginTop: 6, fontStyle: 'italic', lineHeight: 1.3 } }, 'El disponible puede diferir del banco por intereses devengados sin facturar y cuota de manejo del mes.')
       ),
       e('div', { className: 'card card-warning' },
