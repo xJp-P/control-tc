@@ -145,9 +145,22 @@ module.exports = function(db, { logAction, tjNombre }) {
         return res.status(403).json({ error: 'No se puede editar: el extracto del ciclo ' + current.ciclo + ' ya está pagado.' });
       }
     }
-    const finalEstado = estado || (current ? current.estado : 'pendiente');
-    const finalBolsillo = monto_bolsillo !== undefined ? (monto_bolsillo || 0) : (current ? current.monto_bolsillo : 0);
+    let finalEstado = estado || (current ? current.estado : 'pendiente');
+    let finalBolsillo = monto_bolsillo !== undefined ? (monto_bolsillo || 0) : (current ? current.monto_bolsillo : 0);
     const finalIntl = es_internacional !== undefined ? (es_internacional ? 1 : 0) : (current ? (current.es_internacional || 0) : 0);
+    // Reconciliar el bolsillo COP al editar una compra NO diferida: si cambió el valor, la
+    // moneda o el flag internacional, el monto apartado podría superar el nuevo tope
+    // (valor [+ interés intl]). Lo re-cap-eamos y recalculamos el estado contra ese tope real
+    // (incluye interés), para que editar el valor —sobre todo bajarlo— no deje el bolsillo
+    // inflado ni un estado "cubierto" falso. Las diferidas usan bolsillo per-cuota
+    // (bolsillo_cuotas) y no se tocan aquí.
+    if (current && current.estado !== 'diferida' && finalEstado !== 'diferida') {
+      const topeEdit = targetBolsillo({ valor_cop, valor_usd, es_internacional: finalIntl, ciclo, fecha, tarjeta_id }, 'COP', null);
+      if (topeEdit != null) {
+        if (finalBolsillo > topeEdit) finalBolsillo = topeEdit;
+        finalEstado = (topeEdit > 0 && finalBolsillo >= topeEdit) ? 'bolsillo' : (finalBolsillo > 0 ? 'bolsillo_parcial' : 'pendiente');
+      }
+    }
     db.prepare(`UPDATE compras SET tarjeta_id=?, fecha=?, descripcion=?, valor_cop=?, valor_usd=?, tasa_usd=?, persona_id=?, estado=?, ciclo=?, notas=?, monto_bolsillo=?, es_internacional=? WHERE id=?`)
       .run(tarjeta_id, fecha, descripcion, valor_cop, valor_usd, tasa_usd, persona_id, finalEstado, ciclo, notas, finalBolsillo, finalIntl, req.params.id);
 
@@ -168,6 +181,38 @@ module.exports = function(db, { logAction, tjNombre }) {
     res.json({ ok: true });
   });
 
+  // Calcula el target máximo del bolsillo de una compra (lo que realmente costará):
+  //   - Diferida per-cuota: el total de esa cuota (COP) o valor_usd/num_cuotas (USD).
+  //   - 1 cuota COP: valor_cop + interés intl (si la tarjeta lo cobra, ej. Bancolombia Visa).
+  //   - 1 cuota USD: valor_usd.
+  // Se usa para CAP-ear el monto apartado: no tiene sentido guardar en el bolsillo más de lo
+  // que la compra va a costar. Para intl el tope incluye el interés (por eso no es solo valor_cop).
+  function targetBolsillo(c, monedaPago, cuotaNum) {
+    if (cuotaNum != null && c.estado === 'diferida') {
+      const dif = c.diferida_id ? db.prepare('SELECT * FROM diferidas WHERE id=?').get(c.diferida_id) : null;
+      if (!dif) return null; // sin diferida vinculada no podemos calcular el tope → no cap-eamos
+      if (monedaPago === 'USD') return Math.round(((c.valor_usd || 0) / dif.num_cuotas) * 100) / 100;
+      const amort = calcularAmortizacionDiferida(c.valor_cop, dif.tasa_mv, dif.num_cuotas, dif.fecha_compra, dif.fecha_primer_corte, null, nuOpts(db, c.tarjeta_id));
+      const cuotaObj = amort.tabla.find(r => r.numCuota === cuotaNum);
+      return cuotaObj ? Math.round(cuotaObj.totalPagar) : null;
+    }
+    if (monedaPago === 'USD') return Math.round((c.valor_usd || 0) * 100) / 100;
+    let tgt = c.valor_cop;
+    if (c.es_internacional && c.ciclo) {
+      const tj = db.prepare('SELECT banco, franquicia, tasa_mv_avances, dia_corte FROM tarjetas WHERE id=?').get(c.tarjeta_id);
+      if (tj && aplicaIntInternacional(tj.banco, tj.franquicia)) {
+        const tasaIntl = tj.tasa_mv_avances || 0.01911;
+        const diaCorte = tj.dia_corte || 30;
+        const [yr, mo] = c.ciclo.split('-').map(Number);
+        const lastDay = new Date(yr, mo, 0).getDate();
+        const fCorte = new Date(yr, mo - 1, Math.min(diaCorte, lastDay)).toISOString().slice(0, 10);
+        const dias = daysBetween(c.fecha, fCorte);
+        if (dias > 0) tgt += Math.round(c.valor_cop * tasaIntl * (dias / 30));
+      }
+    }
+    return tgt;
+  }
+
   router.put('/:id/bolsillo', (req, res) => {
     const { monto_bolsillo, cuota_num, moneda } = req.body;
     const c = db.prepare('SELECT * FROM compras WHERE id=?').get(req.params.id);
@@ -175,9 +220,14 @@ module.exports = function(db, { logAction, tjNombre }) {
     // Inferir moneda: explícita > heurística (compra USD pura).
     const compraEsUsd = (c.valor_usd && c.valor_usd > 0) && !c.valor_cop;
     const monedaPago = moneda === 'USD' ? 'USD' : (moneda === 'COP' ? 'COP' : (compraEsUsd ? 'USD' : 'COP'));
-    const nuevoMonto = monedaPago === 'USD'
+    let nuevoMonto = monedaPago === 'USD'
       ? (Math.round((parseFloat(monto_bolsillo) || 0) * 100) / 100)
       : Math.round(parseFloat(monto_bolsillo) || 0);
+
+    // CAP: nunca apartar más que lo que la compra va a costar (valor [+ interés intl] / cuota).
+    let capped = false;
+    const tope = targetBolsillo(c, monedaPago, cuota_num);
+    if (tope != null && nuevoMonto > tope) { nuevoMonto = tope; capped = true; }
 
     if (cuota_num != null && c.estado === 'diferida') {
       // Per-cuota bolsillo para diferidas
@@ -195,7 +245,7 @@ module.exports = function(db, { logAction, tjNombre }) {
         ? 'USD $' + new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(nuevoMonto)
         : new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(nuevoMonto);
       logAction('editar', tjNombre(c.tarjeta_id) + 'Bolsillo cuota ' + cuota_num + ' (' + monedaPago + '): ' + c.descripcion + ' - Apartado: ' + fmt);
-      res.json({ ok: true, estado: 'diferida', moneda: monedaPago, monto_bolsillo: sumCop.total, monto_bolsillo_usd: sumUsd.total, cuota_num, monto_cuota: nuevoMonto });
+      res.json({ ok: true, estado: 'diferida', moneda: monedaPago, monto_bolsillo: sumCop.total, monto_bolsillo_usd: sumUsd.total, cuota_num, monto_cuota: nuevoMonto, capped, tope });
     } else {
       // Non-diferida: bolsillo global. Para compras USD comparamos contra valor_usd; COP contra valor_cop.
       const target = monedaPago === 'USD' ? (c.valor_usd || 0) : c.valor_cop;
@@ -210,7 +260,7 @@ module.exports = function(db, { logAction, tjNombre }) {
         ? 'USD $' + new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(nuevoMonto)
         : new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(nuevoMonto);
       logAction('editar', tjNombre(c.tarjeta_id) + 'Bolsillo (' + monedaPago + '): ' + c.descripcion + ' - Apartado: ' + fmt);
-      res.json({ ok: true, estado: nuevoEstado, moneda: monedaPago, monto_bolsillo: monedaPago === 'COP' ? nuevoMonto : (c.monto_bolsillo || 0), monto_bolsillo_usd: monedaPago === 'USD' ? nuevoMonto : (c.monto_bolsillo_usd || 0) });
+      res.json({ ok: true, estado: nuevoEstado, moneda: monedaPago, monto_bolsillo: monedaPago === 'COP' ? nuevoMonto : (c.monto_bolsillo || 0), monto_bolsillo_usd: monedaPago === 'USD' ? nuevoMonto : (c.monto_bolsillo_usd || 0), capped, tope });
     }
   });
 

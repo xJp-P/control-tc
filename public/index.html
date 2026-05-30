@@ -248,6 +248,12 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '3.3.2': [
+    'Corregido un caso en "Me Deben Corte": cuando apartabas en el bolsillo el valor de una compra internacional de un tercero MÁS su interés, la card seguía mostrando el interés como si el tercero te debiera (ej. $3.651) aunque ya estuviera cubierto. Ahora el dinero apartado de más absorbe correctamente el interés y la deuda queda en cero, igual que en la card "Me Deben".',
+    'El bolsillo ya no permite apartar más de lo que cuesta la compra. Si intentas guardar un monto mayor, se ajusta automáticamente al máximo (el valor de la compra, o el valor más su interés en compras internacionales) y te avisa. Además, si luego editas la compra y le bajas el valor, el dinero apartado se reajusta solo para no quedar por encima del nuevo valor.',
+    'Corregido el "Cupo Usado": el día del corte la app podía mostrar un falso sobrecupo (más de 100%) porque contaba dos veces la cuota de avances y diferidas de ese mes. Ahora el cupo usado y el disponible se calculan bien también el mismo día del corte.',
+    'Sección "Próximos Pagos" rediseñada: ahora muestra únicamente el pago pendiente de cada tarjeta, y solo después de que cierra su corte (por ejemplo, una tarjeta con corte el día 30 aparece a partir del 31 con su fecha límite de pago). El pago desaparece de la lista cuando lo registras. Se quitó la cuenta regresiva al próximo corte para dejar la vista enfocada en lo que realmente debes pagar.'
+  ],
   '3.3.1': [
     'La card "Cupo Usado" ahora muestra también cuánto cupo te queda disponible, resaltado en verde (ej. "Disponible: $1.500.000"). Si la deuda supera el cupo, aparece en rojo como "Sobrecupo". Antes solo veías cuánto habías usado del total.'
   ],
@@ -1168,69 +1174,49 @@ function GlobalDashboard({ tarjetas, onSelectCard, onNewCard }) {
           )
         ),
 
-    // Proximos pagos (fechas)
-    dashData && tarjetas.length > 0 && e('div', null,
-      e('div', { className: 'section-title', style: { marginTop: 8 } }, e(Ico, { name: 'calendar', size: 20, color: 'var(--accent)' }), ' Proximos Pagos'),
-      e('div', { className: 'cards-row' },
-        // Extractos vencidos o próximos a vencer (basado en fecha_pago real)
-        tarjetas.filter(t => t.estado === 'activa').flatMap(t => {
-          const cd = cardDash[t.id];
-          if (!cd || !cd.extractosVencidos || !cd.extractosVencidos.length) return [];
-          return cd.extractosVencidos.map(ext => {
-            const mesLabel = (() => { const [a, m] = ext.ciclo.split('-'); return new Date(a, m - 1).toLocaleDateString('es-CO', { month: 'long' }); })();
-            const isVencido = ext.tipo === 'vencido';
-            const diasRestantes = ext.fechaPago ? Math.ceil((new Date(ext.fechaPago + 'T00:00:00') - new Date(todayISO() + 'T00:00:00')) / 86400000) : 999;
-            const casiVencido = !isVencido && diasRestantes <= 5;
-            const color = isVencido ? 'var(--danger)' : casiVencido ? '#FF8C00' : 'var(--warning)';
-            const bgColor = isVencido ? 'rgba(239,68,68,0.08)' : casiVencido ? 'rgba(255,140,0,0.08)' : 'var(--warning-bg)';
-            const labelFecha = ext.fechaPago ? new Date(ext.fechaPago + 'T00:00:00').toLocaleDateString('es-CO', { day: 'numeric', month: 'short' }) : '';
-            return e('div', { key: t.id + '-' + ext.ciclo, className: 'card', style: { cursor: 'pointer', borderLeft: '3px solid ' + color, background: bgColor }, onClick: () => onSelectCard(t.id, 'pagos') },
-              e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
-                e('div', null,
-                  e('div', { style: { fontWeight: 700, fontSize: 14 } }, t.nombre),
-                  e('div', { style: { fontSize: 12, color: color, marginTop: 2, fontWeight: 600 } }, 'Extracto de ' + mesLabel + ' sin pagar'),
-                  e('div', { style: { fontSize: 13, marginTop: 6 } },
-                    e('span', { style: { color: 'var(--text-muted)' } }, 'Falta: '),
-                    e('span', { style: { fontWeight: 700, color: color } }, fmtCOP(ext.falta)),
-                    ext.pagado > 0 && e('span', { style: { fontSize: 11, color: 'var(--text-muted)', marginLeft: 8 } }, '(pagado: ' + fmtCOP(ext.pagado) + ')')
-                  )
-                ),
-                e('div', { style: { textAlign: 'right' } },
-                  e('div', { style: { fontWeight: 700, fontSize: isVencido ? 16 : 13, color: color } }, isVencido ? 'VENCIDO' : 'PRÓXIMO A VENCER'),
-                  e('div', { style: { fontSize: 11, color: 'var(--text-muted)' } }, isVencido ? 'Pagar antes de abonar' : 'Límite: ' + labelFecha, !isVencido && ext.esFechaManual && e('span', { style: { fontSize: 9, marginLeft: 4, color: 'var(--accent)', fontWeight: 700 } }, '(MANUAL)'))
-                )
-              )
-            );
-          });
-        }),
-        // Ciclo actual en curso (próximo corte)
-        tarjetas.filter(t => t.estado === 'activa').filter(t => {
-          const cd = cardDash[t.id];
-          return !cd || cd.pagoMinimo > 0;
-        }).map(t => {
-          const cd = cardDash[t.id];
-          const pMin = cd ? cd.pagoMinimo : 0;
-          const diasCorte = cd && cd.proximoCorte ? cd.proximoCorte.diasFaltan : null;
-          const fechaCorteLabel = cd && cd.proximoCorte ? fmtDate(cd.proximoCorte.fecha) : '';
-          return e('div', { key: t.id, className: 'card', style: { cursor: 'pointer', borderLeft: '3px solid ' + t.color }, onClick: () => onSelectCard(t.id) },
+    // Proximos pagos: solo extractos cuyo corte YA CERRÓ y siguen sin pagar (con su fecha
+    // límite de pago). Aparecen el día siguiente al corte y desaparecen al pagar. Se muestran
+    // todos los pendientes por tarjeta (vencido + recién cerrado). Ya NO se muestra la cuenta
+    // regresiva al próximo corte (antes de cerrar no aparece nada para esa tarjeta).
+    dashData && tarjetas.length > 0 && (function() {
+      const pagosItems = tarjetas.filter(t => t.estado === 'activa').flatMap(t => {
+        const cd = cardDash[t.id];
+        if (!cd || !cd.extractosVencidos || !cd.extractosVencidos.length) return [];
+        return cd.extractosVencidos.map(ext => {
+          const mesLabel = (() => { const [a, m] = ext.ciclo.split('-'); return new Date(a, m - 1).toLocaleDateString('es-CO', { month: 'long' }); })();
+          const isVencido = ext.tipo === 'vencido';
+          const diasRestantes = ext.fechaPago ? Math.ceil((new Date(ext.fechaPago + 'T00:00:00') - new Date(todayISO() + 'T00:00:00')) / 86400000) : 999;
+          const casiVencido = !isVencido && diasRestantes <= 5;
+          const color = isVencido ? 'var(--danger)' : casiVencido ? '#FF8C00' : 'var(--warning)';
+          const bgColor = isVencido ? 'rgba(239,68,68,0.08)' : casiVencido ? 'rgba(255,140,0,0.08)' : 'var(--warning-bg)';
+          const labelFecha = ext.fechaPago ? new Date(ext.fechaPago + 'T00:00:00').toLocaleDateString('es-CO', { day: 'numeric', month: 'short' }) : '';
+          return e('div', { key: t.id + '-' + ext.ciclo, className: 'card', style: { cursor: 'pointer', borderLeft: '3px solid ' + color, background: bgColor }, onClick: () => onSelectCard(t.id, 'pagos') },
             e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
               e('div', null,
                 e('div', { style: { fontWeight: 700, fontSize: 14 } }, t.nombre),
-                e('div', { style: { fontSize: 12, color: 'var(--text-muted)', marginTop: 2 } }, 'Corte: dia ' + (t.dia_corte || '?') + ' de cada mes'),
-                pMin > 0 && e('div', { style: { fontSize: 13, marginTop: 6 } },
-                  e('span', { style: { color: 'var(--text-muted)' } }, 'Pago minimo: '),
-                  e('span', { style: { fontWeight: 700, color: 'var(--warning)' } }, fmtCOP(pMin))
+                e('div', { style: { fontSize: 12, color: color, marginTop: 2, fontWeight: 600 } }, 'Extracto de ' + mesLabel + ' sin pagar'),
+                e('div', { style: { fontSize: 13, marginTop: 6 } },
+                  e('span', { style: { color: 'var(--text-muted)' } }, 'Falta: '),
+                  e('span', { style: { fontWeight: 700, color: color } }, fmtCOP(ext.falta)),
+                  ext.pagado > 0 && e('span', { style: { fontSize: 11, color: 'var(--text-muted)', marginLeft: 8 } }, '(pagado: ' + fmtCOP(ext.pagado) + ')')
                 )
               ),
               e('div', { style: { textAlign: 'right' } },
-                diasCorte !== null && e('div', { style: { fontWeight: 700, fontSize: 20, color: diasCorte <= 5 ? 'var(--warning)' : 'var(--accent)' } }, diasCorte + ' dias'),
-                e('div', { style: { fontSize: 11, color: 'var(--text-muted)' } }, fechaCorteLabel)
+                e('div', { style: { fontWeight: 700, fontSize: isVencido ? 16 : 13, color: color } }, isVencido ? 'VENCIDO' : 'PRÓXIMO A VENCER'),
+                e('div', { style: { fontSize: 11, color: 'var(--text-muted)' } }, isVencido ? 'Pagar antes de abonar' : 'Límite: ' + labelFecha, !isVencido && ext.esFechaManual && e('span', { style: { fontSize: 9, marginLeft: 4, color: 'var(--accent)', fontWeight: 700 } }, '(MANUAL)'))
               )
             )
           );
-        })
-      )
-    )
+        });
+      });
+      return e('div', null,
+        e('div', { className: 'section-title', style: { marginTop: 8 } }, e(Ico, { name: 'calendar', size: 20, color: 'var(--accent)' }), ' Proximos Pagos'),
+        pagosItems.length > 0
+          ? e('div', { className: 'cards-row' }, pagosItems)
+          : e('div', { className: 'card', style: { color: 'var(--text-muted)', fontSize: 13, textAlign: 'center', padding: '20px' } },
+              'No tienes pagos proximos. El pago de cada tarjeta aparecera aqui cuando cierre su corte, con la fecha limite.')
+      );
+    })()
   );
 }
 
@@ -1812,7 +1798,17 @@ function CardResumen({ tarjeta, onDataChange }) {
     // Per-cuota: enviar cuota_num para diferidas y avances (compras 1-cuota usan global)
     if (bolsilloCompra.cuota_num && (_isDif || _isAv)) body.cuota_num = bolsilloCompra.cuota_num;
     api(url, { method: 'PUT', body })
-      .then(() => { setShowBolsilloModal(false); refreshAll(); toast('Bolsillo actualizado'); });
+      .then((resp) => {
+        setShowBolsilloModal(false); refreshAll();
+        if (resp && resp.capped) {
+          const topeFmt = resp.moneda === 'USD'
+            ? 'USD $' + new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(resp.tope)
+            : fmtCOP(resp.tope);
+          toast('Se apartó el máximo de la compra: ' + topeFmt);
+        } else {
+          toast('Bolsillo actualizado');
+        }
+      });
   }
   async function removeCompra(id) {
     if (!await confirmDialog('Eliminar esta compra?', { confirmText: 'Eliminar' })) return;
@@ -5009,10 +5005,11 @@ function Terceros({ tarjeta }) {
     if (monto < 0) return;
     const bodyT = { monto_bolsillo: monto };
     if (compra._cuota_num != null) bodyT.cuota_num = compra._cuota_num;
-    await api('/compras/' + compra.id + '/bolsillo', { method: 'PUT', body: bodyT });
+    const resp = await api('/compras/' + compra.id + '/bolsillo', { method: 'PUT', body: bodyT });
     setBolsilloModal(null);
     loadData();
-    toast(monto > 0 ? 'Bolsillo actualizado' : 'Bolsillo quitado');
+    if (resp && resp.capped) toast('Se apartó el máximo de la compra: ' + fmtCOP(resp.tope));
+    else toast(monto > 0 ? 'Bolsillo actualizado' : 'Bolsillo quitado');
   }
 
   // Solo Bancolombia Visa cobra intereses sobre compras intl en COP (validado con extracto real).

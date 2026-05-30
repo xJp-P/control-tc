@@ -204,9 +204,14 @@ module.exports = function(db) {
     // por su propio tarjeta_id internamente.
     let deudaImpagaAvances = 0, deudaImpagaDiferidas = 0;
     // En vista global excluimos extractos de tarjetas inactivas (no deben sumar a deuda total).
+    // fecha_corte ESTRICTAMENTE < hoy: la cuota cuyo corte es exactamente hoy (día de corte)
+    // ya está incluida en el saldoActual de la amortización (que usa fechaCorte >= hoy). Si
+    // aquí usáramos <= hoy, esa cuota se contaría dos veces el mismo día del corte, inflando
+    // la deuda y mostrando un falso "sobrecupo". Solo re-sumamos cuotas de extractos pendientes
+    // ya vencidos (corte anterior a hoy), que el saldoActual sí descontó.
     const extractosImpagos2 = tarjeta_id
-      ? db.prepare("SELECT tarjeta_id, ciclo FROM extractos WHERE tarjeta_id=? AND estado='pendiente' AND fecha_corte <= ?").all(tarjeta_id, hoy)
-      : db.prepare("SELECT tarjeta_id, ciclo FROM extractos WHERE estado='pendiente' AND fecha_corte <= ? AND tarjeta_id IN (SELECT id FROM tarjetas WHERE estado='activa')").all(hoy);
+      ? db.prepare("SELECT tarjeta_id, ciclo FROM extractos WHERE tarjeta_id=? AND estado='pendiente' AND fecha_corte < ?").all(tarjeta_id, hoy)
+      : db.prepare("SELECT tarjeta_id, ciclo FROM extractos WHERE estado='pendiente' AND fecha_corte < ? AND tarjeta_id IN (SELECT id FROM tarjetas WHERE estado='activa')").all(hoy);
     extractosImpagos2.forEach(ext => {
       avancesActivos.filter(av => av.tarjeta_id === ext.tarjeta_id).forEach(av => {
         const abonos2 = db.prepare('SELECT * FROM abonos_avance WHERE avance_id=? ORDER BY fecha').all(av.id);
@@ -404,16 +409,22 @@ module.exports = function(db) {
 
     let extractosVencidos = [];
     if (tarjeta_id) {
-      // COALESCE: si hay override en fechas_pago_custom, esa fecha gana sobre extractos.fecha_pago
+      // "Próximos Pagos": muestra el/los extracto(s) pendiente(s) cuyo CORTE YA CERRÓ
+      // (fecha_corte < hoy), con su fecha límite de pago. Aparece el día siguiente al corte
+      // (ej. Visa corte día 30 → aparece el 31) y desaparece al pagar el extracto. Se listan
+      // todos los pendientes de la tarjeta (un vencido + el recién cerrado conviven).
+      // Antes el gate era por mes calendario (ciclo < mes actual), lo que retrasaba la alerta
+      // en tarjetas cuyo pago cae poco después del corte (RappiCard).
+      // COALESCE: si hay override en fechas_pago_custom, esa fecha gana sobre extractos.fecha_pago.
       const rawExt = db.prepare(`
         SELECT ext.ciclo, ext.pago_minimo, COALESCE(ext.monto_pagado, 0) as monto_pagado,
           COALESCE(fpc.fecha_pago, ext.fecha_pago) as fecha_pago,
           CASE WHEN fpc.fecha_pago IS NOT NULL THEN 1 ELSE 0 END as es_manual
         FROM extractos ext
         LEFT JOIN fechas_pago_custom fpc ON fpc.tarjeta_id = ext.tarjeta_id AND fpc.ciclo = ext.ciclo
-        WHERE ext.tarjeta_id = ? AND ext.estado = 'pendiente' AND ext.ciclo < ?
-        ORDER BY ext.ciclo ASC
-      `).all(tarjeta_id, cicloActual);
+        WHERE ext.tarjeta_id = ? AND ext.estado = 'pendiente' AND ext.fecha_corte < ?
+        ORDER BY COALESCE(fpc.fecha_pago, ext.fecha_pago) ASC
+      `).all(tarjeta_id, hoy);
       extractosVencidos = rawExt
         .filter(e => e.pago_minimo - e.monto_pagado > 1)
         .map(e => ({ ciclo: e.ciclo, pagoMinimo: Math.round(e.pago_minimo), pagado: Math.round(e.monto_pagado), falta: Math.round(e.pago_minimo - e.monto_pagado), fechaPago: e.fecha_pago, esFechaManual: !!e.es_manual, tipo: e.fecha_pago < hoy ? 'vencido' : 'proximo' }));
@@ -471,7 +482,12 @@ module.exports = function(db) {
       WHERE c.tercero_pagado = 0 AND c.estado != 'diferida' AND c.ciclo = ?${tjFilter}
     `).all(cicloActual, ...tjParams);
     meDebenCorte1Cuota.forEach(r => {
-      let pendiente = Math.max(0, r.valor_cop - r.abono - r.bolsillo);
+      // NO recortar a 0 todavía: si el bolsillo apartado supera el valor (excedente que el
+      // usuario reservó para el interés intl), ese excedente debe poder absorber el interés
+      // que se suma abajo. Aplicar Math.max(0,...) ANTES borraría ese crédito y el interés
+      // aparecería como deuda fantasma aunque el bolsillo ya lo cubriera. El recorte a 0 se
+      // hace al final, igual que en la card "Me Deben" (histórica).
+      let pendiente = r.valor_cop - r.abono - r.bolsillo;
       if (r.es_internacional && r.fecha) {
         const rDiaCorte = tarjeta_id ? diaCorte : (r.tarjeta_dia_corte || 30);
         const rTasaIntl = tarjeta_id ? tasaIntlGlobal : (r.tarjeta_tasa_intl || 0.01911);
@@ -484,6 +500,7 @@ module.exports = function(db) {
           if (dias > 0) pendiente += Math.round(r.valor_cop * rTasaIntl * (dias / 30));
         }
       }
+      pendiente = Math.max(0, pendiente);
       const pendienteUsd = (r.valor_usd && r.valor_usd > 0) ? r.valor_usd : 0;
       if (pendiente <= 0 && pendienteUsd <= 0) return;
       if (!meDebenCorteMap[r.persona_id]) meDebenCorteMap[r.persona_id] = { nombre: r.nombre, color: r.color, total: 0, totalUsd: 0 };
