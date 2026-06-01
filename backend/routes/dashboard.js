@@ -407,6 +407,43 @@ module.exports = function(db) {
     }
     const diasParaPago = Math.ceil((fechaPago - now) / 86400000);
 
+    // Recalcula el pago mínimo REAL de un ciclo, con la MISMA fórmula que extractos.js
+    // (compras del ciclo + cuotas de avances/diferidas del ciclo + interés intl). Se usa para
+    // "Próximos Pagos" en vez del valor persistido en extractos.pago_minimo, que solo se
+    // refresca al entrar a la vista Pagos — así la card siempre muestra el monto al día, sin
+    // depender del orden de navegación. Solo aplica en vista per-card (tarjeta_id presente).
+    // NOTA: mantener sincronizada con calcExtracto de extractos.js si esa fórmula cambia.
+    function calcPagoMinimoCiclo(ciclo) {
+      const cC = db.prepare("SELECT COALESCE(SUM(valor_cop - COALESCE(monto_abonado,0)),0) as total FROM compras WHERE ciclo=? AND estado NOT IN ('pagado','diferida')" + tjFilter).get(ciclo, ...tjParams);
+      let cuotas = 0;
+      avancesActivos.forEach(av => {
+        const abs = db.prepare('SELECT * FROM abonos_avance WHERE avance_id=? ORDER BY fecha').all(av.id);
+        const am = calcularAmortizacionAvance(av.monto, av.tasa_mv, av.plazo, av.fecha_desembolso, av.dia_corte, abs, av.comision, avanceOpts(db, av.tarjeta_id));
+        const cu = am.tabla.find(r => r.fechaCorte.slice(0, 7) === ciclo);
+        if (cu) cuotas += cu.totalExtracto;
+      });
+      diferidasActivas.forEach(d => {
+        const abs = db.prepare('SELECT * FROM abonos_diferida WHERE diferida_id=? ORDER BY fecha').all(d.id);
+        const am = calcularAmortizacionDiferida(d.monto, d.tasa_mv, d.num_cuotas, d.fecha_compra, d.fecha_primer_corte, abs, nuOpts(db, d.tarjeta_id));
+        const cu = am.tabla.find(r => r.fechaCorte.slice(0, 7) === ciclo);
+        if (cu) cuotas += cu.totalPagar;
+      });
+      let intl = 0;
+      if (aplicaIntlDash) {
+        const [yr, mo] = ciclo.split('-').map(Number);
+        const lastDay = new Date(yr, mo, 0).getDate();
+        const fCorte = new Date(yr, mo - 1, Math.min(diaCorte, lastDay)).toISOString().slice(0, 10);
+        const cIntl = db.prepare("SELECT fecha, valor_cop, COALESCE(monto_abonado,0) as ma FROM compras WHERE ciclo=? AND estado NOT IN ('pagado','diferida') AND (es_internacional=1 OR (valor_usd IS NOT NULL AND valor_usd > 0))" + tjFilter).all(ciclo, ...tjParams);
+        cIntl.forEach(c => {
+          const saldo = c.valor_cop - c.ma;
+          if (saldo <= 0) return;
+          const dias = daysBetween(c.fecha, fCorte);
+          if (dias > 0) intl += saldo * tasaIntlGlobal * (dias / 30);
+        });
+      }
+      return Math.round(cC.total + cuotas + intl);
+    }
+
     let extractosVencidos = [];
     if (tarjeta_id) {
       // "Próximos Pagos": muestra el/los extracto(s) pendiente(s) cuyo CORTE YA CERRÓ
@@ -415,9 +452,10 @@ module.exports = function(db) {
       // todos los pendientes de la tarjeta (un vencido + el recién cerrado conviven).
       // Antes el gate era por mes calendario (ciclo < mes actual), lo que retrasaba la alerta
       // en tarjetas cuyo pago cae poco después del corte (RappiCard).
+      // El pago mínimo se RECALCULA en vivo (calcPagoMinimoCiclo), no se lee el persistido.
       // COALESCE: si hay override en fechas_pago_custom, esa fecha gana sobre extractos.fecha_pago.
       const rawExt = db.prepare(`
-        SELECT ext.ciclo, ext.pago_minimo, COALESCE(ext.monto_pagado, 0) as monto_pagado,
+        SELECT ext.ciclo, COALESCE(ext.monto_pagado, 0) as monto_pagado,
           COALESCE(fpc.fecha_pago, ext.fecha_pago) as fecha_pago,
           CASE WHEN fpc.fecha_pago IS NOT NULL THEN 1 ELSE 0 END as es_manual
         FROM extractos ext
@@ -426,8 +464,11 @@ module.exports = function(db) {
         ORDER BY COALESCE(fpc.fecha_pago, ext.fecha_pago) ASC
       `).all(tarjeta_id, hoy);
       extractosVencidos = rawExt
-        .filter(e => e.pago_minimo - e.monto_pagado > 1)
-        .map(e => ({ ciclo: e.ciclo, pagoMinimo: Math.round(e.pago_minimo), pagado: Math.round(e.monto_pagado), falta: Math.round(e.pago_minimo - e.monto_pagado), fechaPago: e.fecha_pago, esFechaManual: !!e.es_manual, tipo: e.fecha_pago < hoy ? 'vencido' : 'proximo' }));
+        .map(e => {
+          const pmReal = calcPagoMinimoCiclo(e.ciclo);
+          return { ciclo: e.ciclo, pagoMinimo: pmReal, pagado: Math.round(e.monto_pagado), falta: Math.round(pmReal - e.monto_pagado), fechaPago: e.fecha_pago, esFechaManual: !!e.es_manual, tipo: e.fecha_pago < hoy ? 'vencido' : 'proximo' };
+        })
+        .filter(e => e.falta > 1);
     }
 
     // ─── Datos del corte: Deuda Personal y Me Deben Corte ─────────

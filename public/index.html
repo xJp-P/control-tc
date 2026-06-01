@@ -248,6 +248,10 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '3.4.0': [
+    'La sección "Próximos Pagos" del inicio ahora muestra siempre el pago mínimo al día: se recalcula en el momento, sin que tengas que entrar a la pestaña de Pagos de la tarjeta para que se actualice.',
+    'Pantalla de carga más limpia: se quitaron los puntos suspensivos de los mensajes ("Buscando actualizaciones", "Instalando", "Iniciando") y, durante una descarga, el porcentaje ahora aparece al lado de la barra de progreso en vez de pegado al texto.'
+  ],
   '3.3.3': [
     'Corregido un error que asignaba algunas compras al mes equivocado: las hechas en días de fin de mes (como el 31) podían quedar registradas un mes más adelante de lo debido (por ejemplo una compra del 31 de mayo aparecía en julio en vez de junio) y no se veían en el historial. Ya quedan en el ciclo correcto, y la app reacomoda automáticamente las que se habían guardado mal.',
     'Al entrar a una tarjeta, ahora se muestra por defecto el ciclo que está corriendo según su fecha de corte (no el mes del calendario). Excepción: si el extracto del ciclo anterior todavía no lo has pagado por completo, la app te muestra primero ese ciclo pendiente, para que veas lo que debes antes de pasar al mes en curso.',

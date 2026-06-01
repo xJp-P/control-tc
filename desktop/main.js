@@ -97,9 +97,11 @@ html,body{width:100%;height:100%;overflow:hidden;font-family:-apple-system,Blink
 @keyframes spin{to{transform:rotate(360deg);}}
 .title{font-size:16px;font-weight:700;color:${c.textPrimary};margin-bottom:6px;letter-spacing:0.2px;}
 #splashMsg{font-size:12px;color:${c.textSecondary};text-align:center;min-height:16px;margin-bottom:12px;padding:0 12px;}
-.barWrap{width:240px;height:4px;background:${c.border};border-radius:99px;overflow:hidden;margin-bottom:14px;display:none;}
-.barWrap.show{display:block;}
+.barWrap{width:260px;margin-bottom:14px;display:none;align-items:center;gap:8px;}
+.barWrap.show{display:flex;}
+.barTrack{flex:1;height:4px;background:${c.border};border-radius:99px;overflow:hidden;}
 #splashBar{height:100%;width:0%;background:${c.accent};border-radius:99px;transition:width 0.2s ease;}
+#splashPct{font-size:11px;color:${c.textSecondary};font-family:'SF Mono','Consolas',monospace;min-width:32px;text-align:right;}
 .version{font-size:10px;color:${c.textMuted};margin-top:4px;letter-spacing:0.5px;}
 .warnIcon{width:56px;height:56px;border-radius:50%;background:rgba(251,191,36,0.12);display:flex;align-items:center;justify-content:center;margin-bottom:14px;font-size:28px;color:${c.warning};}
 .offTitle{font-size:15px;font-weight:700;color:${c.textPrimary};margin-bottom:8px;}
@@ -114,8 +116,8 @@ button:hover{opacity:0.88;}
 <div id="countdown">60s</div>
 <div class="spinner"></div>
 <div class="title">Control TC</div>
-<div id="splashMsg">Buscando actualizaciones...</div>
-<div class="barWrap" id="barWrap"><div id="splashBar"></div></div>
+<div id="splashMsg">Buscando actualizaciones</div>
+<div class="barWrap" id="barWrap"><div class="barTrack"><div id="splashBar"></div></div><span id="splashPct">0%</span></div>
 <div class="version" id="splashVersion"></div>
 </div>
 <div id="vOffline">
@@ -189,6 +191,7 @@ function updateSplashMessage(msg, percent) {
     const p = Math.max(0, Math.min(100, Math.round(percent)));
     js += `var b=document.getElementById('barWrap');if(b)b.classList.add('show');`;
     js += `var bar=document.getElementById('splashBar');if(bar)bar.style.width='${p}%';`;
+    js += `var pct=document.getElementById('splashPct');if(pct)pct.textContent='${p}%';`;
   }
   js += `})();`;
   splashWin.webContents.executeJavaScript(js).catch(() => {});
@@ -217,7 +220,7 @@ function showUpdateErrorInSplash(version) {
         // Restaurar vista loading antes de caer a FASE 4b (mismo patrón estético
         // que showOfflineDecisionInSplash con 'continue').
         splashWin.webContents.executeJavaScript(
-          `(function(){var a=document.getElementById('vLoading');var c=document.getElementById('vUpdateError');if(c)c.style.display='none';if(a)a.style.display='flex';var m=document.getElementById('splashMsg');if(m)m.textContent='Iniciando...';var cd=document.getElementById('countdown');if(cd)cd.textContent='';var b=document.getElementById('barWrap');if(b)b.classList.remove('show');var bar=document.getElementById('splashBar');if(bar)bar.style.width='0%';})();`
+          `(function(){var a=document.getElementById('vLoading');var c=document.getElementById('vUpdateError');if(c)c.style.display='none';if(a)a.style.display='flex';var m=document.getElementById('splashMsg');if(m)m.textContent='Iniciando';var cd=document.getElementById('countdown');if(cd)cd.textContent='';var b=document.getElementById('barWrap');if(b)b.classList.remove('show');var bar=document.getElementById('splashBar');if(bar)bar.style.width='0%';})();`
         ).catch(() => {});
       }
       resolve(choice === 'continue' ? 'continue' : 'quit');
@@ -235,7 +238,7 @@ function showOfflineDecisionInSplash() {
       if (choice === 'continue' && splashAlive()) {
         // Estética: restaurar vista loading antes de cerrar el splash en FASE 4b.
         splashWin.webContents.executeJavaScript(
-          `(function(){var a=document.getElementById('vLoading');var b=document.getElementById('vOffline');if(b)b.style.display='none';if(a)a.style.display='flex';var m=document.getElementById('splashMsg');if(m)m.textContent='Iniciando...';var c=document.getElementById('countdown');if(c)c.textContent='';})();`
+          `(function(){var a=document.getElementById('vLoading');var b=document.getElementById('vOffline');if(b)b.style.display='none';if(a)a.style.display='flex';var m=document.getElementById('splashMsg');if(m)m.textContent='Iniciando';var c=document.getElementById('countdown');if(c)c.textContent='';})();`
         ).catch(() => {});
       }
       resolve(choice === 'continue' ? 'continue' : 'quit');
@@ -385,7 +388,7 @@ function macDownloadAndInstallAtBoot(version) {
     const zipPath = path.join(tmpDir, 'update.zip');
 
     try { fs.mkdirSync(tmpDir, { recursive: true }); } catch (_) {}
-    updateSplashMessage(`Descargando v${version}... 0%`, 0);
+    updateSplashMessage(`Descargando v${version}`, 0);
 
     httpsGet(zipUrl).then((res) => {
       const total = parseInt(res.headers['content-length'] || '0', 10);
@@ -395,14 +398,14 @@ function macDownloadAndInstallAtBoot(version) {
         downloaded += chunk.length;
         if (total > 0) {
           const pct = Math.round((downloaded / total) * 100);
-          updateSplashMessage(`Descargando v${version}... ${pct}%`, pct);
+          updateSplashMessage(`Descargando v${version}`, pct);
         }
       });
       res.pipe(file);
       file.on('finish', () => {
         file.close();
         try {
-          updateSplashMessage(`Instalando v${version}...`, 100);
+          updateSplashMessage(`Instalando v${version}`, 100);
           execSync(`unzip -o -q "${zipPath}" -d "${tmpDir}"`);
           const extractedApp = path.join(tmpDir, 'Control TC.app');
           if (!fs.existsSync(extractedApp)) {
@@ -455,11 +458,11 @@ function winDownloadAndInstallAtBoot() {
     const onProgress = (p) => {
       const pct = Math.round((p && p.percent) || 0);
       const v = pendingUpdateVersion || '';
-      updateSplashMessage(`Descargando v${v}... ${pct}%`, pct);
+      updateSplashMessage(`Descargando v${v}`, pct);
     };
     const onDownloaded = () => {
       cleanup();
-      updateSplashMessage(`Instalando v${pendingUpdateVersion || ''}...`, 100);
+      updateSplashMessage(`Instalando v${pendingUpdateVersion || ''}`, 100);
       // quitAndInstall mata la app — el resolve(true) puede no llegar a procesarse,
       // pero lo emitimos por completitud.
       setTimeout(() => {
@@ -735,7 +738,7 @@ app.whenReady().then(async () => {
   if (decision === 'install') {
     // FASE 4a: descargar + instalar (NO toca BD)
     const version = pendingUpdateVersion || '';
-    updateSplashMessage(`Descargando v${version}... 0%`, 0);
+    updateSplashMessage(`Descargando v${version}`, 0);
     let ok;
     if (process.platform === 'darwin') {
       ok = await macDownloadAndInstallAtBoot(version);
@@ -768,7 +771,7 @@ app.whenReady().then(async () => {
   // decision === 'skip' o el usuario eligió continuar → FASE 4b
 
   // FASE 4b: AHORA SÍ se conecta la BD
-  updateSplashMessage('Iniciando...');
+  updateSplashMessage('Iniciando');
   await startBackend();
   createWindow();
   setupAutoUpdater();   // listeners + IPC handlers para el banner in-app
