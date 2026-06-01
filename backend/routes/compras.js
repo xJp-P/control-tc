@@ -11,9 +11,13 @@ module.exports = function(db, { logAction, tjNombre }) {
     const tj = db.prepare('SELECT dia_corte FROM tarjetas WHERE id=?').get(tarjetaId);
     const diaCorte = tj ? tj.dia_corte : 30;
     const d = new Date(fecha + 'T12:00:00');
-    const dia = d.getDate();
-    if (dia > diaCorte) d.setMonth(d.getMonth() + 1);
-    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+    // Aritmética año/mes directa: NO usar d.setMonth(+1), porque si el día no existe en el
+    // mes destino (ej. 31-may → "31-jun" inexistente) JS desborda al mes siguiente (1-jul) y
+    // el ciclo salta un mes de más. Solo nos importa el mes/año del ciclo, no el día.
+    let year = d.getFullYear();
+    let month = d.getMonth(); // 0-11
+    if (d.getDate() > diaCorte) { month += 1; if (month > 11) { month = 0; year += 1; } }
+    return year + '-' + String(month + 1).padStart(2, '0');
   }
 
   router.get('/', (req, res) => {
@@ -126,6 +130,13 @@ module.exports = function(db, { logAction, tjNombre }) {
   router.post('/', (req, res) => {
     const { tarjeta_id, fecha, descripcion, valor_cop, valor_usd, tasa_usd, persona_id, estado, notas, diferida_id, grupo_id, es_internacional } = req.body;
     const ciclo = calcCiclo(fecha, tarjeta_id);
+    // Inmutabilidad: no permitir agregar una compra a un ciclo cuyo extracto ya está pagado/cerrado.
+    // Agregar movimientos a un ciclo cerrado descuadra el total que ya se cerró con el banco.
+    // (Espejo de la regla que ya bloquea editar/eliminar compras de ciclos pagados.)
+    const extCiclo = db.prepare("SELECT estado FROM extractos WHERE tarjeta_id=? AND ciclo=?").get(tarjeta_id, ciclo);
+    if (extCiclo && extCiclo.estado === 'pagado') {
+      return res.status(403).json({ error: 'No se puede agregar la compra: el extracto del ciclo ' + ciclo + ' ya está pagado. Los ciclos cerrados no admiten nuevos movimientos.' });
+    }
     const r = db.prepare(`INSERT INTO compras (tarjeta_id, fecha, descripcion, valor_cop, valor_usd, tasa_usd, persona_id, estado, ciclo, notas, diferida_id, grupo_id, es_internacional)
                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`)
       .run(tarjeta_id || null, fecha, descripcion, valor_cop, valor_usd || null, tasa_usd || null, persona_id || null, estado || 'pendiente', ciclo, notas || null, diferida_id || null, grupo_id || null, es_internacional ? 1 : 0);

@@ -44,8 +44,12 @@ function primerCorteAvance(fechaDesembolso, diaCorte) {
 // Equivalente a calcCicloLocal del frontend — mantener sincronizados.
 function calcCicloLocal(fechaStr, diaCorte) {
   const d = new Date(fechaStr + 'T12:00:00');
-  if (d.getDate() > (diaCorte || 30)) d.setMonth(d.getMonth() + 1);
-  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+  // Aritmética año/mes directa (no d.setMonth(+1)): evita el desbordamiento de día cuando el
+  // día no existe en el mes destino (31-may → 1-jul en vez de junio).
+  let year = d.getFullYear();
+  let month = d.getMonth();
+  if (d.getDate() > (diaCorte || 30)) { month += 1; if (month > 11) { month = 0; year += 1; } }
+  return year + '-' + String(month + 1).padStart(2, '0');
 }
 
 // Devuelve el ciclo del mes calendario actual (YYYY-MM).

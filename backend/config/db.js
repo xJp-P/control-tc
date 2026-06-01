@@ -88,10 +88,14 @@ function syncData(db) {
   todasComprasSync.forEach(c => {
     if (!c.fecha) return;
     const d = new Date(c.fecha + 'T12:00:00');
-    const dia = d.getDate();
     const diaCorte = c.dia_corte || 30;
-    if (dia > diaCorte) d.setMonth(d.getMonth() + 1);
-    const cicloCorrect = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+    // Aritmética año/mes directa (no d.setMonth(+1)): evita el desbordamiento de día (31-may →
+    // 1-jul en vez de junio) que asignaba ciclos un mes adelantados. Este auto-heal recalcula
+    // y corrige retroactivamente cualquier compra cuyo ciclo quedó mal por el bug previo.
+    let year = d.getFullYear();
+    let month = d.getMonth();
+    if (d.getDate() > diaCorte) { month += 1; if (month > 11) { month = 0; year += 1; } }
+    const cicloCorrect = year + '-' + String(month + 1).padStart(2, '0');
     if (c.ciclo !== cicloCorrect) {
       db.prepare("UPDATE compras SET ciclo=? WHERE id=?").run(cicloCorrect, c.id);
       fixes++;

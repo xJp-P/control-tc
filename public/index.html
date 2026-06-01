@@ -248,6 +248,12 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '3.3.3': [
+    'Corregido un error que asignaba algunas compras al mes equivocado: las hechas en días de fin de mes (como el 31) podían quedar registradas un mes más adelante de lo debido (por ejemplo una compra del 31 de mayo aparecía en julio en vez de junio) y no se veían en el historial. Ya quedan en el ciclo correcto, y la app reacomoda automáticamente las que se habían guardado mal.',
+    'Al entrar a una tarjeta, ahora se muestra por defecto el ciclo que está corriendo según su fecha de corte (no el mes del calendario). Excepción: si el extracto del ciclo anterior todavía no lo has pagado por completo, la app te muestra primero ese ciclo pendiente, para que veas lo que debes antes de pasar al mes en curso.',
+    'Ya no se pueden agregar compras a un ciclo cuyo extracto ya está pagado. Si lo intentas, la app te avisa y no la registra, para no descuadrar un corte que ya cerraste con el banco (igual que ya no se podían editar ni borrar compras de ciclos pagados).',
+    'Detalle visual: el valor principal de las tarjetas del dashboard (Deuda Total, Me Deben, Saldo en Bolsillo, Me Deben Corte, Deuda Personal e Intereses del Mes) ahora usa la misma tipografía que el resto, para que todas se vean consistentes. Además, el prefijo "COP" solo aparece en las tarjetas que manejan pesos y dólares a la vez (donde hay que distinguir ambas monedas); en las demás se muestra el valor directo.'
+  ],
   '3.3.2': [
     'Corregido un caso en "Me Deben Corte": cuando apartabas en el bolsillo el valor de una compra internacional de un tercero MÁS su interés, la card seguía mostrando el interés como si el tercero te debiera (ej. $3.651) aunque ya estuviera cubierto. Ahora el dinero apartado de más absorbe correctamente el interés y la deuda queda en cero, igual que en la card "Me Deben".',
     'El bolsillo ya no permite apartar más de lo que cuesta la compra. Si intentas guardar un monto mayor, se ajusta automáticamente al máximo (el valor de la compra, o el valor más su interés en compras internacionales) y te avisa. Además, si luego editas la compra y le bajas el valor, el dinero apartado se reajusta solo para no quedar por encima del nuevo valor.',
@@ -911,10 +917,16 @@ function bimonCard(opts) {
   const className = 'card' + (opts.variant ? ' card-' + opts.variant : '');
   const tierStyle = { padding: '12px 16px' };
   const dividerTier = Object.assign({}, tierStyle, { borderTop: '1px solid var(--border)' });
-  const valueStyleCop = { fontFamily: 'monospace', fontSize: 20, fontWeight: 700, lineHeight: 1.1, color: 'var(--text-primary)' };
+  // Valor principal: misma tipografía/jerarquía que la clase .card-value (sans-serif del
+  // sistema, 28px, weight 700) usada por la card "Pago Mínimo", para que todas las cards del
+  // dashboard se vean consistentes. Los mini-bloques de detalle (copExtra/usdExtra) conservan
+  // su fuente monospace pequeña.
+  const valueStyleCop = { fontSize: 25, fontWeight: 700, lineHeight: 1.1, color: 'var(--text-primary)' };
   const valueStyleUsd = Object.assign({}, valueStyleCop, { color: '#4FC3F7' });
-  // Si el valor COP ya viene con prefix "$", anteponemos "COP " para que quede "COP $XXX".
-  const copDisplay = typeof opts.copValue === 'string' && !opts.copValue.startsWith('COP ')
+  // Prefijo "COP" SOLO cuando la card maneja doble moneda (hasUsd): ahí hay un valor USD abajo
+  // del que hay que distinguir el de pesos. En tarjetas de una sola moneda el prefijo es
+  // redundante, así que mostramos el valor a secas ("$XXX").
+  const copDisplay = (opts.hasUsd && typeof opts.copValue === 'string' && !opts.copValue.startsWith('COP '))
     ? 'COP ' + opts.copValue : opts.copValue;
   // USD ya viene como "USD $X.XX" desde fmtUsd, lo dejamos tal cual.
   return e('div', { className, style: { padding: 0, overflow: 'hidden' } },
@@ -936,7 +948,10 @@ function bimonCard(opts) {
 
 function cicloActual() { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0'); }
 function todayISO() { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0'); }
-function calcCicloLocal(fechaStr, diaCorte) { var d = new Date(fechaStr + 'T12:00:00'); if (d.getDate() > (diaCorte || 30)) d.setMonth(d.getMonth() + 1); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'); }
+function calcCicloLocal(fechaStr, diaCorte) { var d = new Date(fechaStr + 'T12:00:00'); var year = d.getFullYear(); var month = d.getMonth(); if (d.getDate() > (diaCorte || 30)) { month += 1; if (month > 11) { month = 0; year += 1; } } return year + '-' + String(month + 1).padStart(2, '0'); }
+// Ciclo VIGENTE de una tarjeta según su día de corte: el ciclo que está corriendo hoy.
+// Tras pasar el corte, es el del mes siguiente (ej. RappiCard corte 20, hoy 31-may → 2026-06).
+function cicloVigente(diaCorte) { return calcCicloLocal(todayISO(), diaCorte); }
 
 function CicloPicker({ value, onChange }) {
   function shift(delta) {
@@ -1559,7 +1574,11 @@ function CardResumen({ tarjeta, onDataChange }) {
   const [compras, setCompras] = useState([]);
   const [personas, setPersonas] = useState([]);
   const [resumen, setResumen] = useState(null);
-  const [ciclo, setCiclo] = useState(cicloActual());
+  // Ciclo por defecto = ciclo_sugerido que calcula el backend: el vigente según el corte, salvo
+  // que el extracto del ciclo anterior siga pendiente (pago mínimo sin cubrir al 100%), en cuyo
+  // caso arranca en ese anterior para que el usuario vea primero lo que debe pagar. Fallback al
+  // vigente si el backend no lo envió.
+  const [ciclo, setCiclo] = useState(tarjeta.ciclo_sugerido || cicloVigente(tarjeta.dia_corte));
   const [avances, setAvances] = useState([]);
   const [diferidas, setDiferidas] = useState([]);
   const [selectedAvance, setSelectedAvance] = useState(null);
@@ -1614,7 +1633,9 @@ function CardResumen({ tarjeta, onDataChange }) {
       prep.then(() => Promise.all(compraData.map(d => {
         d.tarjeta_id = tarjeta.id;
         return api('/compras', { method: 'POST', body: d });
-      }))).then(() => {
+      }))).then((resultados) => {
+        const conError = (resultados || []).find(r => r && r.error);
+        if (conError) { refreshAll(); toastErr(conError.error); return; }
         setShowCompraModal(false); setShowMovModal(false); refreshAll();
         toast(replaceId ? 'Compra convertida en dividida' : compraData.length + ' compras registradas');
       });
@@ -1633,7 +1654,11 @@ function CardResumen({ tarjeta, onDataChange }) {
     compraData.tarjeta_id = tarjeta.id;
     const method = editCompra ? 'PUT' : 'POST';
     const url = editCompra ? '/compras/' + editCompra.id : '/compras';
-    api(url, { method, body: compraData }).then(() => { setShowCompraModal(false); setShowMovModal(false); refreshAll(); toast('Compra guardada'); });
+    api(url, { method, body: compraData }).then((resp) => {
+      // El backend bloquea (403) crear/editar en ciclos pagados; mostramos el motivo y no cerramos en falso.
+      if (resp && resp.error) { toastErr(resp.error); return; }
+      setShowCompraModal(false); setShowMovModal(false); refreshAll(); toast('Compra guardada');
+    });
   }
   async function handleMergePersonal(grupoId) {
     // Primera confirmación (no destructiva).
@@ -2268,7 +2293,7 @@ function CardResumen({ tarjeta, onDataChange }) {
       (() => {
         if (purchaseRows.length === 0) return e('div', { className: 'empty-state' }, e('div', { className: 'icon' }, e(Ico, { name: 'cart', size: 48, color: 'var(--text-muted)' })), e('div', null, 'No hay compras en este ciclo'));
         const cicloPagadoC = !!(data.extractoCiclo && data.extractoCiclo.estado === 'pagado');
-        const esFuturoCiclo = ciclo > cicloActual();
+        const esFuturoCiclo = ciclo > cicloVigente(tarjeta.dia_corte);
         // Solo Bancolombia Visa cobra intereses sobre compras intl en COP (validado con extracto real).
         // Mastercard/Amex usan extracto dual; otros bancos (RappiCard/Nu) no se han validado todavía.
         const fr = tarjeta.franquicia ? tarjeta.franquicia.toLowerCase() : '';
@@ -2538,7 +2563,7 @@ function CardResumen({ tarjeta, onDataChange }) {
     (() => {
       const diferidasCiclo = diferidas.filter(d => d.ciclos && d.ciclos.includes(ciclo));
       const cicloPagadoDif = !!(data.extractoCiclo && data.extractoCiclo.estado === 'pagado');
-      const esFuturoCicloDif = ciclo > cicloActual();
+      const esFuturoCicloDif = ciclo > cicloVigente(tarjeta.dia_corte);
       const totalCuotaDif = diferidasCiclo.reduce((s, d) => s + (d.cuotaCorte || 0), 0);
       return e('div', { style: { marginTop: 32 } },
       e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 15, fontWeight: 700, marginBottom: 12 } },
@@ -2734,7 +2759,7 @@ function CardResumen({ tarjeta, onDataChange }) {
                   if (cicloPagado) rowStyle.background = 'rgba(52,211,153,0.10)';
                   // Inmutabilidad de avances: solo se puede editar/eliminar si el desembolso es del ciclo actual
                   // (antigüedad < 1 mes) Y el extracto de ese ciclo aún no está pagado.
-                  var canEditAvance = tarjeta && calcCicloLocal(a.fecha_desembolso, tarjeta.dia_corte) === cicloActual() && !cicloPagado;
+                  var canEditAvance = tarjeta && calcCicloLocal(a.fecha_desembolso, tarjeta.dia_corte) === cicloVigente(tarjeta.dia_corte) && !cicloPagado;
                   var canDeleteAvance = canEditAvance;
                   return e('tr', { key: a.id, onClick: () => loadAvanceDetail(a.id), style: rowStyle, className: selectedAvance === a.id ? 'row-highlight' : '' },
                     e('td', { style: { fontWeight: 600 } }, a.etiqueta),
@@ -3743,7 +3768,7 @@ function Pagos({ tarjeta, onDataChange }) {
 
   const hoy = todayISO();
   const totalPagado = pagos.reduce((s, p) => s + p.monto, 0);
-  const cicloAct = cicloActual();
+  const cicloAct = cicloVigente(tarjeta.dia_corte);
   const extCicloActual = extractos.find(x => x.ciclo === cicloAct);
   const extFaltaPagar = extractos.filter(x => x.ciclo !== cicloAct && x.estado === 'pendiente' && x.fecha_corte <= hoy).sort((a, b) => a.ciclo.localeCompare(b.ciclo));
   const extProximosCiclos = extractos.filter(x => x.ciclo !== cicloAct && x.estado === 'pendiente' && x.fecha_corte > hoy).sort((a, b) => a.ciclo.localeCompare(b.ciclo));

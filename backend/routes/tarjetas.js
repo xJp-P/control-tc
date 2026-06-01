@@ -2,7 +2,7 @@
 const { Router } = require('express');
 const { calcularAmortizacionAvance } = require('../engine/amortizacion');
 const { calcularAmortizacionDiferida } = require('../engine/amortizacion');
-const { hoyLocal } = require('../helpers/dates');
+const { hoyLocal, calcCicloLocal } = require('../helpers/dates');
 const { nuOpts, avanceOpts, clearBancoCache } = require('../helpers/banco');
 const { scrapeTasas } = require('../helpers/scraper');
 
@@ -80,7 +80,23 @@ module.exports = function(db, { logAction }) {
   router.get('/:id', (req, res) => {
     const t = db.prepare('SELECT * FROM tarjetas WHERE id=?').get(req.params.id);
     if (!t) return res.status(404).json({ error: 'Tarjeta no encontrada' });
-    res.json(t);
+    // ciclo_sugerido: el ciclo a mostrar por defecto al abrir la tarjeta.
+    //   - Por defecto, el ciclo VIGENTE según el día de corte (el que está corriendo hoy).
+    //   - PERO si el extracto del ciclo ANTERIOR sigue pendiente y no se cubrió el pago mínimo
+    //     al 100%, se sugiere ese ciclo anterior (para que el usuario vea primero lo que debe).
+    // Se calcula en el backend y se entrega junto a la tarjeta para que la vista arranque en el
+    // ciclo correcto sin un salto visual (CardView carga la tarjeta antes de montar las pestañas).
+    const hoy = hoyLocal();
+    const cicloVig = calcCicloLocal(hoy, t.dia_corte || 30);
+    const [vy, vm] = cicloVig.split('-').map(Number);
+    let py = vy, pm = vm - 1; if (pm < 1) { pm = 12; py -= 1; }
+    const cicloPrev = py + '-' + String(pm).padStart(2, '0');
+    const extPrev = db.prepare("SELECT pago_minimo, COALESCE(monto_pagado,0) as mp, estado FROM extractos WHERE tarjeta_id=? AND ciclo=?").get(t.id, cicloPrev);
+    let ciclo_sugerido = cicloVig;
+    if (extPrev && extPrev.estado === 'pendiente' && extPrev.pago_minimo > 0 && extPrev.mp < extPrev.pago_minimo) {
+      ciclo_sugerido = cicloPrev;
+    }
+    res.json({ ...t, ciclo_sugerido });
   });
 
   router.post('/', (req, res) => {
