@@ -248,6 +248,9 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '3.4.1': [
+    'Abono a Capital ahora muestra un resumen en vivo: a medida que escribes el monto, ves al instante a qué compras, cuotas, diferidas o avances se va a aplicar, cuánto a cada uno y si quedan saldados o parciales. Si cambias el monto, el resumen se actualiza solo. Ya no hay que pulsar "Ver resumen" como paso aparte.'
+  ],
   '3.4.0': [
     'La sección "Próximos Pagos" del inicio ahora muestra siempre el pago mínimo al día: se recalcula en el momento, sin que tengas que entrar a la pestaña de Pagos de la tarjeta para que se actualice.',
     'Pantalla de carga más limpia: se quitaron los puntos suspensivos de los mensajes ("Buscando actualizaciones", "Instalando", "Iniciando") y, durante una descarga, el porcentaje ahora aparece al lado de la barra de progreso en vez de pegado al texto.'
@@ -1612,6 +1615,21 @@ function CardResumen({ tarjeta, onDataChange }) {
 
   useEffect(() => { api('/dashboard?tarjeta_id=' + tarjeta.id + '&ciclo=' + ciclo).then(setData); }, [tarjeta.id, ciclo]);
 
+  // Preview EN VIVO del abono a capital: cuando cambia el monto/fecha con el modal abierto,
+  // consulta la distribución (sin aplicar) con un pequeño debounce. La respuesta puede traer
+  // .detalle (distribución) o .error (ej. extracto pendiente); ambos se muestran en el form.
+  useEffect(() => {
+    if (!showAbonoCapitalModal || abonoCapitalResult) return;
+    const monto = parseFloat(abonoCapitalMonto);
+    if (!monto || monto <= 0) { setAbonoCapitalPreview(null); return; }
+    let cancelado = false;
+    const t = setTimeout(() => {
+      const params = new URLSearchParams({ tarjeta_id: tarjeta.id, monto, fecha: abonoCapitalFecha });
+      api('/abono-capital/preview?' + params).then(r => { if (!cancelado) setAbonoCapitalPreview(r); });
+    }, 400);
+    return () => { cancelado = true; clearTimeout(t); };
+  }, [abonoCapitalMonto, abonoCapitalFecha, showAbonoCapitalModal, abonoCapitalResult, tarjeta.id]);
+
   const loadCompras = useCallback(() => {
     api('/compras?tarjeta_id=' + tarjeta.id + '&ciclo=' + ciclo).then(setCompras);
     api('/compras/resumen?tarjeta_id=' + tarjeta.id + '&ciclo=' + ciclo).then(setResumen);
@@ -1879,15 +1897,6 @@ function CardResumen({ tarjeta, onDataChange }) {
     api('/abonos/' + id, { method: 'DELETE' }).then(() => { loadAvanceDetail(selectedAvance); refreshAll(); toast('Abono eliminado'); });
   }
 
-  async function fetchAbonoPreview(ev) {
-    ev.preventDefault();
-    setAbonoCapitalSaving(true);
-    const params = new URLSearchParams({ tarjeta_id: tarjeta.id, monto: parseFloat(abonoCapitalMonto), fecha: abonoCapitalFecha });
-    const result = await api('/abono-capital/preview?' + params);
-    setAbonoCapitalSaving(false);
-    if (result.error) { infoDialog(result.error, 'No se puede abonar'); return; }
-    setAbonoCapitalPreview(result);
-  }
   async function submitAbonoCapital() {
     setAbonoCapitalSaving(true);
     const result = await api('/abono-capital', { method: 'POST', body: { tarjeta_id: tarjeta.id, monto: parseFloat(abonoCapitalMonto), fecha: abonoCapitalFecha } });
@@ -2924,18 +2933,9 @@ function CardResumen({ tarjeta, onDataChange }) {
           )
         );
 
-        if (abonoCapitalPreview) return e('div', null,
-          e('div', { style: { marginBottom: 8, fontSize: 15, fontWeight: 700, color: 'var(--accent)' } }, 'Resumen del abono'),
-          e('div', { style: { marginBottom: 4, fontSize: 13, color: 'var(--text-secondary)' } }, 'Monto a aplicar: ', e('strong', null, fmtCOP(parseFloat(abonoCapitalMonto)))),
-          abonoCapitalPreview.restante > 0 && e('div', { style: { marginBottom: 8, fontSize: 13, color: 'var(--warning)' } }, 'Sobrante (sin deudas donde aplicar): ', e('strong', null, fmtCOP(abonoCapitalPreview.restante))),
-          e('div', { style: { marginTop: 12 } }, detalleTable(abonoCapitalPreview.detalle)),
-          e('div', { className: 'modal-actions', style: { marginTop: 16 } },
-            e('button', { className: 'btn', onClick: () => setAbonoCapitalPreview(null) }, '← Volver'),
-            e('button', { className: 'btn btn-success', onClick: submitAbonoCapital, disabled: abonoCapitalSaving }, abonoCapitalSaving ? 'Aplicando...' : 'Confirmar y aplicar')
-          )
-        );
-
-        return e('form', { onSubmit: fetchAbonoPreview },
+        const montoNum = parseFloat(abonoCapitalMonto) || 0;
+        const previewValido = abonoCapitalPreview && !abonoCapitalPreview.error && montoNum > 0;
+        return e('form', { onSubmit: (ev) => { ev.preventDefault(); if (previewValido) submitAbonoCapital(); } },
           e('div', { style: { marginBottom: 12, fontSize: 13, color: 'var(--text-secondary)' } },
             'El abono se distribuye en orden: 1° Compras nacionales (más antiguas primero) → 2° Compras internacionales → 3° Cuotas diferidas → 4° Avances.'
           ),
@@ -2949,9 +2949,21 @@ function CardResumen({ tarjeta, onDataChange }) {
               e(MoneyInput, { value: abonoCapitalMonto, onChange: val => setAbonoCapitalMonto(val), required: true, placeholder: 'Ej: 1.000.000' })
             )
           ),
-          e('div', { className: 'modal-actions' },
+          // Resumen EN VIVO: se actualiza conforme cambias el monto, sin pulsar nada.
+          (() => {
+            if (montoNum <= 0) return null;
+            if (!abonoCapitalPreview) return e('div', { className: 'form-hint', style: { marginTop: 8 } }, 'Calculando distribucion...');
+            if (abonoCapitalPreview.error) return e('div', { style: { marginTop: 8, padding: '10px 12px', background: 'var(--danger-bg)', color: 'var(--danger)', borderRadius: 8, fontSize: 13, lineHeight: 1.4 } }, abonoCapitalPreview.error);
+            if (!abonoCapitalPreview.detalle || abonoCapitalPreview.detalle.length === 0) return e('div', { className: 'form-hint', style: { marginTop: 8, color: 'var(--warning)' } }, 'No hay deudas donde aplicar este abono.');
+            return e('div', { style: { marginTop: 12 } },
+              e('div', { style: { fontWeight: 600, marginBottom: 8, fontSize: 13 } }, 'Se aplicara asi (', fmtCOP(abonoCapitalPreview.aplicado), '):'),
+              detalleTable(abonoCapitalPreview.detalle),
+              abonoCapitalPreview.restante > 0 && e('div', { style: { marginTop: 8, fontSize: 13, color: 'var(--warning)' } }, 'Sobrante (sin deudas donde aplicar): ', e('strong', null, fmtCOP(abonoCapitalPreview.restante)))
+            );
+          })(),
+          e('div', { className: 'modal-actions', style: { marginTop: 16 } },
             e('button', { type: 'button', className: 'btn', onClick: closeAbonoCapital }, 'Cancelar'),
-            e('button', { type: 'submit', className: 'btn btn-success', disabled: abonoCapitalSaving }, abonoCapitalSaving ? 'Calculando...' : 'Ver resumen →')
+            e('button', { type: 'submit', className: 'btn btn-success', disabled: abonoCapitalSaving || !previewValido }, abonoCapitalSaving ? 'Aplicando...' : 'Aplicar abono a capital')
           )
         );
       })()
