@@ -156,6 +156,18 @@ El motor separa la porción de intereses intl que pertenece a compras "Personal"
 
 En compras divididas (1 compra repartida entre varias personas), el interés se computa por cada hijo individualmente sobre su propio `valor_cop`, lo cual hace que la suma de hijos cuadre con el padre por construcción.
 
+### 4.6 El interés corriente del banco puede exceder la aproximación del motor (revolving internacional)
+
+Al conciliar un ciclo en el que hay **saldo internacional arrastrado** de ciclos anteriores, se observó que el cargo agregado "Intereses corrientes" del banco es **ligeramente mayor** que la suma que calcula el motor de:
+
+```
+interés_motor ≈ interés_avances + interés_intl_del_ciclo_actual
+```
+
+**Causa:** el banco aplica capitalización diaria sobre el **saldo internacional pendiente acumulado** (revolving), que incluye el remanente de compras internacionales de ciclos previos aún no saldadas por completo. El motor, en cambio, sólo calcula el interés internacional sobre las compras del **ciclo vigente** (proporcional a `días_compra_a_corte / 30`, ver §4.3), por lo que **subestima** el interés corriente cuando existe saldo internacional previo.
+
+**Magnitud típica observada:** una fracción menor (orden de centésimas de punto porcentual del pago mínimo). Se considera **ruido aceptable**: modelar el revolving exacto exigiría el log día-a-día de saldos del banco, que no está disponible del lado del cliente. La conciliación del pago mínimo debe tolerar esta pequeña diferencia por debajo del componente de intereses.
+
 ---
 
 ## 5. Compras diferidas (2 a 36 cuotas) — la cuota 1 vs cuota 2
@@ -208,6 +220,24 @@ Compra de prueba: `337869 - 21/03 APPLE.COM/BILL $8.500 a 36 cuotas`, ciclo 2 (t
 - En extracto 3 también aparece un nuevo `APPLE.COM/BILL $8.500 1/1` que reemplaza la suscripción del mes — no es la misma compra.
 
 El interés de la cuota 1 que se difirió y el interés del período 2 se cobran como parte del cargo agregado `INTERESES CORRIENTES $542.968,93` del ciclo 3.
+
+### 5.4 Reprogramación del número de cuotas DESPUÉS del corte (cuotas irregulares)
+
+El número de cuotas de una compra diferida puede cambiarse desde la banca virtual. Cuando el cambio se hace **después** de la fecha de corte del ciclo, el banco ya facturó la primera cuota según el **plan original**, y reprograma el saldo según el **plan nuevo**:
+
+```
+cuota_1 (ya facturada en el ciclo) = monto / N_original
+saldo_restante                      = monto − cuota_1
+                                     = se reprograma según N_nuevo en los ciclos siguientes
+```
+
+**Ejemplo genérico:** una compra diferida inicialmente a 36 cuotas y luego reducida a 2 cuotas, con el cambio aplicado tras el corte:
+- Ciclo actual: se cobra `cuota_1 = monto / 36` (la del plan original, ya impresa en el extracto).
+- Ciclo siguiente: se cobra `cuota_2 = monto − (monto / 36)` (todo el saldo restante de una vez).
+
+Es decir, **las cuotas resultantes NO son iguales** (no es `monto / 2` cada una). 
+
+> **Implicación en el motor:** `calcularAmortizacionDiferida` asume cuotas iguales (`monto / N`), por lo que **no** representa nativamente una reprogramación irregular como ésta. La forma recomendada de modelarla es con **dos movimientos de una cuota**: uno con el valor de la cuota original (`monto / N_original`) en el ciclo actual, y otro con el saldo restante en el ciclo siguiente. Así el pago mínimo de cada ciclo refleja exactamente lo que cobra el banco, a costa de perder la representación de "una sola compra".
 
 ---
 
@@ -359,6 +389,10 @@ Donde:
    - Mastercard: en una sola línea agrupada "INTERESES CORRIENTES" que en el motor exponemos junta bajo `cuotas_interes`.
 
 5. **Avances en Visa Platinum: comisión fija $6.840.** En Mastercard observamos comisiones desde $6.500 hasta $6.840 según la operación. La diferencia puede ser por categoría de tarjeta (Platinum vs Gold) o por el monto del avance. Es información a tener en cuenta si se diseña una calculadora de avances futura.
+
+6. **El "corte de transacciones" es anterior a la fecha de fin de período impresa.** El período nominal del extracto (la leyenda "del día A al día B") **no** garantiza que todas las transacciones hasta el último día entren en ese ciclo. El banco cierra la captura de movimientos algunos días **antes** de la fecha de fin impresa; las compras de los últimos días del período pueden quedar facturadas en el extracto del ciclo **siguiente**.
+   - **Implicación para la conciliación:** una compra registrada en la app en los últimos días del ciclo (según el `dia_corte` configurado) puede aparecer todavía "del mes" en la app, pero el banco la difiere al siguiente extracto. El pago mínimo de la app quedará por encima del extracto por el valor de esa compra, y la diferencia **se resuelve sola** cuando llega el extracto del ciclo siguiente.
+   - **No es un error de datos:** la compra está bien registrada según la lógica de corte de la app; es un desfase de timing inherente a que el `dia_corte` del cliente es una aproximación del corte real de captura del banco. No debe "corregirse" moviendo la compra.
 
 ---
 
