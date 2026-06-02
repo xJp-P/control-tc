@@ -248,6 +248,9 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '3.5.0': [
+    'Nuevo campo "Ciclo (avanzado)" al editar una compra de una cuota: te permite fijar a mano a qué mes pertenece la compra, sin importar su fecha. Es útil cuando el banco reprograma una cuota a otro mes (por ejemplo, una compra que cambiaste de 36 a 2 cuotas y cuyo saldo se paga el mes siguiente): así la compra conserva su fecha real en el historial pero cuenta para el mes correcto. Si lo dejas vacío, el mes se calcula solo según la fecha, como siempre.'
+  ],
   '3.4.1': [
     'Abono a Capital ahora muestra un resumen en vivo: a medida que escribes el monto, ves al instante a qué compras, cuotas, diferidas o avances se va a aplicar, cuánto a cada uno y si quedan saldados o parciales. Si cambias el monto, el resumen se actualiza solo. Ya no hay que pulsar "Ver resumen" como paso aparte.'
   ],
@@ -3104,6 +3107,10 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
   const [tasaUsd, setTasaUsd] = useState(item ? (item.tasa_usd || '') : '');
   const [personaId, setPersonaId] = useState(item ? (item.persona_id || '') : '');
   const [notas, setNotas] = useState(item ? (item.notas || '') : '');
+  // Ciclo manual (avanzado): vacío = el ciclo se deriva de la fecha. Con valor "YYYY-MM" la
+  // compra pertenece a ese ciclo sin importar su fecha (cuotas reprogramadas por el banco que
+  // se pagan en otro ciclo). Solo se ofrece al editar una compra individual de 1 cuota.
+  const [cicloManualVal, setCicloManualVal] = useState(item && item.ciclo_manual ? item.ciclo : '');
   // Checkbox unificado: marca la compra como internacional (acumula intereses) y opcionalmente
   // permite registrar valor USD + tasa (datos informativos, no obligatorios).
   const [esInternacional, setEsInternacional] = useState(item ? !!(item.es_internacional || item.valor_usd) : false);
@@ -3322,7 +3329,9 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
       valor_usd: usdNum,
       tasa_usd: tasaNum,
       persona_id: personaId ? parseInt(personaId) : null,
-      estado: estadoCalculado, ciclo,
+      estado: estadoCalculado,
+      ciclo: cicloManualVal || ciclo,
+      ciclo_manual: cicloManualVal ? 1 : 0,
       notas: numCuotas > 1 ? (notas ? notas + ' | ' : '') + 'Diferida a ' + numCuotas + ' cuotas' : notas,
       diferida_id,
       es_internacional: esInternacional ? 1 : 0
@@ -3535,6 +3544,16 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
       e('div', { className: 'form-group' },
         e('label', { className: 'form-label' }, 'Notas'),
         e('input', { type: 'text', className: 'form-input', value: notas, onChange: ev => setNotas(ev.target.value) })
+      )
+    ),
+    // Ciclo manual (avanzado): solo al editar una compra individual de 1 cuota.
+    item && !item._isGrupo && numCuotas <= 1 && e('div', { className: 'form-group', style: { marginTop: 4 } },
+      e('label', { className: 'form-label' }, 'Ciclo (avanzado)'),
+      e('input', { type: 'month', className: 'form-input', value: cicloManualVal, onChange: ev => setCicloManualVal(ev.target.value) }),
+      e('div', { className: 'form-hint', style: { color: cicloManualVal ? 'var(--warning)' : 'var(--text-muted)' } },
+        cicloManualVal
+          ? 'Ciclo fijado a mano: esta compra contará en ' + cicloManualVal + ' sin importar su fecha. Útil para cuotas que el banco reprogramó a otro mes.'
+          : 'Vacío = el ciclo se calcula solo según la fecha. Llénalo solo si el banco factura esta compra en un mes distinto al de su fecha.'
       )
     ),
     e('div', { className: 'modal-actions' },

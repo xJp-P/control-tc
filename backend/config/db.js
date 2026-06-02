@@ -84,9 +84,12 @@ function syncData(db) {
   });
 
   // 5. Compras: recalcular ciclo basado en fecha + dia_corte de la tarjeta
-  const todasComprasSync = db.prepare("SELECT c.id, c.fecha, c.ciclo, c.tarjeta_id, t.dia_corte FROM compras c JOIN tarjetas t ON c.tarjeta_id = t.id").all();
+  const todasComprasSync = db.prepare("SELECT c.id, c.fecha, c.ciclo, c.tarjeta_id, COALESCE(c.ciclo_manual,0) as ciclo_manual, t.dia_corte FROM compras c JOIN tarjetas t ON c.tarjeta_id = t.id").all();
   todasComprasSync.forEach(c => {
     if (!c.fecha) return;
+    // ciclo_manual=1: el ciclo fue asignado a mano (ej. cuota reprogramada por el banco que
+    // se paga en un ciclo distinto al de su fecha real). NO se recalcula desde la fecha.
+    if (c.ciclo_manual) return;
     const d = new Date(c.fecha + 'T12:00:00');
     const diaCorte = c.dia_corte || 30;
     // Aritmética año/mes directa (no d.setMonth(+1)): evita el desbordamiento de día (31-may →
@@ -579,6 +582,13 @@ function initDb(dbPathOverride) {
   // las clasifica como internacionales y les cobra tasa MV.
   try { db.prepare('SELECT es_internacional FROM compras LIMIT 1').get(); }
   catch (e) { db.exec('ALTER TABLE compras ADD COLUMN es_internacional INTEGER DEFAULT 0'); }
+
+  // Flag: ciclo asignado manualmente. Cuando es 1, el ciclo de la compra NO se deriva de la
+  // fecha ni lo recalcula syncData (paso 5). Sirve para cuotas reprogramadas por el banco que
+  // se pagan en un ciclo distinto al de su fecha real (la compra conserva su fecha real para
+  // ordenar/mostrar, pero pertenece al ciclo que se le asigne).
+  try { db.prepare('SELECT ciclo_manual FROM compras LIMIT 1').get(); }
+  catch (e) { db.exec('ALTER TABLE compras ADD COLUMN ciclo_manual INTEGER DEFAULT 0'); }
 
   // Retroactively assign grupo_id to existing split compras
   (() => {

@@ -128,8 +128,11 @@ module.exports = function(db, { logAction, tjNombre }) {
   });
 
   router.post('/', (req, res) => {
-    const { tarjeta_id, fecha, descripcion, valor_cop, valor_usd, tasa_usd, persona_id, estado, notas, diferida_id, grupo_id, es_internacional } = req.body;
-    const ciclo = calcCiclo(fecha, tarjeta_id);
+    const { tarjeta_id, fecha, descripcion, valor_cop, valor_usd, tasa_usd, persona_id, estado, notas, diferida_id, grupo_id, es_internacional, ciclo: cicloBody, ciclo_manual } = req.body;
+    // ciclo_manual=1 con un ciclo explícito → se respeta ese ciclo (ej. cuota reprogramada que
+    // se paga en otro ciclo distinto al de su fecha). Si no, el ciclo se deriva de la fecha.
+    const cicloManual = ciclo_manual ? 1 : 0;
+    const ciclo = (cicloManual && cicloBody) ? cicloBody : calcCiclo(fecha, tarjeta_id);
     // Inmutabilidad: no permitir agregar una compra a un ciclo cuyo extracto ya está pagado/cerrado.
     // Agregar movimientos a un ciclo cerrado descuadra el total que ya se cerró con el banco.
     // (Espejo de la regla que ya bloquea editar/eliminar compras de ciclos pagados.)
@@ -137,18 +140,21 @@ module.exports = function(db, { logAction, tjNombre }) {
     if (extCiclo && extCiclo.estado === 'pagado') {
       return res.status(403).json({ error: 'No se puede agregar la compra: el extracto del ciclo ' + ciclo + ' ya está pagado. Los ciclos cerrados no admiten nuevos movimientos.' });
     }
-    const r = db.prepare(`INSERT INTO compras (tarjeta_id, fecha, descripcion, valor_cop, valor_usd, tasa_usd, persona_id, estado, ciclo, notas, diferida_id, grupo_id, es_internacional)
-                          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`)
-      .run(tarjeta_id || null, fecha, descripcion, valor_cop, valor_usd || null, tasa_usd || null, persona_id || null, estado || 'pendiente', ciclo, notas || null, diferida_id || null, grupo_id || null, es_internacional ? 1 : 0);
+    const r = db.prepare(`INSERT INTO compras (tarjeta_id, fecha, descripcion, valor_cop, valor_usd, tasa_usd, persona_id, estado, ciclo, notas, diferida_id, grupo_id, es_internacional, ciclo_manual)
+                          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+      .run(tarjeta_id || null, fecha, descripcion, valor_cop, valor_usd || null, tasa_usd || null, persona_id || null, estado || 'pendiente', ciclo, notas || null, diferida_id || null, grupo_id || null, es_internacional ? 1 : 0, cicloManual);
     const fmt = new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',maximumFractionDigits:0}).format(valor_cop);
     logAction('crear', tjNombre(tarjeta_id) + 'Compra registrada: ' + descripcion + ' por ' + fmt);
     res.json({ id: r.lastInsertRowid });
   });
 
   router.put('/:id', (req, res) => {
-    const { tarjeta_id, fecha, descripcion, valor_cop, valor_usd, tasa_usd, persona_id, estado, notas, monto_bolsillo, es_internacional } = req.body;
-    const ciclo = calcCiclo(fecha, tarjeta_id);
-    const current = db.prepare('SELECT estado, monto_bolsillo, es_internacional, ciclo, tarjeta_id, diferida_id, fecha FROM compras WHERE id=?').get(req.params.id);
+    const { tarjeta_id, fecha, descripcion, valor_cop, valor_usd, tasa_usd, persona_id, estado, notas, monto_bolsillo, es_internacional, ciclo: cicloBody, ciclo_manual } = req.body;
+    const current = db.prepare('SELECT estado, monto_bolsillo, es_internacional, ciclo, tarjeta_id, diferida_id, fecha, ciclo_manual FROM compras WHERE id=?').get(req.params.id);
+    // ciclo_manual: si viene en el body lo usamos; si no, conservamos el de la compra. Con
+    // ciclo_manual=1 y un ciclo explícito se respeta ese ciclo; si no, se deriva de la fecha.
+    const cicloManual = ciclo_manual !== undefined ? (ciclo_manual ? 1 : 0) : (current ? (current.ciclo_manual || 0) : 0);
+    const ciclo = (cicloManual && cicloBody) ? cicloBody : calcCiclo(fecha, tarjeta_id);
     // Inmutabilidad: si el extracto del ciclo actual de la compra ya está pagado, bloquear.
     if (current) {
       const ext = db.prepare("SELECT estado FROM extractos WHERE tarjeta_id=? AND ciclo=?").get(current.tarjeta_id, current.ciclo);
@@ -172,8 +178,8 @@ module.exports = function(db, { logAction, tjNombre }) {
         finalEstado = (topeEdit > 0 && finalBolsillo >= topeEdit) ? 'bolsillo' : (finalBolsillo > 0 ? 'bolsillo_parcial' : 'pendiente');
       }
     }
-    db.prepare(`UPDATE compras SET tarjeta_id=?, fecha=?, descripcion=?, valor_cop=?, valor_usd=?, tasa_usd=?, persona_id=?, estado=?, ciclo=?, notas=?, monto_bolsillo=?, es_internacional=? WHERE id=?`)
-      .run(tarjeta_id, fecha, descripcion, valor_cop, valor_usd, tasa_usd, persona_id, finalEstado, ciclo, notas, finalBolsillo, finalIntl, req.params.id);
+    db.prepare(`UPDATE compras SET tarjeta_id=?, fecha=?, descripcion=?, valor_cop=?, valor_usd=?, tasa_usd=?, persona_id=?, estado=?, ciclo=?, notas=?, monto_bolsillo=?, es_internacional=?, ciclo_manual=? WHERE id=?`)
+      .run(tarjeta_id, fecha, descripcion, valor_cop, valor_usd, tasa_usd, persona_id, finalEstado, ciclo, notas, finalBolsillo, finalIntl, cicloManual, req.params.id);
 
     // SINCRONIZAR diferida vinculada: si la compra tiene diferida_id, mantener
     // alineadas fecha_compra y fecha_primer_corte (y tarjeta_id si cambió).
