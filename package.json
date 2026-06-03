@@ -3,6 +3,7 @@
   "version": "4.0.0",
   "description": "Control TC — Gestor personal de tarjetas de crédito (compras, avances, diferidas, terceros y extractos)",
   "main": "desktop/main.js",
+  "author": "xJp-P",
   "scripts": {
     "start": "electron .",
     "dev": "cross-env NODE_ENV=development electron .",
