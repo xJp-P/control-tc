@@ -13,5 +13,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   installUpdate: () => ipcRenderer.invoke('install-update'),
   onUpdateAvailable: (callback) => ipcRenderer.on('update-available', (_, info) => callback(info)),
   onDownloadProgress: (callback) => ipcRenderer.on('download-progress', (_, progress) => callback(progress)),
-  onUpdateDownloaded: (callback) => ipcRenderer.on('update-downloaded', () => callback())
+  onUpdateDownloaded: (callback) => ipcRenderer.on('update-downloaded', () => callback()),
+  // IA Asistente — credenciales (IPC puro; la key nunca vuelve al frontend)
+  iaGetConfig: () => ipcRenderer.invoke('ia-get-config'),
+  iaSaveKey: (payload) => ipcRenderer.invoke('ia-save-key', payload),
+  iaClearKey: () => ipcRenderer.invoke('ia-clear-key'),
+  openExternal: (url) => ipcRenderer.invoke('open-external', url)
 });

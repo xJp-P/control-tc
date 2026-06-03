@@ -65,6 +65,13 @@ a { color: var(--accent); text-decoration: none; }
 .nav-add-btn { border: 1px dashed var(--border); color: var(--text-muted); justify-content: center; font-size: 12px; }
 .nav-add-btn:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-bg); }
 .sidebar-footer { padding: 12px; border-top: 1px solid var(--border); font-size: 11px; color: var(--text-muted); text-align: center; }
+/* Glow multicolor sutil (estilo Gemini: azul -> purpura -> rosa) para el icono del Asistente */
+@keyframes aiGlowGemini {
+  0%   { filter: drop-shadow(0 0 1.5px rgba(79,140,255,0.65)) drop-shadow(0 0 4px rgba(168,85,247,0.45)); }
+  50%  { filter: drop-shadow(0 0 1.5px rgba(168,85,247,0.65)) drop-shadow(0 0 4px rgba(236,72,153,0.45)); }
+  100% { filter: drop-shadow(0 0 1.5px rgba(79,140,255,0.65)) drop-shadow(0 0 4px rgba(168,85,247,0.45)); }
+}
+.ai-glow { animation: aiGlowGemini 4.5s ease-in-out infinite; }
 
 .main-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
 .header { height: 56px; background: var(--bg-secondary); border-bottom: 1px solid var(--border); display: flex; align-items: center; padding: 0 20px; gap: 16px; flex-shrink: 0; }
@@ -248,6 +255,15 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '4.0.0': [
+    'Nuevo Asistente de IA para conciliar tus extractos. Subes el PDF del extracto del banco y la app lo compara con tus movimientos para explicarte por qué el pago mínimo del banco no coincide con el de la app y señalarte posibles diferencias (una compra que falta, un monto distinto o algo mal clasificado).',
+    'Funciona con la IA que prefieras: conectas tu cuenta de OpenAI, Anthropic (Claude), Google Gemini o DeepSeek usando tu clave. La clave se guarda cifrada en tu equipo y nunca se incluye en las copias de seguridad. También hay un modo Demo, sin conexión, para ver cómo funciona sin gastar nada.',
+    'Tu privacidad primero: antes de enviar nada a la IA, la app oculta tus datos personales del extracto (nombre, dirección, ciudad, documento, teléfono y número de tarjeta). Solo tienes que cargar tus datos una vez en Configuración para que se oculten siempre.',
+    'Revisas antes de enviar: tras leer el PDF ves una vista previa de lo extraído (ya sin tus datos personales). Si prefieres no conectar una IA, puedes copiar con un botón un texto ya armado para pegarlo en cualquier IA por tu cuenta.',
+    'Soporta extractos protegidos con contraseña: si tu PDF está bloqueado, la app te pide la clave para abrirlo (no se guarda en ningún lado).',
+    'Las diferencias que encuentra la IA se pueden aplicar con un clic (crear o corregir una compra), siempre con una confirmación que te muestra exactamente qué se va a cambiar. La IA solo sugiere; los cambios los aplicas tú.',
+    'Abono a Capital: si haces un abono a capital y alguna de las compras afectadas tenía dinero apartado en el bolsillo, ese dinero ahora se libera automáticamente y la app te avisa cuánto quedó disponible de nuevo (antes ese dinero quedaba apartado para una compra que ya habías pagado).'
+  ],
   '3.5.0': [
     'Nuevo campo "Ciclo (avanzado)" al editar una compra de una cuota: te permite fijar a mano a qué mes pertenece la compra, sin importar su fecha. Es útil cuando el banco reprograma una cuota a otro mes (por ejemplo, una compra que cambiaste de 36 a 2 cuotas y cuyo saldo se paga el mes siguiente): así la compra conserva su fecha real en el historial pero cuenta para el mes correcto. Si lo dejas vacío, el mes se calcula solo según la fecha, como siempre.'
   ],
@@ -840,12 +856,13 @@ const ICONS = {
   bulb:       'M9 18h6 M10 22h4 M15.09 14c.18-.98.65-1.74 1.41-2.5A4.65 4.65 0 0018 8a6 6 0 00-12 0c0 1 .23 2.23 1.5 3.5A4.61 4.61 0 018.91 14',
   'chevron-right': 'M9 18l6-6-6-6',
   'chevron-down':  'M6 9l6 6 6-6',
+  sparkles:   'M12 3l1.9 5.6 5.6 1.9-5.6 1.9L12 18l-1.9-5.6L4.5 10.5l5.6-1.9z M19 14l.8 2.2 2.2.8-2.2.8L19 20l-.8-2.2L16 17l2.2-.8z M6 4l.6 1.7L8 6.3l-1.4.6L6 8.5l-.6-1.6L4 6.3l1.4-.6z',
 };
-function Ico({ name, size = 18, sw = 1.8, color = 'currentColor' }) {
+function Ico({ name, size = 18, sw = 1.8, color = 'currentColor', style, className }) {
   const d = ICONS[name]; if (!d) return null;
   const paths = d.split(' M ');
   const pathEls = paths.map((p, i) => e('path', { key: i, d: i === 0 ? p : 'M ' + p }));
-  return e('svg', { width: size, height: size, viewBox: '0 0 24 24', fill: 'none', stroke: color, strokeWidth: sw, strokeLinecap: 'round', strokeLinejoin: 'round' }, pathEls);
+  return e('svg', { width: size, height: size, viewBox: '0 0 24 24', fill: 'none', stroke: color, strokeWidth: sw, strokeLinecap: 'round', strokeLinejoin: 'round', style, className }, pathEls);
 }
 
 function fmtCOPDec(n) {
@@ -1908,7 +1925,7 @@ function CardResumen({ tarjeta, onDataChange }) {
     setAbonoCapitalPreview(null);
     setAbonoCapitalResult(result);
     refreshAll();
-    toast('Abono a capital aplicado');
+    toast(result.bolsilloLiberado > 0 ? ('Abono a capital aplicado. Se liberaron ' + fmtCOP(result.bolsilloLiberado) + ' del bolsillo') : 'Abono a capital aplicado');
   }
   function closeAbonoCapital() { setShowAbonoCapitalModal(false); setAbonoCapitalResult(null); setAbonoCapitalPreview(null); setAbonoCapitalMonto(''); }
 
@@ -2923,6 +2940,7 @@ function CardResumen({ tarjeta, onDataChange }) {
           e('div', { style: { marginBottom: 16, fontSize: 15, fontWeight: 700, color: 'var(--success)' } }, 'Abono aplicado correctamente'),
           e('div', { style: { marginBottom: 8 } }, 'Monto aplicado: ', e('strong', null, fmtCOP(abonoCapitalResult.aplicado))),
           abonoCapitalResult.restante > 0 && e('div', { style: { marginBottom: 8, color: 'var(--warning)' } }, 'Sobrante (sin deudas donde aplicar): ', e('strong', null, fmtCOP(abonoCapitalResult.restante))),
+          abonoCapitalResult.bolsilloLiberado > 0 && e('div', { style: { marginBottom: 8, color: 'var(--accent)' } }, 'Se liberaron del bolsillo: ', e('strong', null, fmtCOP(abonoCapitalResult.bolsilloLiberado)), ' (disponibles de nuevo)'),
           e('div', { style: { marginTop: 16 } },
             e('div', { style: { fontWeight: 600, marginBottom: 8 } }, 'Distribucion del abono:'),
             detalleTable(abonoCapitalResult.detalle),
@@ -2961,7 +2979,8 @@ function CardResumen({ tarjeta, onDataChange }) {
             return e('div', { style: { marginTop: 12 } },
               e('div', { style: { fontWeight: 600, marginBottom: 8, fontSize: 13 } }, 'Se aplicara asi (', fmtCOP(abonoCapitalPreview.aplicado), '):'),
               detalleTable(abonoCapitalPreview.detalle),
-              abonoCapitalPreview.restante > 0 && e('div', { style: { marginTop: 8, fontSize: 13, color: 'var(--warning)' } }, 'Sobrante (sin deudas donde aplicar): ', e('strong', null, fmtCOP(abonoCapitalPreview.restante)))
+              abonoCapitalPreview.restante > 0 && e('div', { style: { marginTop: 8, fontSize: 13, color: 'var(--warning)' } }, 'Sobrante (sin deudas donde aplicar): ', e('strong', null, fmtCOP(abonoCapitalPreview.restante))),
+              abonoCapitalPreview.bolsilloLiberado > 0 && e('div', { style: { marginTop: 8, fontSize: 13, color: 'var(--accent)' } }, 'Se liberaran ', e('strong', null, fmtCOP(abonoCapitalPreview.bolsilloLiberado)), ' del bolsillo (quedaran disponibles).')
             );
           })(),
           e('div', { className: 'modal-actions', style: { marginTop: 16 } },
@@ -4861,7 +4880,31 @@ function BancosUrlsConfig() {
   );
 }
 
-function Configuracion() {
+// Proveedores de IA soportados por el Asistente de Conciliación.
+// 'mock' = Demo sin conexión (no requiere key; valida la UI sin gastar créditos).
+const IA_PROVIDERS = [
+  { id: 'mock',      label: 'Demo (sin conexion)',  defaultModel: '' },
+  { id: 'openai',    label: 'OpenAI',               defaultModel: 'gpt-4o' },
+  { id: 'anthropic', label: 'Anthropic (Claude)',   defaultModel: 'claude-3-5-sonnet-latest' },
+  { id: 'gemini',    label: 'Google Gemini',        defaultModel: 'gemini-1.5-pro' },
+  { id: 'deepseek',  label: 'DeepSeek',             defaultModel: 'deepseek-chat' },
+];
+const IA_LINKS = {
+  openai:    'https://platform.openai.com/api-keys',
+  anthropic: 'https://console.anthropic.com/settings/keys',
+  gemini:    'https://aistudio.google.com/app/apikey',
+  deepseek:  'https://platform.deepseek.com/api_keys',
+};
+function iaProviderDefaultModel(pid) {
+  const p = IA_PROVIDERS.find(x => x.id === pid);
+  return p ? p.defaultModel : '';
+}
+function iaProviderLabel(pid) {
+  const p = IA_PROVIDERS.find(x => x.id === pid);
+  return p ? p.label : pid;
+}
+
+function Configuracion({ iaConfig, onIaConfigChange }) {
   const [personas, setPersonas] = useState([]);
   const [showPersonaModal, setShowPersonaModal] = useState(false);
   const [appVersion, setAppVersion] = useState('');
@@ -4871,6 +4914,57 @@ function Configuracion() {
     }
   }, []);
   const [editPersona, setEditPersona] = useState(null);
+
+  // IA Asistente — configuración de proveedor/modelo/key. La key se cifra y guarda
+  // vía IPC (safeStorage en main); aquí solo se captura para enviarla una vez.
+  const [iaProvider, setIaProvider] = useState((iaConfig && iaConfig.provider && iaConfig.provider !== 'mock') ? iaConfig.provider : 'openai');
+  const [iaModel, setIaModel] = useState((iaConfig && iaConfig.model) || '');
+  const [iaKeyInput, setIaKeyInput] = useState('');
+  const [iaSaving, setIaSaving] = useState(false);
+  useEffect(() => {
+    if (iaConfig) { setIaProvider((iaConfig.provider && iaConfig.provider !== 'mock') ? iaConfig.provider : 'openai'); setIaModel(iaConfig.model || ''); }
+  }, [iaConfig]);
+  async function saveIaConfig() {
+    if (!window.electronAPI || !window.electronAPI.iaSaveKey) { toastErr('Disponible solo en la app de escritorio'); return; }
+    setIaSaving(true);
+    const model = iaModel || iaProviderDefaultModel(iaProvider);
+    const r = await window.electronAPI.iaSaveKey({ provider: iaProvider, model, key: iaKeyInput });
+    setIaSaving(false);
+    if (r && r.ok) { setIaKeyInput(''); if (onIaConfigChange) onIaConfigChange(); toast('Configuracion de IA guardada'); }
+    else { toastErr('Error: ' + ((r && r.error) || 'desconocido')); }
+  }
+  async function clearIaKey() {
+    if (!window.electronAPI || !window.electronAPI.iaClearKey) return;
+    if (!await confirmDialog('Borrar la API key guardada?', { confirmText: 'Borrar' })) return;
+    const r = await window.electronAPI.iaClearKey();
+    if (r && r.ok) { if (onIaConfigChange) onIaConfigChange(); toast('API key borrada'); }
+    else { toastErr('Error: ' + ((r && r.error) || 'desconocido')); }
+  }
+
+  // Perfil de datos personales a ocultar (se redactan del extracto antes de enviarlo a la IA).
+  const [pii, setPii] = useState({ nombre: '', ciudad: '', departamento: '', direccion: '', documento: '', palabras: '' });
+  const [piiSaving, setPiiSaving] = useState(false);
+  useEffect(() => {
+    api('/config').then(cfg => {
+      if (cfg && cfg.pii_perfil) {
+        try {
+          const p = JSON.parse(cfg.pii_perfil);
+          setPii({ nombre: p.nombre || '', ciudad: p.ciudad || '', departamento: p.departamento || '', direccion: p.direccion || '', documento: p.documento || '', palabras: Array.isArray(p.palabras) ? p.palabras.join(', ') : '' });
+        } catch (_) { /* perfil inválido */ }
+      }
+    });
+  }, []);
+  async function savePii() {
+    setPiiSaving(true);
+    const obj = {
+      nombre: pii.nombre.trim(), ciudad: pii.ciudad.trim(), departamento: pii.departamento.trim(),
+      direccion: pii.direccion.trim(), documento: pii.documento.trim(),
+      palabras: pii.palabras.split(',').map(s => s.trim()).filter(Boolean)
+    };
+    await api('/config/pii_perfil', { method: 'PUT', body: { value: JSON.stringify(obj) } });
+    setPiiSaving(false);
+    toast('Datos personales guardados. Se ocultaran en los analisis.');
+  }
 
   const load = useCallback(() => { api('/personas').then(setPersonas); }, []);
   useEffect(() => { load(); }, [load]);
@@ -4983,6 +5077,73 @@ function Configuracion() {
       ),
       // URLs de Bancos
       e(BancosUrlsConfig, null),
+      // Asistente de IA
+      e('div', { className: 'config-section' },
+        e('div', { className: 'config-section-title' }, 'Asistente de IA'),
+        e('div', { style: { fontSize: 12.5, color: 'var(--text-secondary)', marginBottom: 14, lineHeight: 1.5 } },
+          'Conecta un proveedor de IA para conciliar tus extractos. La API key se guarda cifrada en tu equipo (no se incluye en los backups ni se mueve con la base de datos).'
+        ),
+        e('div', { className: 'form-group', style: { marginBottom: 12 } },
+          e('label', { className: 'form-label' }, 'Proveedor'),
+          e('select', { className: 'form-input', value: iaProvider, onChange: ev => { const p = ev.target.value; setIaProvider(p); setIaModel(iaProviderDefaultModel(p)); } },
+            IA_PROVIDERS.filter(p => p.id !== 'mock').map(p => e('option', { key: p.id, value: p.id }, p.label))
+          )
+        ),
+        iaProvider !== 'mock' && e(Fragment, null,
+          e('div', { className: 'form-group', style: { marginBottom: 12 } },
+            e('label', { className: 'form-label' }, 'API Key' + (iaConfig && iaConfig.hasKey ? '  (ya hay una guardada)' : '')),
+            e('input', { type: 'password', className: 'form-input', value: iaKeyInput, onChange: ev => setIaKeyInput(ev.target.value), autoComplete: 'off', spellCheck: false, placeholder: (iaConfig && iaConfig.hasKey) ? 'Guardada. Escribe para reemplazarla' : 'Pega tu API key' })
+          ),
+          e('div', { className: 'form-group', style: { marginBottom: 12 } },
+            e('label', { className: 'form-label' }, 'Modelo'),
+            e('input', { type: 'text', className: 'form-input', value: iaModel, onChange: ev => setIaModel(ev.target.value), placeholder: iaProviderDefaultModel(iaProvider), spellCheck: false })
+          ),
+          e('div', { style: { fontSize: 11.5, color: 'var(--warning)', background: 'rgba(251,191,36,0.10)', border: '1px solid rgba(251,191,36,0.25)', borderRadius: 8, padding: '8px 10px', marginBottom: 12, lineHeight: 1.45 } },
+            'Al analizar un extracto, los movimientos y el texto del PDF se envian a ', iaProviderLabel(iaProvider), ' para el analisis. Cada analisis consume creditos de tu cuenta.'
+          )
+        ),
+        e('div', { style: { display: 'flex', gap: 10, flexWrap: 'wrap' } },
+          e('button', { className: 'btn btn-primary', onClick: saveIaConfig, disabled: iaSaving }, e(Ico, { name: 'save', size: 14 }), iaSaving ? ' Guardando...' : ' Guardar'),
+          (iaConfig && iaConfig.hasKey) && e('button', { className: 'btn btn-danger', onClick: clearIaKey }, e(Ico, { name: 'trash', size: 14 }), ' Borrar API key')
+        ),
+        (window.electronAPI && iaConfig && iaConfig.encryptionAvailable === false) && e('div', { style: { marginTop: 10, fontSize: 11.5, color: '#f87171' } }, 'El cifrado seguro del sistema no esta disponible; no se puede guardar la API key en este equipo.')
+      ),
+      // Datos personales a ocultar (privacidad del Asistente de IA)
+      e('div', { className: 'config-section' },
+        e('div', { className: 'config-section-title' }, 'Datos personales a ocultar (IA)'),
+        e('div', { style: { fontSize: 12.5, color: 'var(--text-secondary)', marginBottom: 14, lineHeight: 1.5 } },
+          'Estos datos se reemplazan por [DATO_OCULTO] en el texto del extracto antes de enviarlo a la IA. Necesario para bancos (como Bancolombia) que imprimen tu nombre y direccion sin etiquetas.'
+        ),
+        e('div', { className: 'form-row' },
+          e('div', { className: 'form-group' },
+            e('label', { className: 'form-label' }, 'Nombre completo'),
+            e('input', { type: 'text', className: 'form-input', value: pii.nombre, onChange: ev => setPii(p => ({ ...p, nombre: ev.target.value })), placeholder: 'Tal como aparece en el extracto', spellCheck: false })
+          ),
+          e('div', { className: 'form-group' },
+            e('label', { className: 'form-label' }, 'Documento (opcional)'),
+            e('input', { type: 'text', className: 'form-input', value: pii.documento, onChange: ev => setPii(p => ({ ...p, documento: ev.target.value })), spellCheck: false })
+          )
+        ),
+        e('div', { className: 'form-row' },
+          e('div', { className: 'form-group' },
+            e('label', { className: 'form-label' }, 'Ciudad'),
+            e('input', { type: 'text', className: 'form-input', value: pii.ciudad, onChange: ev => setPii(p => ({ ...p, ciudad: ev.target.value })), spellCheck: false })
+          ),
+          e('div', { className: 'form-group' },
+            e('label', { className: 'form-label' }, 'Departamento'),
+            e('input', { type: 'text', className: 'form-input', value: pii.departamento, onChange: ev => setPii(p => ({ ...p, departamento: ev.target.value })), spellCheck: false })
+          )
+        ),
+        e('div', { className: 'form-group', style: { marginBottom: 12 } },
+          e('label', { className: 'form-label' }, 'Direccion'),
+          e('input', { type: 'text', className: 'form-input', value: pii.direccion, onChange: ev => setPii(p => ({ ...p, direccion: ev.target.value })), placeholder: 'Copia la direccion que te sale en el extracto', spellCheck: false })
+        ),
+        e('div', { className: 'form-group', style: { marginBottom: 12 } },
+          e('label', { className: 'form-label' }, 'Otras palabras a ocultar (separadas por coma)'),
+          e('input', { type: 'text', className: 'form-input', value: pii.palabras, onChange: ev => setPii(p => ({ ...p, palabras: ev.target.value })), placeholder: 'apodo, barrio, etc.', spellCheck: false })
+        ),
+        e('button', { className: 'btn btn-primary', onClick: savePii, disabled: piiSaving }, e(Ico, { name: 'save', size: 14 }), piiSaving ? ' Guardando...' : ' Guardar datos a ocultar')
+      ),
       // Info del sistema
       e('div', { className: 'config-section' },
         e('div', { className: 'config-section-title' }, 'Info del sistema'),
@@ -5000,6 +5161,423 @@ function Configuracion() {
     ),
     e(Modal, { show: showPersonaModal, onClose: () => setShowPersonaModal(false), title: editPersona ? 'Editar Persona' : 'Nueva Persona' },
       e(PersonaForm, { item: editPersona, onSave: savePersona, onCancel: () => setShowPersonaModal(false) })
+    )
+  );
+}
+
+// ── Render del resultado de conciliación + aplicar acciones con 1 clic (Fase 4) ──
+function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada }) {
+  const c = (resultado && resultado.conciliacion_pago_minimo) || {};
+  const disc = Array.isArray(resultado && resultado.discrepancias) ? resultado.discrepancias : [];
+  const pagos = Array.isArray(resultado && resultado.pagos_detectados) ? resultado.pagos_detectados : [];
+  const sevColor = (s) => s === 'alta' ? '#f87171' : (s === 'media' ? 'var(--warning)' : 'var(--text-muted)');
+  const [accionSel, setAccionSel] = useState(null);   // { d, idx }
+  const [aplicando, setAplicando] = useState(false);
+  const [aplicadas, setAplicadas] = useState({});
+  const [errAplicar, setErrAplicar] = useState('');
+  // Operaciones que la app puede aplicar automaticamente (mapean a endpoints existentes).
+  const AUTO = { crear_compra: 1, editar_valor: 1, mover_ciclo: 1 };
+
+  function paramsDe(d) { return (d.accion_sugerida && d.accion_sugerida.parametros) || {}; }
+  function resumenAccion(d) {
+    const op = d.accion_sugerida ? d.accion_sugerida.operacion : 'ninguna';
+    const p = paramsDe(d);
+    const cid = p.compra_id != null ? p.compra_id : d.compra_id;
+    if (op === 'crear_compra') return { titulo: 'Crear compra nueva', endpoint: 'POST /api/compras', filas: [['Descripcion', p.descripcion || d.descripcion || ''], ['Valor', fmtCOP(p.valor_cop != null ? p.valor_cop : d.valor_extracto)], ['Ciclo', ciclo], ['Fecha', p.fecha || (ciclo + '-15')]] };
+    if (op === 'editar_valor') return { titulo: 'Editar valor de la compra', endpoint: 'PUT /api/compras/' + cid, filas: [['Compra', '#' + cid], ['Valor actual (app)', fmtCOP(d.valor_app)], ['Nuevo valor (extracto)', fmtCOP(p.valor_cop != null ? p.valor_cop : d.valor_extracto)]] };
+    if (op === 'mover_ciclo') return { titulo: 'Reasignar al ciclo (manual)', endpoint: 'PUT /api/compras/' + cid, filas: [['Compra', '#' + cid], ['Nuevo ciclo', p.ciclo || ciclo], ['Conserva su fecha real', 'si']] };
+    return { titulo: op, endpoint: '', filas: [] };
+  }
+
+  async function ejecutarAccion() {
+    if (!accionSel) return;
+    const d = accionSel.d, idx = accionSel.idx;
+    const op = d.accion_sugerida ? d.accion_sugerida.operacion : '';
+    const p = paramsDe(d);
+    setAplicando(true); setErrAplicar('');
+    try {
+      if (!tarjetaId) throw new Error('No hay tarjeta seleccionada.');
+      if (op === 'crear_compra') {
+        const body = { tarjeta_id: Number(tarjetaId), ciclo: ciclo, ciclo_manual: 1, fecha: p.fecha || (ciclo + '-15'), descripcion: p.descripcion || d.descripcion || 'Compra (conciliacion)', valor_cop: Number(p.valor_cop != null ? p.valor_cop : d.valor_extracto) || 0, es_internacional: p.es_internacional ? 1 : 0 };
+        const r = await api('/compras', { method: 'POST', body });
+        if (r && r.error) throw new Error(r.error);
+      } else if (op === 'editar_valor' || op === 'mover_ciclo') {
+        const cid = p.compra_id != null ? p.compra_id : d.compra_id;
+        if (!cid) throw new Error('No se identifico la compra a modificar.');
+        // Traer la compra actual completa: el PUT reemplaza TODOS los campos, asi que mergeamos.
+        const lista = await api('/compras?tarjeta_id=' + Number(tarjetaId));
+        const a = Array.isArray(lista) ? lista.find(x => String(x.id) === String(cid)) : null;
+        if (!a) throw new Error('No se encontro la compra #' + cid + ' en la tarjeta.');
+        const body = { tarjeta_id: a.tarjeta_id, fecha: a.fecha, descripcion: a.descripcion, valor_cop: a.valor_cop, valor_usd: a.valor_usd, tasa_usd: a.tasa_usd, persona_id: a.persona_id, estado: a.estado, notas: a.notas, monto_bolsillo: a.monto_bolsillo, es_internacional: a.es_internacional, ciclo: a.ciclo, ciclo_manual: a.ciclo_manual };
+        if (op === 'editar_valor') body.valor_cop = Number(p.valor_cop != null ? p.valor_cop : d.valor_extracto) || a.valor_cop;
+        else { body.ciclo = p.ciclo || ciclo; body.ciclo_manual = 1; }
+        const r = await api('/compras/' + cid, { method: 'PUT', body });
+        if (r && r.error) throw new Error(r.error);
+      } else {
+        throw new Error('Operacion no aplicable automaticamente.');
+      }
+      setAplicadas(prev => Object.assign({}, prev, { [idx]: true }));
+      setAccionSel(null);
+      toast('Accion aplicada correctamente.');
+      if (onAplicada) onAplicada();
+    } catch (err) {
+      setErrAplicar((err && err.message) || 'No se pudo aplicar la accion.');
+    }
+    setAplicando(false);
+  }
+
+  return e('div', { style: { marginTop: 16, borderTop: '1px solid var(--border)', paddingTop: 14 } },
+    isMock && e('div', { style: { fontSize: 11, color: 'var(--warning)', marginBottom: 8 } }, 'Resultado de ejemplo (modo Demo).'),
+    e('div', { style: { fontSize: 14, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 10 } }, 'Conciliacion del pago minimo'),
+    e('div', { style: { display: 'flex', gap: 18, flexWrap: 'wrap', marginBottom: 10 } },
+      e('div', null, e('div', { style: { fontSize: 11, color: 'var(--text-muted)' } }, 'Extracto'), e('div', { style: { fontSize: 15, fontWeight: 700 } }, fmtCOP(c.pago_minimo_extracto))),
+      e('div', null, e('div', { style: { fontSize: 11, color: 'var(--text-muted)' } }, 'App'), e('div', { style: { fontSize: 15, fontWeight: 700 } }, fmtCOP(c.pago_minimo_app))),
+      e('div', null, e('div', { style: { fontSize: 11, color: 'var(--text-muted)' } }, 'Diferencia'), e('div', { style: { fontSize: 15, fontWeight: 700, color: Math.abs(Number(c.diferencia) || 0) > 0 ? 'var(--warning)' : 'var(--success)' } }, fmtCOP(c.diferencia)))
+    ),
+    Array.isArray(c.explicacion) && c.explicacion.length > 0 && e('ul', { style: { margin: '0 0 10px 0', paddingLeft: 18, fontSize: 12.5, color: 'var(--text-secondary)', lineHeight: 1.5 } }, c.explicacion.map((x, i) => e('li', { key: i }, String(x)))),
+    (Number(c.residual_no_explicado) > 0) && e('div', { style: { fontSize: 12, color: 'var(--text-muted)', marginBottom: 10 } }, 'Residual no explicado: ', e('strong', null, fmtCOP(c.residual_no_explicado))),
+    pagos.length > 0 && e('div', { style: { marginBottom: 10 } },
+      e('div', { style: { fontSize: 12.5, fontWeight: 600, marginBottom: 4 } }, 'Pagos detectados (no son compras faltantes)'),
+      pagos.map((p, i) => e('div', { key: i, style: { fontSize: 12, color: 'var(--text-secondary)' } }, (p.fecha || '') + '  ' + fmtCOP(p.monto) + '  ' + (p.etiqueta_extracto || '') + (p.coincide_con_pago_app ? '  (coincide con un pago en la app)' : '')))
+    ),
+    e('div', { style: { fontSize: 14, fontWeight: 700, color: 'var(--text-primary)', margin: '12px 0 8px' } },
+      'Discrepancias (' + disc.length + ')',
+      (resultado && resultado.discrepancias_omitidas) ? e('span', { style: { fontSize: 11.5, fontWeight: 400, color: 'var(--text-muted)', marginLeft: 8 } }, resultado.discrepancias_omitidas + ' de redondeo/division omitidas') : null
+    ),
+    disc.length === 0
+      ? e('div', { style: { fontSize: 12.5, color: 'var(--success)' } }, 'No se encontraron discrepancias accionables.')
+      : disc.map((d, i) => {
+          const op = d.accion_sugerida ? d.accion_sugerida.operacion : 'ninguna';
+          const aplicada = !!aplicadas[i];
+          return e('div', { key: i, style: { border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px', marginBottom: 8, background: 'var(--bg-input)' } },
+            e('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 } },
+              e('span', { style: { fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: sevColor(d.severidad) } }, d.severidad || ''),
+              e('span', { style: { fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)' } }, d.tipo || ''),
+              aplicada && e('span', { style: { marginLeft: 'auto', fontSize: 11, fontWeight: 600, color: 'var(--success)' } }, 'Aplicada')
+            ),
+            e('div', { style: { fontSize: 12.5, color: 'var(--text-secondary)', marginBottom: 4, lineHeight: 1.45 } }, d.descripcion || ''),
+            (d.valor_extracto != null || d.valor_app != null) && e('div', { style: { fontSize: 12, color: 'var(--text-muted)' } }, 'Extracto: ' + fmtCOP(d.valor_extracto) + '   App: ' + fmtCOP(d.valor_app)),
+            d.posible_falso_positivo && e('div', { style: { marginTop: 6, fontSize: 11.5, color: 'var(--warning)', background: 'rgba(251,191,36,0.10)', border: '1px solid rgba(251,191,36,0.25)', borderRadius: 6, padding: '6px 8px', lineHeight: 1.4 } },
+              e('div', { style: { fontWeight: 700, marginBottom: 2 } }, 'Posible falso positivo'),
+              e('div', { style: { color: 'var(--text-secondary)' } }, 'Tu app ya tiene una compra de este monto bien clasificada; la IA pudo confundir estas:'),
+              (d.candidatas || []).map((cc, ci) => e('div', { key: ci, style: { color: 'var(--text-secondary)', marginTop: 2 } }, '· ' + (cc.descripcion || ('#' + cc.id)) + ' → ' + ((cc.es_internacional || cc.interes_intl > 0) ? 'internacional' : 'no internacional')))
+            ),
+            !aplicada && AUTO[op] && !d.posible_falso_positivo && e('div', { style: { marginTop: 6, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
+              e('span', { style: { fontSize: 11.5, color: 'var(--text-muted)' } }, 'Accion sugerida: ', e('strong', { style: { color: 'var(--accent)' } }, op)),
+              e('button', { className: 'btn btn-sm btn-primary', onClick: () => { setErrAplicar(''); setAccionSel({ d: d, idx: i }); } }, 'Aplicar')
+            ),
+            !aplicada && op === 'convertir_a_diferida' && e('div', { style: { marginTop: 6, fontSize: 11.5, color: 'var(--text-muted)' } }, 'Convertir a diferida: hazlo manualmente desde la tarjeta (el numero de cuotas se define al crear).')
+          );
+        }),
+    // Modal de confirmación: muestra exactamente qué se enviará antes de ejecutar.
+    accionSel && (function () {
+      const rs = resumenAccion(accionSel.d);
+      return e(Modal, { show: true, onClose: () => { if (!aplicando) setAccionSel(null); }, title: 'Confirmar accion' },
+        e('div', null,
+          e('div', { style: { fontSize: 14, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 10 } }, rs.titulo),
+          e('div', { style: { background: 'var(--bg-input)', border: '1px solid var(--border)', borderRadius: 8, padding: 12, marginBottom: 10 } },
+            rs.filas.map((f, k) => e('div', { key: k, style: { display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: 12.5, padding: '3px 0' } },
+              e('span', { style: { color: 'var(--text-muted)' } }, f[0]),
+              e('span', { style: { color: 'var(--text-primary)', fontWeight: 600, textAlign: 'right' } }, String(f[1]))
+            ))
+          ),
+          e('div', { style: { fontSize: 11, color: 'var(--text-muted)', fontFamily: "'SF Mono','Consolas',monospace", marginBottom: 10 } }, rs.endpoint),
+          e('div', { style: { fontSize: 12, color: 'var(--text-secondary)', marginBottom: 14, lineHeight: 1.45 } }, 'Se modificaran tus datos reales usando los endpoints de la app (con sus validaciones). Si el extracto del ciclo ya esta pagado, no se aplicara.'),
+          errAplicar && e('div', { style: { fontSize: 12.5, color: '#f87171', background: 'rgba(248,113,113,0.10)', border: '1px solid rgba(248,113,113,0.25)', borderRadius: 8, padding: '8px 10px', marginBottom: 12 } }, errAplicar),
+          e('div', { style: { display: 'flex', gap: 10, justifyContent: 'flex-end' } },
+            e('button', { className: 'btn', onClick: () => setAccionSel(null), disabled: aplicando }, 'Cancelar'),
+            e('button', { className: 'btn btn-primary', onClick: ejecutarAccion, disabled: aplicando }, aplicando ? 'Aplicando...' : 'Confirmar y aplicar')
+          )
+        )
+      );
+    })()
+  );
+}
+
+// ── IA Asistente — Conciliación de extractos (config, extracción y análisis) ──
+function IaAsistente({ iaConfig, onIaConfigChange, tarjetas, onGoConfig, demoMode, onActivarDemo, onSalirDemo, onRefrescarTarjetas }) {
+  const cfg = iaConfig || { provider: null, model: '', hasKey: false };
+  const hasKey = !!cfg.hasKey;
+  const isMock = !!demoMode && !hasKey;            // Demo solo aplica si no hay key real
+  const operativo = hasKey || isMock;
+  const MESES_IA = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+  const cicloLabel = (c) => { const a = String(c).split('-'); return (MESES_IA[Number(a[1]) - 1] || a[1]) + ' ' + a[0]; };
+  const cicloAnterior = (c) => { const a = String(c).split('-'); let y = Number(a[0]); let m = Number(a[1]) - 1; if (m < 1) { m = 12; y -= 1; } return y + '-' + String(m).padStart(2, '0'); };
+  const activas = (tarjetas || []).filter(t => t.estado === 'activa');
+
+  const [tarjetaId, setTarjetaId] = useState('');
+  const [ciclo, setCiclo] = useState('');
+  const [ciclosTarjeta, setCiclosTarjeta] = useState([]);
+  const [loadingCiclos, setLoadingCiclos] = useState(false);
+  const [pdfName, setPdfName] = useState('');
+  const [pdfFile, setPdfFile] = useState(null);
+  const fileRef = useRef(null);
+  const fetchSeq = useRef(0);
+  const [analizando, setAnalizando] = useState(false);
+  const [preview, setPreview] = useState(null);
+  const [needPassword, setNeedPassword] = useState(false);
+  const [pdfPassword, setPdfPassword] = useState('');
+  const [passwordError, setPasswordError] = useState(false);
+  const [extraerError, setExtraerError] = useState('');
+  const [analizandoIA, setAnalizandoIA] = useState(false);
+  const [resultado, setResultado] = useState(null);
+  const [errorIA, setErrorIA] = useState('');
+
+  // Dep estable: solo cambia si cambia el conjunto de tarjetas activas (no en cada
+  // render de App, que recrearia el array y dispararia el efecto de mas).
+  const activasIds = activas.map(t => t.id).join(',');
+
+  // Auto-selecciona la primera tarjeta activa; respeta una seleccion manual valida.
+  useEffect(() => {
+    if (activas.length && !activas.some(t => String(t.id) === String(tarjetaId))) {
+      setTarjetaId(String(activas[0].id));
+    }
+  }, [activasIds]);
+
+  // Periodos = historial REAL de la tarjeta seleccionada (sus extractos hasta el ciclo
+  // vigente) + el ciclo vigente. Al cambiar de tarjeta se LIMPIA de inmediato y se
+  // refetchea solo para ese tarjeta_id. fetchSeq descarta respuestas obsoletas (sin mezclas).
+  useEffect(() => {
+    const card = (tarjetas || []).find(t => String(t.id) === String(tarjetaId));
+    if (!card) { setCiclosTarjeta([]); setCiclo(''); setLoadingCiclos(false); return; }
+    const vig = cicloVigente(card.dia_corte);
+    const seq = ++fetchSeq.current;
+    setLoadingCiclos(true);
+    setCiclosTarjeta([]);   // limpia ya: nunca quedan visibles los de otra tarjeta
+    setCiclo('');
+    // Solo ciclos YA CERRADOS: se excluye el ciclo vigente (en curso), cuyo extracto el
+    // banco aun no ha emitido y por tanto no se puede conciliar.
+    api('/extractos?tarjeta_id=' + card.id).then(rows => {
+      if (seq !== fetchSeq.current) return;   // respuesta de una tarjeta anterior → descartar
+      const set = {};
+      (Array.isArray(rows) ? rows : []).forEach(r => { if (r && r.ciclo && r.ciclo < vig) set[r.ciclo] = 1; });
+      const ciclos = Object.keys(set).sort().reverse();
+      setCiclosTarjeta(ciclos);
+      setCiclo(ciclos[0] || '');
+      setLoadingCiclos(false);
+    }).catch(() => {
+      if (seq !== fetchSeq.current) return;
+      const prev = cicloAnterior(vig);   // fallback offline: ultimo cerrado por calendario
+      setCiclosTarjeta([prev]); setCiclo(prev); setLoadingCiclos(false);
+    });
+  }, [tarjetaId]);
+
+  // Al cambiar tarjeta / periodo / archivo, descarta cualquier vista previa o estado de contraseña previos.
+  useEffect(() => { setPreview(null); setNeedPassword(false); setPasswordError(false); setExtraerError(''); setPdfPassword(''); setResultado(null); setErrorIA(''); }, [tarjetaId, ciclo, pdfName]);
+
+  function openLink(url) { if (window.electronAPI && window.electronAPI.openExternal) window.electronAPI.openExternal(url); }
+  function onPickFile(ev) { const f = ev.target.files && ev.target.files[0]; setPdfFile(f || null); setPdfName(f ? f.name : ''); }
+  function quitarPdf() { setPdfFile(null); setPdfName(''); if (fileRef.current) fileRef.current.value = ''; }
+  function fileToBase64(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => { const s = String(reader.result || ''); const i = s.indexOf(','); resolve(i >= 0 ? s.slice(i + 1) : s); };
+      reader.onerror = () => reject(new Error('No se pudo leer el archivo'));
+      reader.readAsDataURL(file);
+    });
+  }
+  async function analizar() {
+    if (!pdfFile || !tarjetaId || !ciclo) return;
+    setAnalizando(true); setExtraerError('');
+    try {
+      const b64 = await fileToBase64(pdfFile);
+      const r = await api('/ia/extraer', { method: 'POST', body: { tarjeta_id: Number(tarjetaId), ciclo: ciclo, pdf_base64: b64, password: pdfPassword || undefined } });
+      if (r && r.necesita_password) { setNeedPassword(true); setPasswordError(!!r.password_incorrecta); setPreview(null); setAnalizando(false); return; }
+      if (r && r.sin_texto) { setExtraerError('El PDF no contiene texto seleccionable (parece escaneado). No hay OCR disponible.'); setAnalizando(false); return; }
+      if (r && r.error) { setExtraerError(r.error); setAnalizando(false); return; }
+      setNeedPassword(false); setPasswordError(false); setPreview(r); setAnalizando(false);
+    } catch (err) { setExtraerError('Error al procesar el PDF.'); setAnalizando(false); }
+  }
+  function resumenRedaccion(c) {
+    if (!c) return 'ninguno';
+    const p = [];
+    if (c.tarjetas) p.push(c.tarjetas + ' tarjeta(s)');
+    if (c.nombres) p.push(c.nombres + ' nombre(s)');
+    if (c.documentos) p.push(c.documentos + ' documento(s)');
+    if (c.emails) p.push(c.emails + ' email(s)');
+    if (c.telefonos) p.push(c.telefonos + ' telefono(s)');
+    if (c.direcciones) p.push(c.direcciones + ' direccion(es)');
+    return p.length ? p.join(', ') : 'ninguno';
+  }
+  function construirPromptManual(pv) {
+    if (!pv) return '';
+    const mv = pv.movimientos || {};
+    const NL = String.fromCharCode(10);
+    const datos = JSON.stringify({ compras: mv.compras, diferidas: mv.diferidas, avances: mv.avances, intereses_intl: mv.intereses_intl, pago_minimo_app: mv.pago_minimo_app }, null, 2);
+    return [
+      'Actua como un conciliador experto de extractos de tarjeta de credito. Responde en espanol, claro y conciso.',
+      'Tengo el extracto oficial del banco y los movimientos de mi app. Concilia el PAGO MINIMO y explica cualquier diferencia.',
+      '',
+      'REGLAS:',
+      '- Los "ABONO SUCURSAL VIRTUAL" o similares NO son compras faltantes: por defecto son el pago del extracto anterior. No los marques como discrepancia.',
+      '- Si una diferencia no se explica con los movimientos, reportala como "residual no explicado"; no inventes.',
+      '',
+      'MIS MOVIMIENTOS (' + (mv.tarjeta ? (mv.tarjeta.banco + ' ' + (mv.tarjeta.franquicia || '')) : '') + ', ciclo ' + (mv.ciclo || '') + '):',
+      datos,
+      '',
+      'TEXTO DEL EXTRACTO (datos personales ya ocultados):',
+      (pv.texto_redactado || ''),
+      '',
+      'Entrega: 1) pago minimo del extracto, 2) diferencia con mi app, 3) a que se debe cada parte, 4) compras faltantes o mal registradas.'
+    ].join(NL);
+  }
+  function copiarPrompt() {
+    const txt = construirPromptManual(preview);
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(txt).then(function () { toast('Prompt copiado. Pegalo en tu IA preferida.'); }, function () { toastErr('No se pudo copiar al portapapeles'); });
+    } else { toastErr('Portapapeles no disponible'); }
+  }
+  async function analizarConIA() {
+    if (!preview) return;
+    const prov = isMock ? 'mock' : cfg.provider;
+    setAnalizandoIA(true); setErrorIA(''); setResultado(null);
+    try {
+      const r = await api('/ia/analizar', { method: 'POST', body: { provider: prov, model: cfg.model || undefined, texto_redactado: preview.texto_redactado, movimientos: preview.movimientos } });
+      if (r && r.ok && r.resultado) setResultado(r.resultado);
+      else setErrorIA((r && r.error) || 'No se pudo completar el analisis.');
+      setAnalizandoIA(false);
+    } catch (err) { setErrorIA('Error de conexion con el analisis.'); setAnalizandoIA(false); }
+  }
+  // Refresh tras aplicar una accion: recarga los movimientos del ciclo (nuevo pago minimo de
+  // la app) y los agregados globales, para ver el impacto sin re-subir el PDF.
+  async function recargarMovimientos() {
+    if (tarjetaId && ciclo) {
+      try {
+        const mv = await api('/ia/movimientos?tarjeta_id=' + Number(tarjetaId) + '&ciclo=' + encodeURIComponent(ciclo));
+        if (mv && !mv.error) setPreview(prev => prev ? Object.assign({}, prev, { movimientos: mv }) : prev);
+      } catch (_) { /* noop */ }
+    }
+    if (onRefrescarTarjetas) onRefrescarTarjetas();
+  }
+
+  const titulo = e('div', { className: 'section-title' }, e(Ico, { name: 'sparkles', size: 18, color: 'var(--accent)', className: 'ai-glow' }), ' IA Asistente');
+
+  // Sin proveedor operativo (sin key real y sin Demo de sesion) → tutorial
+  if (!operativo) {
+    const provInfo = [
+      { id: 'openai', como: 'Crea una cuenta en OpenAI y genera una clave en la seccion API keys.' },
+      { id: 'anthropic', como: 'Entra a la consola de Anthropic y crea una API key.' },
+      { id: 'gemini', como: 'Abre Google AI Studio y genera tu clave de Gemini.' },
+      { id: 'deepseek', como: 'Crea una cuenta en DeepSeek y genera tu API key en su plataforma.' },
+    ];
+    return e('div', null, titulo,
+      e('div', { style: { maxWidth: 760 } },
+        e('div', { style: { background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 12, padding: '18px 20px', marginBottom: 18 } },
+          e('div', { style: { fontSize: 15, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 8 } }, 'Conecta una IA para conciliar tus extractos'),
+          e('div', { style: { fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.55 } },
+            'Subis el PDF del extracto y la app lo contrasta con tus movimientos para explicarte por que no cuadra el pago minimo. ',
+            'Para usarlo necesitas una API key de alguno de estos proveedores. Tambien podes empezar con el modo ',
+            e('strong', null, 'Demo (sin conexion)'), ', que muestra un analisis de ejemplo sin gastar creditos ni enviar datos.'
+          )
+        ),
+        provInfo.map(pi => e('div', { key: pi.id, style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 10, padding: '12px 14px', marginBottom: 10 } },
+          e('div', null,
+            e('div', { style: { fontSize: 13.5, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 2 } }, iaProviderLabel(pi.id)),
+            e('div', { style: { fontSize: 12, color: 'var(--text-secondary)' } }, pi.como),
+            e('div', { style: { fontSize: 11, color: 'var(--text-muted)', fontFamily: "'SF Mono','Consolas',monospace", marginTop: 3 } }, IA_LINKS[pi.id])
+          ),
+          e('button', { className: 'btn btn-sm', onClick: () => openLink(IA_LINKS[pi.id]) }, e(Ico, { name: 'globe', size: 14 }), ' Abrir')
+        )),
+        e('div', { style: { marginTop: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' } },
+          e('button', { className: 'btn btn-primary', onClick: onGoConfig }, e(Ico, { name: 'settings', size: 14 }), ' Ir a Configuracion'),
+          e('button', { className: 'btn', onClick: onActivarDemo }, e(Ico, { name: 'sparkles', size: 14 }), ' Probar modo Demo'),
+          e('span', { style: { fontSize: 12, color: 'var(--text-muted)' } }, 'El modo Demo dura solo esta sesion; no se guarda.')
+        )
+      )
+    );
+  }
+
+  // Operativo (key real o Demo de sesion) → interfaz de conciliación (análisis: Fase 2-3)
+  return e('div', null, titulo,
+    e('div', { style: { maxWidth: 760 } },
+      e('div', { style: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 18, flexWrap: 'wrap' } },
+        e('span', { style: { fontSize: 11.5, fontWeight: 600, color: isMock ? 'var(--warning)' : 'var(--accent)', background: isMock ? 'rgba(251,191,36,0.12)' : 'var(--accent-bg)', borderRadius: 99, padding: '4px 12px' } }, isMock ? 'Modo Demo (sin conexion)' : iaProviderLabel(cfg.provider)),
+        !isMock && e('span', { style: { fontSize: 12, color: 'var(--text-muted)' } }, 'Modelo: ' + (cfg.model || iaProviderDefaultModel(cfg.provider))),
+        isMock && e('button', { className: 'btn btn-sm', onClick: onSalirDemo, style: { marginLeft: 'auto' } }, 'Salir del Demo')
+      ),
+      activas.length === 0
+        ? e('div', { style: { fontSize: 13, color: 'var(--text-muted)' } }, 'No hay tarjetas activas para conciliar.')
+        : e(Fragment, null,
+            e('div', { className: 'form-row' },
+              e('div', { className: 'form-group' },
+                e('label', { className: 'form-label' }, 'Tarjeta'),
+                e('select', { className: 'form-input', value: tarjetaId, onChange: ev => setTarjetaId(ev.target.value) },
+                  activas.map(t => e('option', { key: t.id, value: String(t.id) }, t.nombre + (t.franquicia ? ' - ' + t.franquicia : '')))
+                )
+              ),
+              e('div', { className: 'form-group' },
+                e('label', { className: 'form-label' }, 'Periodo a conciliar'),
+                loadingCiclos
+                  ? e('div', { className: 'form-input', style: { color: 'var(--text-muted)', display: 'flex', alignItems: 'center' } }, 'Cargando periodos...')
+                  : ciclosTarjeta.length
+                    ? e('select', { className: 'form-input', value: ciclo, onChange: ev => setCiclo(ev.target.value) },
+                        ciclosTarjeta.map((c, i) => e('option', { key: c, value: c }, cicloLabel(c) + (i === 0 ? ' (Ultimo extracto cerrado)' : ''))))
+                    : e('div', { className: 'form-input', style: { color: 'var(--text-muted)', display: 'flex', alignItems: 'center' } }, 'Sin periodos disponibles')
+              )
+            ),
+            // Zona de carga del PDF (con boton para quitar/reemplazar)
+            e('input', { ref: fileRef, type: 'file', accept: 'application/pdf,.pdf', style: { display: 'none' }, onChange: onPickFile }),
+            !pdfName
+              ? e('div', { onClick: () => fileRef.current && fileRef.current.click(), style: { display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, border: '1.5px dashed var(--border)', borderRadius: 12, padding: '26px 16px', cursor: 'pointer', background: 'var(--bg-card)', marginTop: 6 } },
+                  e(Ico, { name: 'download', size: 22, color: 'var(--text-muted)' }),
+                  e('div', { style: { fontSize: 13, color: 'var(--text-secondary)' } }, 'Selecciona el PDF del extracto')
+                )
+              : e('div', { style: { display: 'flex', alignItems: 'center', gap: 10, border: '1px solid var(--border)', borderRadius: 12, padding: '12px 14px', background: 'var(--bg-card)', marginTop: 6 } },
+                  e(Ico, { name: 'clipboard', size: 18, color: 'var(--accent)' }),
+                  e('span', { style: { flex: 1, fontSize: 13, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, pdfName),
+                  e('button', { className: 'btn btn-sm', onClick: () => fileRef.current && fileRef.current.click(), title: 'Reemplazar documento' }, e(Ico, { name: 'refresh', size: 14 })),
+                  e('button', { className: 'btn btn-sm btn-danger', onClick: quitarPdf, title: 'Quitar documento' }, e(Ico, { name: 'trash', size: 14 }))
+                ),
+            !isMock && e('div', { style: { fontSize: 11.5, color: 'var(--warning)', background: 'rgba(251,191,36,0.10)', border: '1px solid rgba(251,191,36,0.25)', borderRadius: 8, padding: '8px 10px', marginTop: 14, lineHeight: 1.45 } },
+              'Al analizar, el texto del extracto (sin tus datos personales) y tus movimientos se envian a ', iaProviderLabel(cfg.provider), '. Cada analisis consume creditos.'),
+            // Campo de contraseña si el PDF está protegido
+            needPassword && e('div', { style: { marginTop: 12 } },
+              e('label', { className: 'form-label', style: passwordError ? { color: '#f87171' } : null }, passwordError ? 'Contraseña incorrecta. Intenta de nuevo' : 'El PDF está protegido. Ingresa la contraseña de apertura'),
+              e('input', { type: 'password', className: 'form-input', value: pdfPassword, onChange: ev => setPdfPassword(ev.target.value), placeholder: 'Contraseña del PDF', autoComplete: 'off', spellCheck: false, onKeyDown: ev => { if (ev.key === 'Enter') analizar(); } }),
+              e('div', { style: { fontSize: 11, color: 'var(--text-muted)', marginTop: 4 } }, 'La contraseña solo se usa para abrir el PDF; no se guarda ni se envia a la IA.')
+            ),
+            extraerError && e('div', { style: { marginTop: 12, fontSize: 12.5, color: '#f87171', background: 'rgba(248,113,113,0.10)', border: '1px solid rgba(248,113,113,0.25)', borderRadius: 8, padding: '8px 10px' } }, extraerError),
+            e('div', { style: { marginTop: 16, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' } },
+              e('button', { className: 'btn btn-primary', onClick: analizar, disabled: !pdfFile || analizando || !ciclo }, e(Ico, { name: 'sparkles', size: 14 }), analizando ? ' Procesando...' : (needPassword ? ' Reintentar' : ' Analizar extracto')),
+              !pdfFile && e('span', { style: { fontSize: 12, color: 'var(--text-muted)' } }, 'Adjunta el PDF del extracto para analizar.')
+            ),
+            // Vista previa de la extracción (el usuario confirma antes de enviar a la IA)
+            preview && e('div', { style: { marginTop: 18, border: '1px solid var(--border)', borderRadius: 12, padding: 16, background: 'var(--bg-card)' } },
+              e('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 } },
+                e(Ico, { name: 'check', size: 16, color: 'var(--success)' }),
+                e('div', { style: { fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' } }, 'Vista previa de la extraccion'),
+                e('span', { style: { marginLeft: 'auto', fontSize: 11, color: 'var(--text-muted)' } }, (preview.paginas || 0) + ' pag.')
+              ),
+              (preview.perfil_configurado === false) && e('div', { style: { fontSize: 12, color: '#f87171', background: 'rgba(248,113,113,0.10)', border: '1px solid rgba(248,113,113,0.35)', borderRadius: 8, padding: '10px 12px', marginBottom: 12, lineHeight: 1.45 } },
+                e('div', { style: { fontWeight: 700, marginBottom: 4 } }, 'No configuraste tus datos personales a ocultar'),
+                e('div', { style: { marginBottom: 8 } }, 'Tu nombre, ciudad o direccion pueden viajar a la IA tal cual aparecen en el extracto. Configuralos una vez y se ocultaran en cada analisis (revisa el texto de abajo).'),
+                e('button', { className: 'btn btn-sm btn-primary', onClick: onGoConfig }, e(Ico, { name: 'settings', size: 14 }), ' Configurar mis datos a ocultar')
+              ),
+              e('div', { style: { fontSize: 12, color: 'var(--text-secondary)', marginBottom: 12, lineHeight: 1.5 } },
+                'Revisa que el texto y los movimientos sean correctos antes de enviar a la IA. Datos personales ocultados: ',
+                e('strong', null, resumenRedaccion(preview.redaccion)), '.',
+                (preview.movimientos && preview.movimientos.banco_doc)
+                  ? e(Fragment, null, ' Reglas del banco: ', e('strong', null, preview.movimientos.banco_doc))
+                  : ' (no hay doc de reglas para este banco)'
+              ),
+              e('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 12.5, marginBottom: 12 } },
+                e('div', null, e('span', { style: { color: 'var(--text-muted)' } }, 'Pago minimo (app): '), e('strong', null, fmtCOP(preview.movimientos ? preview.movimientos.pago_minimo_app : 0))),
+                e('div', null, e('span', { style: { color: 'var(--text-muted)' } }, 'Compras: '), String(preview.movimientos && preview.movimientos.compras ? preview.movimientos.compras.length : 0)),
+                e('div', null, e('span', { style: { color: 'var(--text-muted)' } }, 'Cuotas diferidas: '), String(preview.movimientos && preview.movimientos.diferidas ? preview.movimientos.diferidas.length : 0)),
+                e('div', null, e('span', { style: { color: 'var(--text-muted)' } }, 'Avances: '), String(preview.movimientos && preview.movimientos.avances ? preview.movimientos.avances.length : 0))
+              ),
+              e('div', { style: { fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 } }, 'Texto del extracto (datos personales ocultados):'),
+              e('pre', { style: { maxHeight: 220, overflow: 'auto', background: 'var(--bg-input)', border: '1px solid var(--border)', borderRadius: 8, padding: 10, fontSize: 11.5, lineHeight: 1.45, whiteSpace: 'pre-wrap', wordBreak: 'break-word', margin: 0, fontFamily: "'SF Mono','Consolas',monospace" } }, preview.texto_redactado || ''),
+              e('div', { style: { marginTop: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' } },
+                e('button', { className: 'btn', onClick: copiarPrompt }, e(Ico, { name: 'clipboard', size: 14 }), ' Copiar prompt para IA'),
+                e('button', { className: 'btn btn-primary', onClick: analizarConIA, disabled: analizandoIA }, e(Ico, { name: 'sparkles', size: 14 }), analizandoIA ? ' Analizando...' : (isMock ? ' Analizar (Demo)' : ' Confirmar y analizar con IA')),
+                e('button', { className: 'btn', onClick: () => { setPreview(null); setResultado(null); setErrorIA(''); } }, 'Descartar')
+              ),
+              e('div', { style: { marginTop: 8, fontSize: 11.5, color: 'var(--text-muted)' } }, 'Tip: "Copiar prompt para IA" arma un mensaje listo para pegar en ChatGPT, Claude o Gemini, sin gastar tokens de mas.'),
+              errorIA && e('div', { style: { marginTop: 12, fontSize: 12.5, color: '#f87171', background: 'rgba(248,113,113,0.10)', border: '1px solid rgba(248,113,113,0.25)', borderRadius: 8, padding: '8px 10px' } }, errorIA),
+              resultado && e(IaResultado, { resultado: resultado, isMock: isMock, tarjetaId: tarjetaId, ciclo: ciclo, onAplicada: recargarMovimientos })
+            )
+          )
     )
   );
 }
@@ -5493,6 +6071,19 @@ function App() {
   const [needsRestart, setNeedsRestart] = useState(false);
   const [changelogDlg, setChangelogDlg] = useState(null);
   const [appVersion, setAppVersion] = useState('');
+  // Estado de la config de IA (provider/model/hasKey). Reactivo: Configuracion lo
+  // recarga al guardar/borrar y se refleja al instante en la seccion IA Asistente.
+  const [iaConfig, setIaConfig] = useState({ provider: null, model: '', hasKey: false, encryptionAvailable: false });
+  // Modo Demo: estado de sesion (NO se persiste). Al reiniciar, sin key real → tutorial.
+  const [iaDemo, setIaDemo] = useState(false);
+  // IaAsistente se monta perezosamente al entrar la primera vez y NO se desmonta al cambiar de
+  // vista (se oculta con CSS): preserva la vista previa y el analisis, sin re-gastar tokens.
+  const [iaMontado, setIaMontado] = useState(false);
+  useEffect(() => { if (view === 'ia') setIaMontado(true); }, [view]);
+  const reloadIaConfig = useCallback(() => {
+    if (window.electronAPI && window.electronAPI.iaGetConfig) window.electronAPI.iaGetConfig().then(setIaConfig);
+  }, []);
+  useEffect(() => { reloadIaConfig(); }, [reloadIaConfig]);
 
   // Expose restart setter globally so Configuracion can trigger it
   window.__setNeedsRestart = setNeedsRestart;
@@ -5657,6 +6248,7 @@ function App() {
   }
 
   const headerTitle = view === 'dashboard' ? e(Fragment, null, e(Ico, { name: 'bar-chart', size: 18, color: 'var(--accent)' }), ' Dashboard') :
+                      view === 'ia' ? e(Fragment, null, e(Ico, { name: 'sparkles', size: 18, color: 'var(--accent)', className: 'ai-glow' }), ' IA Asistente') :
                       view === 'config' ? e(Fragment, null, e(Ico, { name: 'settings', size: 18, color: 'var(--accent)' }), ' Configuracion') :
                       view === 'historial' ? e(Fragment, null, e(Ico, { name: 'activity', size: 18, color: 'var(--accent)' }), ' Historial') :
                       view === 'calculadora' ? e(Fragment, null, e(Ico, { name: 'calculator', size: 18, color: 'var(--accent)' }), ' Calculadora') :
@@ -5725,6 +6317,9 @@ function App() {
         e('div', { className: 'nav-item' + (view === 'historial' ? ' active' : ''), onClick: () => { setView('historial'); setSelectedCardId(null); } },
           e(Ico, { name: 'activity', size: 18, color: view === 'historial' ? 'var(--accent)' : 'var(--text-secondary)' }), 'Historial'
         ),
+        e('div', { className: 'nav-item' + (view === 'ia' ? ' active' : ''), onClick: () => { setView('ia'); setSelectedCardId(null); } },
+          e(Ico, { name: 'sparkles', size: 18, color: 'var(--accent)', className: 'ai-glow' }), 'IA Asistente'
+        ),
         e('div', { className: 'nav-item' + (view === 'config' ? ' active' : ''), onClick: () => { setView('config'); setSelectedCardId(null); } },
           e(Ico, { name: 'settings', size: 18, color: view === 'config' ? 'var(--accent)' : 'var(--text-secondary)' }), 'Configuracion'
         )
@@ -5776,7 +6371,8 @@ function App() {
         view === 'card' && selectedCardId && e(CardView, { tarjetaId: selectedCardId, initialTab, onBack: goToDashboard, onRefreshTarjetas: loadTarjetas }),
         view === 'calculadora' && e(Calculadora, { tarjetas }),
         view === 'historial' && e(Historial),
-        view === 'config' && e(Configuracion)
+        iaMontado && e('div', { key: 'ia-wrap', style: { display: view === 'ia' ? 'block' : 'none' } }, e(IaAsistente, { iaConfig, onIaConfigChange: reloadIaConfig, tarjetas, onGoConfig: () => setView('config'), demoMode: iaDemo, onActivarDemo: () => { setIaDemo(true); toast('Modo Demo activado (solo esta sesion)'); }, onSalirDemo: () => setIaDemo(false), onRefrescarTarjetas: loadTarjetas })),
+        view === 'config' && e(Configuracion, { iaConfig, onIaConfigChange: reloadIaConfig })
       )
     ),
 

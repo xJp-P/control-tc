@@ -1,5 +1,5 @@
 // desktop/main.js — Electron main process con boot protegido (splash + update check pre-BD)
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, safeStorage, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -45,7 +45,10 @@ function startBackend() {
   // arrancar, esta línea no se ejecuta si el splash detectó y aplicó la
   // actualización.
   const createApp = require('../backend/app');
-  const result = createApp();
+  // Inyectamos readIaKey: el backend descifra la API key on-demand (solo al llamar
+  // a la IA), usando safeStorage del main process. La key nunca viaja por HTTP ni
+  // llega al frontend.
+  const result = createApp(undefined, { readIaKey });
   db = result.db;
   return new Promise((resolve) => {
     server = result.app.listen(PORT, '127.0.0.1', () => {
@@ -597,6 +600,101 @@ ipcMain.handle('restore-db-location', async () => {
     return { ok: true, newPath: defaultPath };
   } catch (err) {
     return { ok: false, error: err.message };
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// IA Asistente — credenciales (IPC puro, safeStorage; NUNCA por HTTP ni a la BD)
+// ═══════════════════════════════════════════════════════════════════
+// La API key se cifra con el keychain del SO (safeStorage) en ia_secret.bin.
+// provider/model (no secretos) van en ia_config.json. Ambos en DEFAULT_DB_DIR
+// (%APPDATA%\CreditCardManager), junto a db_location.json — NO dentro de la BD,
+// que se respalda y se mueve.
+const IA_SECRET_PATH = path.join(DEFAULT_DB_DIR, 'ia_secret.bin');
+const IA_CONFIG_PATH = path.join(DEFAULT_DB_DIR, 'ia_config.json');
+
+function iaEncryptionAvailable() {
+  try { return safeStorage.isEncryptionAvailable(); } catch (_) { return false; }
+}
+
+function readIaConfigFile() {
+  try {
+    if (fs.existsSync(IA_CONFIG_PATH)) return JSON.parse(fs.readFileSync(IA_CONFIG_PATH, 'utf8')) || {};
+  } catch (_) { /* archivo corrupto → tratar como vacío */ }
+  return {};
+}
+
+function iaHasKey() {
+  try { return fs.existsSync(IA_SECRET_PATH) && fs.statSync(IA_SECRET_PATH).size > 0; }
+  catch (_) { return false; }
+}
+
+// Descifra la API key on-demand. Se inyecta al backend vía createApp (FASE 4b).
+// Devuelve null si no hay key o si el cifrado no está disponible. La key vive en
+// memoria del main process solo durante la llamada a la IA; nunca se loguea ni se
+// envía al frontend.
+function readIaKey() {
+  try {
+    if (!iaEncryptionAvailable() || !iaHasKey()) return null;
+    return safeStorage.decryptString(fs.readFileSync(IA_SECRET_PATH));
+  } catch (e) {
+    console.log('readIaKey error:', e && e.message);
+    return null;
+  }
+}
+
+ipcMain.handle('ia-get-config', () => {
+  const cfg = readIaConfigFile();
+  let provider = cfg.provider || null;
+  // El modo Demo ya NO se persiste (es de sesión). Si quedó 'mock' guardado por una
+  // versión anterior, se trata como "no configurado" → el frontend muestra el tutorial.
+  if (provider === 'mock') provider = null;
+  return {
+    provider: provider,
+    model: cfg.model || '',
+    hasKey: iaHasKey(),
+    encryptionAvailable: iaEncryptionAvailable()
+  };
+});
+
+// Guarda provider/model siempre; cifra la key solo si viene una nueva no vacía.
+ipcMain.handle('ia-save-key', (_, payload) => {
+  const { provider, model, key } = payload || {};
+  try {
+    fs.mkdirSync(DEFAULT_DB_DIR, { recursive: true });
+    const cfg = readIaConfigFile();
+    if (provider !== undefined) cfg.provider = provider;
+    if (model !== undefined) cfg.model = model;
+    fs.writeFileSync(IA_CONFIG_PATH, JSON.stringify(cfg), 'utf8');
+    if (key && String(key).trim()) {
+      if (!iaEncryptionAvailable()) {
+        return { ok: false, error: 'El cifrado seguro del sistema no está disponible en este equipo.' };
+      }
+      fs.writeFileSync(IA_SECRET_PATH, safeStorage.encryptString(String(key).trim()));
+    }
+    return { ok: true, hasKey: iaHasKey() };
+  } catch (e) {
+    return { ok: false, error: e && e.message };
+  }
+});
+
+// Borra solo la credencial; conserva provider/model como preferencia del usuario.
+ipcMain.handle('ia-clear-key', () => {
+  try {
+    if (fs.existsSync(IA_SECRET_PATH)) fs.unlinkSync(IA_SECRET_PATH);
+    return { ok: true, hasKey: false };
+  } catch (e) {
+    return { ok: false, error: e && e.message };
+  }
+});
+
+// Abre un enlace en el navegador del sistema (tutorial de API keys). Solo https.
+ipcMain.handle('open-external', (_, url) => {
+  try {
+    if (typeof url === 'string' && /^https:\/\//i.test(url)) { shell.openExternal(url); return { ok: true }; }
+    return { ok: false, error: 'URL no válida' };
+  } catch (e) {
+    return { ok: false, error: e && e.message };
   }
 });
 

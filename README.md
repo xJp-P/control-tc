@@ -1,6 +1,6 @@
 # Control TC
 
-App de escritorio para gestión personal de tarjetas de crédito. Soporta múltiples bancos con motores de cálculo diferenciados, extractos mensuales, amortización de avances y diferidas, bolsillo, deudas de terceros y actualizaciones automáticas desde GitHub Releases.
+App de escritorio para gestión personal de tarjetas de crédito. Soporta múltiples bancos con motores de cálculo diferenciados, extractos mensuales, amortización de avances y diferidas, bolsillo, deudas de terceros, un **Asistente de Conciliación de Extractos con IA**, y actualizaciones automáticas desde GitHub Releases.
 
 ---
 
@@ -26,6 +26,7 @@ App de escritorio para gestión personal de tarjetas de crédito. Soporta múlti
 - **Avances** — tabla de amortización completa, abonos a capital con redistribución cronológica; modelo "saldo facturado" para Bancolombia
 - **Diferidas** — amortización a X cuotas con badge de progreso (1/3, 2/3…), diferidas divididas, bolsillo per-cuota (cada cuota guarda monto apartado independiente)
 - **Extractos** — auto-generados mensualmente, pago mínimo y total calculados, historial de pagos. Los intereses internacionales se persisten al cerrar el extracto y permanecen fieles aunque cambien las compras o tasas después
+- **Asistente de Conciliación con IA** — subís el PDF del extracto y la app lo contrasta con tus movimientos: explica por qué el pago mínimo del banco difiere del de la app y detecta discrepancias (compras faltantes, montos o clasificación). Proveedor configurable — OpenAI, Anthropic (Claude), Google Gemini o DeepSeek — con la API key del usuario cifrada localmente (`safeStorage`, IPC puro, nunca en la BD), o modo Demo sin conexión. Redacta la PII del titular antes de enviar (perfil configurable), muestra una vista previa para confirmar, soporta PDFs con contraseña (sin OCR), filtra el ruido (redondeos, divisiones, falsos positivos) y aplica las correcciones sugeridas con un clic vía los endpoints existentes (la IA solo propone, nunca escribe en la BD)
 - **Dashboard** — cupo total con barra de progreso, deuda vs disponible, desglose por tarjeta, intereses del mes con detalle "Int Intl", me deben (vista global y por tarjeta)
 - **Terceros** — tracking de deudas por persona, abonos parciales, intl interest atribuido al tercero correspondiente
 - **Proyecciones** — pagos futuros a N meses
@@ -67,19 +68,25 @@ Ruta por defecto: `%APPDATA%\CreditCardManager\data.db` (Windows). La ubicación
 
 ```
 ├── desktop/
-│   ├── main.js          # Proceso principal Electron: ventana, IPC handlers, auto-updater
+│   ├── main.js          # Proceso principal Electron: ventana, IPC handlers (incl. credenciales IA con safeStorage), auto-updater
 │   └── preload.js       # Bridge seguro Electron ↔ frontend (contextBridge)
 ├── backend/
 │   ├── app.js           # Factory createApp: monta Express y todas las rutas
 │   ├── config/
 │   │   └── db.js        # Paths de BD, initDb (schema + migraciones + syncData)
 │   ├── engine/
-│   │   └── amortizacion.js  # Motores de cálculo: avances y diferidas (funciones puras)
+│   │   ├── amortizacion.js  # Motores de cálculo: avances y diferidas (funciones puras)
+│   │   └── extracto.js      # calcExtracto: pago mínimo y desglose por ciclo (punto único de verdad)
 │   ├── helpers/
 │   │   ├── dates.js     # Utilidades de fecha: hoyLocal, addMonths, daysBetween
 │   │   ├── banco.js     # Detección banco/franquicia: esNuBank, nuOpts, isDualExtracto, aplicaIntInternacional
 │   │   ├── scraper.js   # Web scraping y extracción de texto PDF para tasas
 │   │   └── log.js       # Factory de logAction y tjNombre (requiere DB)
+│   ├── services/        # Asistente de IA
+│   │   ├── pdfExtract.js   # Extracción de texto del PDF (pdfjs-dist; soporta contraseña, sin OCR)
+│   │   ├── redactPII.js    # Ofuscación de PII del titular antes de enviar a la IA
+│   │   ├── movimientos.js  # Arma el JSON de movimientos del ciclo (reusa engine/extracto.js)
+│   │   └── aiProvider.js   # Adaptador agnóstico: OpenAI, Anthropic, Gemini, DeepSeek, Demo
 │   └── routes/
 │       ├── config.js        # GET/PUT /api/config
 │       ├── tarjetas.js      # CRUD /api/tarjetas + actualizar-tasas
@@ -89,11 +96,12 @@ Ruta por defecto: `%APPDATA%\CreditCardManager\data.db` (Windows). La ubicación
 │       ├── abonos.js        # PUT/DELETE /api/abonos/:id
 │       ├── diferidas.js     # CRUD /api/diferidas
 │       ├── pagos.js         # CRUD /api/pagos (con lógica de reversión)
-│       ├── extractos.js     # /api/extractos + pagar (incluye helper calcExtracto)
+│       ├── extractos.js     # /api/extractos + pagar (usa engine/extracto.js)
 │       ├── abonoCapital.js  # /api/abono-capital (preview + apply)
 │       ├── terceros.js      # /api/terceros (toggle + abonar)
 │       ├── dashboard.js     # /api/dashboard
 │       ├── proyecciones.js  # /api/proyecciones
+│       ├── ia.js            # /api/ia: Asistente de Conciliación (extraer + analizar)
 │       └── misc.js          # /api/backup, /api/log, /api/sync, /api/scrape-tasas
 ├── public/
 │   └── index.html       # UI completa en React 18 UMD (un solo archivo)
@@ -131,6 +139,8 @@ npm run server     # Solo el backend Express (para depurar sin Electron)
 | Backend        | Express 4 (local en `127.0.0.1:3500`)                            |
 | Base de datos  | SQLite via `better-sqlite3`                                       |
 | Frontend       | React 18 UMD (sin build step, todo en `public/index.html`)       |
+| Lectura de PDF | pdfjs-dist (extracción de texto, soporta contraseña; sin OCR)     |
+| Asistente IA   | OpenAI · Anthropic · Google Gemini · DeepSeek (fetch nativo, sin SDKs) + modo Demo |
 | Instalador Win | NSIS (electron-builder)                                           |
 | Instalador Mac | DMG + ZIP (electron-builder)                                      |
 | Auto-update    | electron-updater + GitHub Releases                                |

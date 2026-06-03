@@ -15,11 +15,11 @@ module.exports = function(db, { logAction, tjNombre }) {
     comprasPendientes
       .filter(c => (c.valor_cop - (c.monto_abonado || 0)) > 0 && (!c.valor_usd || c.valor_usd === 0))
       .sort(sortFecha)
-      .forEach(c => { const s = c.valor_cop - (c.monto_abonado || 0); deudas.push({ tipo: 'compra', fecha: c.fecha, created_at: c.created_at, id: c.id, descripcion: c.descripcion, monto: s, montoOriginal: c.valor_cop, persona_id: c.persona_id }); });
+      .forEach(c => { const s = c.valor_cop - (c.monto_abonado || 0); deudas.push({ tipo: 'compra', fecha: c.fecha, created_at: c.created_at, id: c.id, descripcion: c.descripcion, monto: s, montoOriginal: c.valor_cop, persona_id: c.persona_id, bolsillo: c.monto_bolsillo || 0 }); });
     comprasPendientes
       .filter(c => (c.valor_cop - (c.monto_abonado || 0)) > 0 && c.valor_usd && c.valor_usd > 0)
       .sort(sortFecha)
-      .forEach(c => { const s = c.valor_cop - (c.monto_abonado || 0); deudas.push({ tipo: 'compra', fecha: c.fecha, created_at: c.created_at, id: c.id, descripcion: c.descripcion, monto: s, montoOriginal: c.valor_cop, persona_id: c.persona_id }); });
+      .forEach(c => { const s = c.valor_cop - (c.monto_abonado || 0); deudas.push({ tipo: 'compra', fecha: c.fecha, created_at: c.created_at, id: c.id, descripcion: c.descripcion, monto: s, montoOriginal: c.valor_cop, persona_id: c.persona_id, bolsillo: c.monto_bolsillo || 0 }); });
     diferidasActivas
       .sort((a, b) => a.fecha_compra.localeCompare(b.fecha_compra) || (a.created_at || '').localeCompare(b.created_at || ''))
       .forEach(d => {
@@ -51,20 +51,23 @@ module.exports = function(db, { logAction, tjNombre }) {
       return res.status(400).json({ error: 'Debes pagar el extracto del ciclo ' + extPendiente.ciclo + ' antes de hacer un abono a capital. Falta: $' + new Intl.NumberFormat('es-CO').format(Math.round(falta)) });
     }
 
-    const comprasPendientes = db.prepare("SELECT id, fecha, descripcion, valor_cop, valor_usd, COALESCE(monto_abonado,0) as monto_abonado, estado, persona_id, created_at FROM compras WHERE tarjeta_id=? AND estado IN ('pendiente','bolsillo','bolsillo_parcial')").all(tarjeta_id);
+    const comprasPendientes = db.prepare("SELECT id, fecha, descripcion, valor_cop, valor_usd, COALESCE(monto_abonado,0) as monto_abonado, COALESCE(monto_bolsillo,0) as monto_bolsillo, estado, persona_id, created_at FROM compras WHERE tarjeta_id=? AND estado IN ('pendiente','bolsillo','bolsillo_parcial')").all(tarjeta_id);
     const avancesActivos = db.prepare("SELECT * FROM avances WHERE tarjeta_id=? AND estado='activo'").all(tarjeta_id);
     const diferidasActivas = db.prepare("SELECT * FROM diferidas WHERE tarjeta_id=? AND estado='activo'").all(tarjeta_id);
     const deudas = buildDeudas(tarjeta_id, comprasPendientes, avancesActivos, diferidasActivas);
 
     let restante = monto;
     const detalle = [];
+    let bolsilloLiberado = 0;
     for (const d of deudas) {
       if (restante <= 0) break;
       const montoAplicar = Math.min(restante, d.monto);
       restante -= montoAplicar;
-      detalle.push({ tipo: d.tipo, id: d.id, descripcion: d.descripcion, saldoOriginal: d.monto, montoAplicado: montoAplicar, cubierto: montoAplicar >= d.monto ? 'total' : 'parcial' });
+      const liberado = (d.tipo === 'compra') ? (d.bolsillo || 0) : 0;
+      if (liberado > 0) bolsilloLiberado += liberado;
+      detalle.push({ tipo: d.tipo, id: d.id, descripcion: d.descripcion, saldoOriginal: d.monto, montoAplicado: montoAplicar, cubierto: montoAplicar >= d.monto ? 'total' : 'parcial', bolsilloLiberado: liberado });
     }
-    res.json({ aplicado: monto - restante, restante, detalle });
+    res.json({ aplicado: monto - restante, restante, detalle, bolsilloLiberado });
   });
 
   router.post('/', (req, res) => {
@@ -78,13 +81,14 @@ module.exports = function(db, { logAction, tjNombre }) {
       return res.status(400).json({ error: 'Debes pagar el extracto del ciclo ' + extPendiente.ciclo + ' antes de hacer un abono a capital. Falta: $' + new Intl.NumberFormat('es-CO').format(Math.round(falta)) });
     }
 
-    const comprasPendientes = db.prepare("SELECT id, fecha, descripcion, valor_cop, valor_usd, COALESCE(monto_abonado,0) as monto_abonado, estado, persona_id, created_at FROM compras WHERE tarjeta_id=? AND estado IN ('pendiente','bolsillo','bolsillo_parcial')").all(tarjeta_id);
+    const comprasPendientes = db.prepare("SELECT id, fecha, descripcion, valor_cop, valor_usd, COALESCE(monto_abonado,0) as monto_abonado, COALESCE(monto_bolsillo,0) as monto_bolsillo, estado, persona_id, created_at FROM compras WHERE tarjeta_id=? AND estado IN ('pendiente','bolsillo','bolsillo_parcial')").all(tarjeta_id);
     const avancesActivos = db.prepare("SELECT * FROM avances WHERE tarjeta_id=? AND estado='activo'").all(tarjeta_id);
     const diferidasActivas = db.prepare("SELECT * FROM diferidas WHERE tarjeta_id=? AND estado='activo'").all(tarjeta_id);
     const deudas = buildDeudas(tarjeta_id, comprasPendientes, avancesActivos, diferidasActivas);
 
     let restante = monto;
     const detalle = [];
+    let bolsilloLiberado = 0;
 
     for (const d of deudas) {
       if (restante <= 0) break;
@@ -93,12 +97,17 @@ module.exports = function(db, { logAction, tjNombre }) {
         const montoAplicar = Math.min(restante, d.monto);
         restante -= montoAplicar;
         const nuevoAbonado = (d.montoOriginal - d.monto) + montoAplicar;
+        // Liberar TODO el bolsillo de esta compra: el abono la pago/redujo, asi que la plata
+        // apartada queda libre (no proporcional). Si queda saldo, el usuario re-aparta si quiere.
+        const liberado = d.bolsillo || 0;
+        if (liberado > 0) bolsilloLiberado += liberado;
         if (montoAplicar >= d.monto) {
-          db.prepare("UPDATE compras SET estado='pagado', monto_abonado=? WHERE id=?").run(nuevoAbonado, d.id);
-          detalle.push({ tipo: 'compra', id: d.id, descripcion: d.descripcion, saldoOriginal: d.monto, montoAplicado: montoAplicar, cubierto: 'total' });
+          db.prepare("UPDATE compras SET estado='pagado', monto_abonado=?, monto_bolsillo=0, monto_bolsillo_usd=0 WHERE id=?").run(nuevoAbonado, d.id);
+          detalle.push({ tipo: 'compra', id: d.id, descripcion: d.descripcion, saldoOriginal: d.monto, montoAplicado: montoAplicar, cubierto: 'total', bolsilloLiberado: liberado });
         } else {
-          db.prepare("UPDATE compras SET monto_abonado=? WHERE id=?").run(nuevoAbonado, d.id);
-          detalle.push({ tipo: 'compra', id: d.id, descripcion: d.descripcion, saldoOriginal: d.monto, montoAplicado: montoAplicar, cubierto: 'parcial' });
+          // Parcial: queda saldo y ya no hay bolsillo → estado 'pendiente'.
+          db.prepare("UPDATE compras SET estado='pendiente', monto_abonado=?, monto_bolsillo=0, monto_bolsillo_usd=0 WHERE id=?").run(nuevoAbonado, d.id);
+          detalle.push({ tipo: 'compra', id: d.id, descripcion: d.descripcion, saldoOriginal: d.monto, montoAplicado: montoAplicar, cubierto: 'parcial', bolsilloLiberado: liberado });
         }
       } else if (d.tipo === 'diferida') {
         const montoAbono = Math.min(restante, d.monto);
@@ -122,8 +131,9 @@ module.exports = function(db, { logAction, tjNombre }) {
       .run(tarjeta_id, fechaAbono, monto, 'abono_capital', ciclo, 'Abono a capital - ' + detalle.map(d => d.descripcion).join(', '));
 
     const fmt = new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',maximumFractionDigits:0}).format(monto);
-    logAction('pago', tjNombre(tarjeta_id) + 'Abono a capital: ' + fmt + ' distribuido en ' + detalle.length + ' deuda(s)');
-    res.json({ ok: true, aplicado: monto - restante, restante, detalle });
+    const fmtLib = new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',maximumFractionDigits:0}).format(bolsilloLiberado);
+    logAction('pago', tjNombre(tarjeta_id) + 'Abono a capital: ' + fmt + ' distribuido en ' + detalle.length + ' deuda(s)' + (bolsilloLiberado > 0 ? ' (bolsillo liberado: ' + fmtLib + ')' : ''));
+    res.json({ ok: true, aplicado: monto - restante, restante, detalle, bolsilloLiberado });
   });
 
   return router;
