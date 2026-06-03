@@ -14,7 +14,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - run: npm ci
+      # --omit=optional: NO instala canvas (opcional de pdfjs-dist, que no usamos). En Windows,
+      # canvas no tiene binario precompilado para esta combinacion y node-gyp falla (Python 3.12
+      # sin distutils). NSIS no necesita dmg-license, asi que omitir opcionales aqui es seguro.
+      - run: npm ci --omit=optional
       - run: npx electron-builder --win nsis --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
