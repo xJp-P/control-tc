@@ -55,7 +55,7 @@ module.exports = function(db) {
     const comprasTerceroAll = db.prepare(`
       SELECT c.id, c.tarjeta_id, c.persona_id, p.nombre, p.color, c.valor_cop, c.valor_usd, c.estado,
         c.diferida_id, c.descripcion, c.fecha, c.ciclo,
-        COALESCE(c.es_internacional, 0) as es_internacional,
+        COALESCE(c.es_internacional, 0) as es_internacional, c.tasa_intl,
         COALESCE(c.monto_bolsillo, 0) as bolsillo,
         t.dia_corte as tarjeta_dia_corte,
         COALESCE(t.tasa_mv_avances, 0.01911) as tarjeta_tasa_intl,
@@ -106,7 +106,7 @@ module.exports = function(db) {
             const lastDay = new Date(yr, mo, 0).getDate();
             const fCorte = new Date(yr, mo - 1, Math.min(cDiaCorte, lastDay)).toISOString().slice(0, 10);
             const dias = daysBetween(c.fecha, fCorte);
-            if (dias > 0) pendiente += Math.round(c.valor_cop * cTasaIntl * (dias / 30));
+            if (dias > 0) pendiente += Math.round(c.valor_cop * (c.tasa_intl != null ? c.tasa_intl : cTasaIntl) * (dias / 30));
           }
         }
         // USD: para compras 1 cuota Mastercard/Amex, valor_cop = 0 y valor_usd > 0.
@@ -276,14 +276,14 @@ module.exports = function(db) {
         interesesComprasUsdDash = 0;
       } else if (aplicaIntlDash) {
         // Solo tarjetas que aplican (Bancolombia Visa por ahora) cobran interés sobre intl en COP.
-        const queryInteres = "SELECT fecha, valor_cop, COALESCE(monto_abonado,0) as monto_abonado, persona_id FROM compras WHERE ciclo=? AND estado NOT IN ('pagado','diferida') AND (es_internacional=1 OR (valor_usd IS NOT NULL AND valor_usd > 0))" + tjFilter;
+        const queryInteres = "SELECT fecha, valor_cop, COALESCE(monto_abonado,0) as monto_abonado, persona_id, tasa_intl FROM compras WHERE ciclo=? AND estado NOT IN ('pagado','diferida') AND (es_internacional=1 OR (valor_usd IS NOT NULL AND valor_usd > 0))" + tjFilter;
         const comprasIntlCiclo = db.prepare(queryInteres).all(cicloActual, ...tjParams);
         comprasIntlCiclo.forEach(c => {
           const saldo = c.valor_cop - c.monto_abonado;
           if (saldo <= 0) return;
           const dias = daysBetween(c.fecha, fechaCorteCiclo);
           if (dias <= 0) return;
-          const interes = saldo * tasaIntl * (dias / 30);
+          const interes = saldo * (c.tasa_intl != null ? c.tasa_intl : tasaIntl) * (dias / 30);
           interesesComprasIntl += interes;
           if (!c.persona_id) interesesComprasIntlPersonal += interes;
         });
@@ -300,14 +300,14 @@ module.exports = function(db) {
         const lastDayTj = new Date(anio, mes, 0).getDate();
         const fechaCorteTj = new Date(anio, mes - 1, Math.min(tj.dia_corte, lastDayTj)).toISOString().slice(0, 10);
         const comprasIntlGlobal = db.prepare(
-          "SELECT fecha, valor_cop, COALESCE(monto_abonado,0) as monto_abonado, persona_id FROM compras WHERE ciclo=? AND estado NOT IN ('pagado','diferida') AND (es_internacional=1 OR (valor_usd IS NOT NULL AND valor_usd > 0)) AND tarjeta_id=?"
+          "SELECT fecha, valor_cop, COALESCE(monto_abonado,0) as monto_abonado, persona_id, tasa_intl FROM compras WHERE ciclo=? AND estado NOT IN ('pagado','diferida') AND (es_internacional=1 OR (valor_usd IS NOT NULL AND valor_usd > 0)) AND tarjeta_id=?"
         ).all(cicloActual, tj.id);
         comprasIntlGlobal.forEach(c => {
           const saldo = c.valor_cop - c.monto_abonado;
           if (saldo <= 0) return;
           const dias = daysBetween(c.fecha, fechaCorteTj);
           if (dias <= 0) return;
-          const interes = saldo * tasaIntl * (dias / 30);
+          const interes = saldo * (c.tasa_intl != null ? c.tasa_intl : tasaIntl) * (dias / 30);
           interesesComprasIntl += interes;
           if (!c.persona_id) interesesComprasIntlPersonal += interes;
         });
@@ -512,7 +512,7 @@ module.exports = function(db) {
     const meDebenCorteMap = {};
     const meDebenCorte1Cuota = db.prepare(`
       SELECT c.persona_id, p.nombre, p.color, c.valor_cop, c.valor_usd, c.fecha,
-        COALESCE(c.es_internacional, 0) as es_internacional,
+        COALESCE(c.es_internacional, 0) as es_internacional, c.tasa_intl,
         COALESCE(c.tercero_monto_abonado, 0) as abono,
         COALESCE(c.monto_bolsillo, 0) as bolsillo,
         t.dia_corte as tarjeta_dia_corte,
@@ -538,7 +538,7 @@ module.exports = function(db) {
           const lastDay = new Date(yr, mo, 0).getDate();
           const fCorte = new Date(yr, mo - 1, Math.min(rDiaCorte, lastDay)).toISOString().slice(0, 10);
           const dias = daysBetween(r.fecha, fCorte);
-          if (dias > 0) pendiente += Math.round(r.valor_cop * rTasaIntl * (dias / 30));
+          if (dias > 0) pendiente += Math.round(r.valor_cop * (r.tasa_intl != null ? r.tasa_intl : rTasaIntl) * (dias / 30));
         }
       }
       pendiente = Math.max(0, pendiente);

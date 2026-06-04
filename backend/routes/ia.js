@@ -6,9 +6,9 @@ const { construirMovimientos, leerBancoDoc } = require('../services/movimientos'
 const { analizar: analizarIA } = require('../services/aiProvider');
 
 // Arma el system + user prompt para la conciliación (esquema JSON estricto).
-function construirPrompt(movimientos, textoExtracto, bancoDoc) {
+function construirPrompt(movimientos, textoExtracto, bancoDoc, contextoUsuario) {
   const tj = movimientos.tarjeta || {};
-  const system = [
+  const systemArr = [
     'Eres un conciliador experto de extractos de tarjeta de credito en Colombia. Respondes SIEMPRE en espanol.',
     'Objetivo central: CONCILIAR EL PAGO MINIMO: comparar el pago minimo del extracto del banco con el calculado por la app y atribuir la diferencia a causas concretas.',
     'REGLAS:',
@@ -17,15 +17,21 @@ function construirPrompt(movimientos, textoExtracto, bancoDoc) {
     '2b. La app trabaja en PESOS ENTEROS: si el monto del extracto y el de la app coinciden al redondear (diferencia < $1) NO es discrepancia y NO la incluyas en el array. Tampoco incluyas compras que el usuario divide entre varias personas (en la app son varias filas que SUMAN el monto del extracto): si la suma coincide, NO es discrepancia.',
     '2c. Las cuotas de avances y diferidas que recibes YA incluyen su interes corriente (campos "interes"/"total" de cada una). Por eso los "intereses corrientes" del extracto en su mayoria YA estan reflejados en esas cuotas; NO asumas que la app no los incluye. La diferencia tipica es solo un residual pequeno (revolving / intl no modelado).',
     '2d. Si varias compras comparten el MISMO monto (ej. dos de $44.900), cruzalas por descripcion/comercio, NO solo por el monto. Antes de marcar una compra como mal clasificada (internacional o no), revisa el campo "es_internacional" de la compra correspondiente en los movimientos: si ya coincide con el extracto, NO la reportes.',
+    '2e. Cada compra trae "descripcion" (el nombre OFICIAL tal como llega al extracto del banco — úsalo para identificar y cruzar contra el extracto) y a veces "nota_personal" (una nota privada del usuario, ej. "iCloud", que NO aparece en el extracto). Cruza SOLO por "descripcion"; la "nota_personal" es contexto para ti, nunca la uses para emparejar.',
     '3. Usa las reglas del banco provistas para intereses, fechas y comportamientos especiales.',
     '4. Para una cuota que el banco factura en un mes distinto al de su fecha, usa accion_sugerida.operacion="mover_ciclo".',
+    '4b. Para una compra a cuotas (diferida) que el banco reprogramó a un número distinto de cuotas (ej. de 36 a 2), usa tipo="cuota_reprogramada" y accion_sugerida.operacion="reprogramar_cuotas" con parametros { compra_id, num_cuotas } si las cuotas quedan uniformes, o { compra_id, cuotas: [{ ciclo: "YYYY-MM", monto: 0 }] } si quedan irregulares (montos o fechas distintos).',
     '5. Devuelve EXCLUSIVAMENTE un objeto JSON valido con EXACTAMENTE esta forma, sin texto adicional:',
     JSON.stringify({
       conciliacion_pago_minimo: { pago_minimo_extracto: 0, pago_minimo_app: 0, diferencia: 0, explicacion: ['string'], residual_no_explicado: 0 },
       pagos_detectados: [{ fecha: 'YYYY-MM-DD', monto: 0, etiqueta_extracto: 'string', coincide_con_pago_app: true }],
-      discrepancias: [{ tipo: 'compra_omitida|monto_erroneo|clasificacion_incorrecta|cuota_reprogramada|otro', descripcion: 'string', valor_extracto: 0, valor_app: 0, compra_id: null, severidad: 'alta|media|baja', accion_sugerida: { operacion: 'crear_compra|editar_valor|convertir_a_diferida|mover_ciclo|ninguna', parametros: {} } }]
+      discrepancias: [{ tipo: 'compra_omitida|monto_erroneo|clasificacion_incorrecta|cuota_reprogramada|otro', descripcion: 'string', valor_extracto: 0, valor_app: 0, compra_id: null, severidad: 'alta|media|baja', accion_sugerida: { operacion: 'crear_compra|editar_valor|convertir_a_diferida|reprogramar_cuotas|mover_ciclo|ninguna', parametros: {} } }]
     })
-  ].join('\n');
+  ];
+  if (contextoUsuario && String(contextoUsuario).trim()) {
+    systemArr.push('', 'INSTRUCCION DIRECTA DEL USUARIO (PRIORIDAD MAXIMA): el usuario ya revisó tu análisis anterior y te da esta aclaración/corrección directa. Aplícala por encima de cualquier inferencia previa y ajusta el resultado en consecuencia: ' + String(contextoUsuario).trim());
+  }
+  const system = systemArr.join('\n');
 
   const user = [
     'TARJETA: ' + (tj.banco || '') + ' ' + (tj.franquicia || '') + '. Ciclo a conciliar: ' + (movimientos.ciclo || '') + '.',
@@ -130,7 +136,7 @@ module.exports = function(db, ctx) {
   // descifra aquí (readIaKey inyectada por main); NUNCA llega desde el frontend.
   router.post('/analizar', async (req, res) => {
     try {
-      const { provider, model, texto_redactado, movimientos } = req.body || {};
+      const { provider, model, texto_redactado, movimientos, contexto_usuario } = req.body || {};
       const prov = provider || 'mock';
       if (!movimientos) return res.status(400).json({ error: 'Faltan los movimientos a conciliar.' });
       if (prov !== 'mock' && !texto_redactado) return res.status(400).json({ error: 'Falta el texto del extracto.' });
@@ -140,12 +146,23 @@ module.exports = function(db, ctx) {
         return res.status(400).json({ error: 'No hay API key configurada. Guardala en Configuracion o usa el modo Demo.' });
       }
 
-      const bancoDoc = movimientos.banco_doc ? leerBancoDoc(movimientos.banco_doc) : null;
-      const { system, user } = construirPrompt(movimientos, texto_redactado, bancoDoc);
+      // Refrescar los movimientos desde la BD: NO confiar en el caché que mandó el frontend. Si el
+      // usuario editó compras (ej. agregó una nota personal o cambió un valor) después de extraer el
+      // PDF, esos cambios deben reflejarse en el análisis. El texto del extracto sí viene del frontend
+      // (no se puede re-derivar sin el PDF), pero los datos de la app se leen frescos de la BD.
+      let mv = movimientos;
+      if (movimientos.tarjeta && movimientos.tarjeta.id && movimientos.ciclo) {
+        const fresh = construirMovimientos(db, movimientos.tarjeta.id, movimientos.ciclo);
+        if (fresh && !fresh.error) mv = fresh;
+      }
 
+      const bancoDoc = mv.banco_doc ? leerBancoDoc(mv.banco_doc) : null;
+      const { system, user } = construirPrompt(mv, texto_redactado, bancoDoc, contexto_usuario);
+
+      console.log('[IA] Iniciando analisis. Proveedor: ' + prov + ', Modelo: ' + (model || '(default del proveedor)'));
       let r;
       try {
-        r = await analizarIA({ provider: prov, model, key, system, user, mockContexto: { movimientos } });
+        r = await analizarIA({ provider: prov, model, key, system, user, mockContexto: { movimientos: mv } });
       } catch (err) {
         const tipo = err && err.tipo;
         const code = (tipo === 'sin_key') ? 400 : (tipo === 'timeout') ? 504 : ((err && err.status) || 502);
@@ -175,7 +192,7 @@ module.exports = function(db, ctx) {
         // Marca posibles falsos positivos de clasificacion: si la app YA tiene una compra del
         // mismo monto con la clasificacion reclamada, la IA probablemente cruzo la compra
         // equivocada (dos compras del mismo monto). No se oculta: se anota + adjunta candidatas.
-        const comprasMv = (movimientos && Array.isArray(movimientos.compras)) ? movimientos.compras : [];
+        const comprasMv = (mv && Array.isArray(mv.compras)) ? mv.compras : [];
         resu.discrepancias.forEach(d => {
           if (d && d.tipo === 'clasificacion_incorrecta' && d.valor_extracto != null) {
             const monto = Math.round(Number(d.valor_extracto));

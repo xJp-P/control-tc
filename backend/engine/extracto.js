@@ -29,7 +29,7 @@ function calcExtracto(db, tarjetaId, cicloStr, incluirPagadas) {
   }
 
   const comprasIndividuales = db.prepare(`
-    SELECT c.id, c.fecha, c.descripcion, c.valor_cop, c.valor_usd, c.tasa_usd,
+    SELECT c.id, c.fecha, c.descripcion, c.nota_personal, c.tasa_intl, c.valor_cop, c.valor_usd, c.tasa_usd,
            COALESCE(c.monto_abonado,0) as monto_abonado, c.estado, c.grupo_id, c.persona_id,
            COALESCE(c.es_internacional,0) as es_internacional,
            p.nombre as persona_nombre, p.color as persona_color
@@ -39,7 +39,7 @@ function calcExtracto(db, tarjetaId, cicloStr, incluirPagadas) {
   const comprasCiclo = { total: comprasIndividuales.reduce((s, c) => s + (c.valor_cop - c.monto_abonado), 0) };
   const comprasPagadasCiclo = incluirPagadas
     ? db.prepare(`
-        SELECT c.id, c.fecha, c.descripcion, c.valor_cop, c.valor_usd, c.tasa_usd,
+        SELECT c.id, c.fecha, c.descripcion, c.nota_personal, c.tasa_intl, c.valor_cop, c.valor_usd, c.tasa_usd,
                c.valor_cop as monto_abonado, c.estado, c.grupo_id, c.persona_id,
                p.nombre as persona_nombre, p.color as persona_color
         FROM compras c LEFT JOIN personas p ON c.persona_id = p.id
@@ -161,14 +161,16 @@ function calcExtracto(db, tarjetaId, cicloStr, incluirPagadas) {
     if (saldo <= 0) return 0;
     const dias = daysBetween(c.fecha, fechaCorte);
     if (dias <= 0) return 0;
-    return Math.round(saldo * tasaIntl * (dias / 30));
+    // Snapshot histórico por compra (tasa_intl) si existe; si no, la tasa global de la tarjeta.
+    const tasa = (c.tasa_intl != null ? c.tasa_intl : tasaIntl);
+    return Math.round(saldo * tasa * (dias / 30));
   };
   const detalleCompras = comprasCopParaDetalle.map(c => {
     const capital = Math.round(incluirPagadas ? c.valor_cop : (c.valor_cop - c.monto_abonado));
     const interes_intl = calcInteresIntlPorCompra(c);
     return {
       id: c.id,
-      fecha: c.fecha, descripcion: c.descripcion,
+      fecha: c.fecha, descripcion: c.descripcion, nota_personal: c.nota_personal || null,
       total: capital,
       interes_intl,
       es_internacional: !!(c.es_internacional || (c.valor_usd && c.valor_usd > 0)),

@@ -20,7 +20,7 @@ module.exports = function(db, { logAction, tjNombre }) {
     //
     // Para diferidas solo aceptamos tercero_pagado=1 (rastrear "bolsillo cubre todas
     // las cuotas" via SQL agregado a bolsillo_cuotas sería costoso y poco común).
-    let sql = `SELECT c.id, c.fecha, c.descripcion, c.valor_cop, c.valor_usd, c.estado, c.ciclo, c.tercero_pagado,
+    let sql = `SELECT c.id, c.fecha, c.descripcion, c.nota_personal, c.tasa_intl, c.valor_cop, c.valor_usd, c.estado, c.ciclo, c.tercero_pagado,
                COALESCE(c.tercero_monto_abonado, 0) as tercero_monto_abonado,
                COALESCE(c.monto_bolsillo, 0) as monto_bolsillo,
                COALESCE(c.monto_bolsillo_usd, 0) as monto_bolsillo_usd,

@@ -3,6 +3,7 @@ const { Router } = require('express');
 const { hoyLocal, calcCicloLocal } = require('../helpers/dates');
 const { calcularAmortizacionDiferida } = require('../engine/amortizacion');
 const { nuOpts } = require('../helpers/banco');
+const { compraTerceroConReembolso } = require('../helpers/bolsillo');
 
 module.exports = function(db, { logAction, tjNombre }) {
   const router = Router();
@@ -89,6 +90,52 @@ module.exports = function(db, { logAction, tjNombre }) {
       .run(tarjeta_id, etiqueta, monto, tasa_mv, num_cuotas, fecha_compra, fecha_primer_corte, estado, notas, req.params.id);
     logAction('editar', tjNombre(tarjeta_id) + 'Diferida editada: ' + etiqueta);
     res.json({ ok: true });
+  });
+
+  // ── Reprogramar cuotas (Ruta A: reprogramación uniforme) ──────────
+  // Cambia num_cuotas de una diferida existente (ej. el banco la pasó de 36 a 2 cuotas) y regenera
+  // la amortización (función pura: no hay tabla de cuotas persistida, se recalcula al vuelo). Limpia
+  // el bolsillo per-cuota huérfano (cuota_num > nuevo total) y recachea. Blinda la inmutabilidad
+  // por-cuota: si alguna cuota ya cayó en un ciclo con extracto pagado, bloquea (cambiar num_cuotas
+  // reescribe la cuota fija = monto/n y descuadraría un cierre real) → 403 sugiriendo Ruta C.
+  router.post('/:id/reprogramar', (req, res) => {
+    const { num_cuotas, fecha_primer_corte } = req.body || {};
+    const d = db.prepare('SELECT * FROM diferidas WHERE id=?').get(req.params.id);
+    if (!d) return res.status(404).json({ error: 'Diferida no encontrada' });
+    const nuevoN = parseInt(num_cuotas, 10);
+    if (!nuevoN || nuevoN < 1 || nuevoN > 120) return res.status(400).json({ error: 'El número de cuotas debe ser un entero entre 1 y 120.' });
+
+    // Guard de Terceros: no reprogramar si alguna compra vinculada es de un tercero con reembolsos
+    // registrados (reestructurar las cuotas perdería ese libro de deuda). Gestiónalos en Terceros.
+    const vincDif = db.prepare('SELECT id FROM compras WHERE diferida_id=?').all(req.params.id);
+    if (vincDif.some(cv => compraTerceroConReembolso(db, cv.id))) {
+      return res.status(403).json({ error: 'No se puede reprogramar: esta compra es de un tercero y ya tiene reembolsos registrados. Gestiona o retira esos abonos desde la pestaña Terceros antes de reprogramar.' });
+    }
+
+    const amortPrev = calcularAmortizacionDiferida(d.monto, d.tasa_mv, d.num_cuotas, d.fecha_compra, d.fecha_primer_corte, null, nuOpts(db, d.tarjeta_id));
+    const ciclosPagados = [...new Set(amortPrev.tabla.map(c => c.fechaCorte.slice(0, 7)))].filter(ci => {
+      const ext = db.prepare("SELECT estado FROM extractos WHERE tarjeta_id=? AND ciclo=?").get(d.tarjeta_id, ci);
+      return ext && ext.estado === 'pagado';
+    });
+    if (ciclosPagados.length > 0) {
+      return res.status(403).json({ error: 'No se puede reprogramar: la diferida ya tiene cuotas facturadas en ciclos pagados (' + ciclosPagados.join(', ') + '). Usa "dividir en cuotas" para reprogramar solo el saldo restante.' });
+    }
+
+    const nuevaFPC = fecha_primer_corte || d.fecha_primer_corte;
+    db.prepare('UPDATE diferidas SET num_cuotas=?, fecha_primer_corte=? WHERE id=?').run(nuevoN, nuevaFPC, req.params.id);
+
+    // Limpiar bolsillo per-cuota huérfano (cuota_num > nuevoN) de las compras vinculadas y recachear.
+    const comprasVinc = db.prepare('SELECT id FROM compras WHERE diferida_id=?').all(req.params.id);
+    comprasVinc.forEach(c => {
+      db.prepare('DELETE FROM bolsillo_cuotas WHERE compra_id=? AND cuota_num > ?').run(c.id, nuevoN);
+      const sumCop = db.prepare("SELECT COALESCE(SUM(monto),0) as t FROM bolsillo_cuotas WHERE compra_id=? AND COALESCE(moneda,'COP')='COP'").get(c.id);
+      const sumUsd = db.prepare("SELECT COALESCE(SUM(monto),0) as t FROM bolsillo_cuotas WHERE compra_id=? AND moneda='USD'").get(c.id);
+      db.prepare('UPDATE compras SET monto_bolsillo=?, monto_bolsillo_usd=? WHERE id=?').run(sumCop.t, sumUsd.t, c.id);
+    });
+
+    const nuevaAmort = calcularAmortizacionDiferida(d.monto, d.tasa_mv, nuevoN, d.fecha_compra, nuevaFPC, null, nuOpts(db, d.tarjeta_id));
+    logAction('editar', tjNombre(d.tarjeta_id) + 'Diferida reprogramada: ' + d.etiqueta + ' (' + d.num_cuotas + ' -> ' + nuevoN + ' cuotas)');
+    res.json({ ok: true, num_cuotas: nuevoN, amortizacion: nuevaAmort.tabla, resumen: nuevaAmort.resumen });
   });
 
   // ── Bolsillo de diferida sin compra vinculada ─────────────────────

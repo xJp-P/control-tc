@@ -3,6 +3,7 @@ const { Router } = require('express');
 const { hoyLocal, daysBetween, primerCorteAvance } = require('../helpers/dates');
 const { calcularAmortizacionDiferida } = require('../engine/amortizacion');
 const { nuOpts, aplicaIntInternacional } = require('../helpers/banco');
+const { compraTerceroConReembolso } = require('../helpers/bolsillo');
 
 module.exports = function(db, { logAction, tjNombre }) {
   const router = Router();
@@ -47,7 +48,9 @@ module.exports = function(db, { logAction, tjNombre }) {
       if (!esIntl) return 0;
       const saldo = (c.valor_cop || 0) - (c.monto_abonado || 0);
       if (saldo <= 0) return 0;
-      const tasaIntl = c._tj_tasa_intl || 0.01911;
+      // Snapshot histórico: si la compra tiene su tasa congelada (tasa_intl), se usa esa; si no, la
+      // tasa global actual de la tarjeta. Evita reescribir el interés de compras ya facturadas.
+      const tasaIntl = (c.tasa_intl != null ? c.tasa_intl : (c._tj_tasa_intl || 0.01911));
       const diaCorte = c._tj_dia_corte || 30;
       if (!c.ciclo) return 0;
       const [yr, mo] = c.ciclo.split('-').map(Number);
@@ -128,7 +131,7 @@ module.exports = function(db, { logAction, tjNombre }) {
   });
 
   router.post('/', (req, res) => {
-    const { tarjeta_id, fecha, descripcion, valor_cop, valor_usd, tasa_usd, persona_id, estado, notas, diferida_id, grupo_id, es_internacional, ciclo: cicloBody, ciclo_manual } = req.body;
+    const { tarjeta_id, fecha, descripcion, valor_cop, valor_usd, tasa_usd, persona_id, estado, notas, nota_personal, diferida_id, grupo_id, es_internacional, ciclo: cicloBody, ciclo_manual, tasa_intl } = req.body;
     // ciclo_manual=1 con un ciclo explícito → se respeta ese ciclo (ej. cuota reprogramada que
     // se paga en otro ciclo distinto al de su fecha). Si no, el ciclo se deriva de la fecha.
     const cicloManual = ciclo_manual ? 1 : 0;
@@ -140,17 +143,28 @@ module.exports = function(db, { logAction, tjNombre }) {
     if (extCiclo && extCiclo.estado === 'pagado') {
       return res.status(403).json({ error: 'No se puede agregar la compra: el extracto del ciclo ' + ciclo + ' ya está pagado. Los ciclos cerrados no admiten nuevos movimientos.' });
     }
-    const r = db.prepare(`INSERT INTO compras (tarjeta_id, fecha, descripcion, valor_cop, valor_usd, tasa_usd, persona_id, estado, ciclo, notas, diferida_id, grupo_id, es_internacional, ciclo_manual)
-                          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
-      .run(tarjeta_id || null, fecha, descripcion, valor_cop, valor_usd || null, tasa_usd || null, persona_id || null, estado || 'pendiente', ciclo, notas || null, diferida_id || null, grupo_id || null, es_internacional ? 1 : 0, cicloManual);
+    // "Snapshot al nacer": si no se especifica tasa_intl y la tarjeta cobra interés sobre compras
+    // internacionales (Bancolombia Visa), congela la tasa ACTUAL de la tarjeta en la compra → nace
+    // inmune a cambios futuros de la tasa global. El fallback (?? tasa_global) queda SOLO para las
+    // compras históricas que ya quedaron en NULL antes de esta función.
+    let tasaIntlFinal = (tasa_intl != null && tasa_intl !== '') ? Number(tasa_intl) : null;
+    if (tasaIntlFinal == null) {
+      const tjRate = db.prepare('SELECT banco, franquicia, tasa_mv_avances FROM tarjetas WHERE id=?').get(tarjeta_id);
+      if (tjRate && aplicaIntInternacional(tjRate.banco, tjRate.franquicia) && tjRate.tasa_mv_avances != null) {
+        tasaIntlFinal = tjRate.tasa_mv_avances;
+      }
+    }
+    const r = db.prepare(`INSERT INTO compras (tarjeta_id, fecha, descripcion, valor_cop, valor_usd, tasa_usd, persona_id, estado, ciclo, notas, nota_personal, diferida_id, grupo_id, es_internacional, ciclo_manual, tasa_intl)
+                          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+      .run(tarjeta_id || null, fecha, descripcion, valor_cop, valor_usd || null, tasa_usd || null, persona_id || null, estado || 'pendiente', ciclo, notas || null, nota_personal || null, diferida_id || null, grupo_id || null, es_internacional ? 1 : 0, cicloManual, tasaIntlFinal);
     const fmt = new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',maximumFractionDigits:0}).format(valor_cop);
     logAction('crear', tjNombre(tarjeta_id) + 'Compra registrada: ' + descripcion + ' por ' + fmt);
     res.json({ id: r.lastInsertRowid });
   });
 
   router.put('/:id', (req, res) => {
-    const { tarjeta_id, fecha, descripcion, valor_cop, valor_usd, tasa_usd, persona_id, estado, notas, monto_bolsillo, es_internacional, ciclo: cicloBody, ciclo_manual } = req.body;
-    const current = db.prepare('SELECT estado, monto_bolsillo, es_internacional, ciclo, tarjeta_id, diferida_id, fecha, ciclo_manual FROM compras WHERE id=?').get(req.params.id);
+    const { tarjeta_id, fecha, descripcion, valor_cop, valor_usd, tasa_usd, persona_id, estado, notas, nota_personal, monto_bolsillo, es_internacional, ciclo: cicloBody, ciclo_manual, tasa_intl } = req.body;
+    const current = db.prepare('SELECT estado, monto_bolsillo, es_internacional, ciclo, tarjeta_id, diferida_id, fecha, ciclo_manual, nota_personal, tasa_intl FROM compras WHERE id=?').get(req.params.id);
     // ciclo_manual: si viene en el body lo usamos; si no, conservamos el de la compra. Con
     // ciclo_manual=1 y un ciclo explícito se respeta ese ciclo; si no, se deriva de la fecha.
     const cicloManual = ciclo_manual !== undefined ? (ciclo_manual ? 1 : 0) : (current ? (current.ciclo_manual || 0) : 0);
@@ -165,6 +179,9 @@ module.exports = function(db, { logAction, tjNombre }) {
     let finalEstado = estado || (current ? current.estado : 'pendiente');
     let finalBolsillo = monto_bolsillo !== undefined ? (monto_bolsillo || 0) : (current ? current.monto_bolsillo : 0);
     const finalIntl = es_internacional !== undefined ? (es_internacional ? 1 : 0) : (current ? (current.es_internacional || 0) : 0);
+    const finalNota = nota_personal !== undefined ? (nota_personal || null) : (current ? (current.nota_personal || null) : null);
+    // tasa_intl congelada: si viene en el body se usa (null/'' la limpia); si no, se conserva la actual.
+    const finalTasaIntl = tasa_intl !== undefined ? (tasa_intl != null && tasa_intl !== '' ? Number(tasa_intl) : null) : (current ? (current.tasa_intl != null ? current.tasa_intl : null) : null);
     // Reconciliar el bolsillo COP al editar una compra NO diferida: si cambió el valor, la
     // moneda o el flag internacional, el monto apartado podría superar el nuevo tope
     // (valor [+ interés intl]). Lo re-cap-eamos y recalculamos el estado contra ese tope real
@@ -172,14 +189,14 @@ module.exports = function(db, { logAction, tjNombre }) {
     // inflado ni un estado "cubierto" falso. Las diferidas usan bolsillo per-cuota
     // (bolsillo_cuotas) y no se tocan aquí.
     if (current && current.estado !== 'diferida' && finalEstado !== 'diferida') {
-      const topeEdit = targetBolsillo({ valor_cop, valor_usd, es_internacional: finalIntl, ciclo, fecha, tarjeta_id }, 'COP', null);
+      const topeEdit = targetBolsillo({ valor_cop, valor_usd, es_internacional: finalIntl, ciclo, fecha, tarjeta_id, tasa_intl: finalTasaIntl }, 'COP', null);
       if (topeEdit != null) {
         if (finalBolsillo > topeEdit) finalBolsillo = topeEdit;
         finalEstado = (topeEdit > 0 && finalBolsillo >= topeEdit) ? 'bolsillo' : (finalBolsillo > 0 ? 'bolsillo_parcial' : 'pendiente');
       }
     }
-    db.prepare(`UPDATE compras SET tarjeta_id=?, fecha=?, descripcion=?, valor_cop=?, valor_usd=?, tasa_usd=?, persona_id=?, estado=?, ciclo=?, notas=?, monto_bolsillo=?, es_internacional=?, ciclo_manual=? WHERE id=?`)
-      .run(tarjeta_id, fecha, descripcion, valor_cop, valor_usd, tasa_usd, persona_id, finalEstado, ciclo, notas, finalBolsillo, finalIntl, cicloManual, req.params.id);
+    db.prepare(`UPDATE compras SET tarjeta_id=?, fecha=?, descripcion=?, valor_cop=?, valor_usd=?, tasa_usd=?, persona_id=?, estado=?, ciclo=?, notas=?, nota_personal=?, tasa_intl=?, monto_bolsillo=?, es_internacional=?, ciclo_manual=? WHERE id=?`)
+      .run(tarjeta_id, fecha, descripcion, valor_cop, valor_usd, tasa_usd, persona_id, finalEstado, ciclo, notas, finalNota, finalTasaIntl, finalBolsillo, finalIntl, cicloManual, req.params.id);
 
     // SINCRONIZAR diferida vinculada: si la compra tiene diferida_id, mantener
     // alineadas fecha_compra y fecha_primer_corte (y tarjeta_id si cambió).
@@ -218,7 +235,7 @@ module.exports = function(db, { logAction, tjNombre }) {
     if (c.es_internacional && c.ciclo) {
       const tj = db.prepare('SELECT banco, franquicia, tasa_mv_avances, dia_corte FROM tarjetas WHERE id=?').get(c.tarjeta_id);
       if (tj && aplicaIntInternacional(tj.banco, tj.franquicia)) {
-        const tasaIntl = tj.tasa_mv_avances || 0.01911;
+        const tasaIntl = (c.tasa_intl != null ? c.tasa_intl : (tj.tasa_mv_avances || 0.01911));
         const diaCorte = tj.dia_corte || 30;
         const [yr, mo] = c.ciclo.split('-').map(Number);
         const lastDay = new Date(yr, mo, 0).getDate();
@@ -399,6 +416,66 @@ module.exports = function(db, { logAction, tjNombre }) {
 
     logAction('editar', tjNombre(partes[0].tarjeta_id) + 'Compra dividida convertida a 100% personal: ' + partes[0].descripcion + (force && conAbono.length > 0 ? ' (abonos de terceros eliminados)' : ''));
     res.json({ ok: true, compraId: compraIdFinal });
+  });
+
+  // ── Reprogramar dividiendo en cuotas individuales (Ruta C: irregular) ─────────
+  // Convierte una compra a cuotas (diferida) en N compras de 1 cuota con ciclo_manual, cada una con
+  // su propio monto/ciclo. Modela las reprogramaciones IRREGULARES del banco (cuotas de distinto
+  // monto/fecha) que una diferida uniforme no representa. La diferida queda sin compras → se elimina.
+  // Espejo del patrón manual previo (modelar con varios movimientos de 1 cuota).
+  // Body: { cuotas: [{ ciclo, monto, fecha?, es_internacional? }] } (1+ elementos).
+  router.post('/:id/dividir-cuotas', (req, res) => {
+    const { cuotas } = req.body || {};
+    const c = db.prepare('SELECT * FROM compras WHERE id=?').get(req.params.id);
+    if (!c) return res.status(404).json({ error: 'Compra no encontrada' });
+    if (!Array.isArray(cuotas) || cuotas.length < 1) return res.status(400).json({ error: 'Se requiere un arreglo de cuotas con al menos un elemento.' });
+    for (const q of cuotas) {
+      if (!q || !q.ciclo || !(Number(q.monto) > 0)) return res.status(400).json({ error: 'Cada cuota requiere ciclo (YYYY-MM) y monto > 0.' });
+    }
+
+    // Guard de Terceros: no dividir si la compra es de un tercero con reembolsos registrados
+    // (reestructurarla en cuotas individuales perdería ese libro de deuda). Gestiónalos en Terceros.
+    if (compraTerceroConReembolso(db, c.id)) {
+      return res.status(403).json({ error: 'No se puede dividir: esta compra es de un tercero y ya tiene reembolsos registrados. Gestiona o retira esos abonos desde la pestaña Terceros antes de dividir.' });
+    }
+
+    // Inmutabilidad: ni el ciclo actual de la compra ni ningún ciclo destino puede estar pagado.
+    const ciclosCheck = [...new Set([c.ciclo, ...cuotas.map(q => q.ciclo)])];
+    for (const ci of ciclosCheck) {
+      const ext = db.prepare("SELECT estado FROM extractos WHERE tarjeta_id=? AND ciclo=?").get(c.tarjeta_id, ci);
+      if (ext && ext.estado === 'pagado') {
+        return res.status(403).json({ error: 'No se puede dividir: el extracto del ciclo ' + ci + ' ya está pagado.' });
+      }
+    }
+
+    const n = cuotas.length;
+    const ids = db.transaction(() => {
+      const difId = c.diferida_id;
+      // Cuota 1: reutiliza la compra original (1 cuota, ciclo_manual). Se desvincula de la diferida
+      // y se limpia su bolsillo per-cuota.
+      const q0 = cuotas[0];
+      db.prepare('DELETE FROM bolsillo_cuotas WHERE compra_id=?').run(c.id);
+      db.prepare(`UPDATE compras SET estado='pendiente', valor_cop=?, valor_usd=NULL, tasa_usd=NULL, fecha=?, ciclo=?, ciclo_manual=1, es_internacional=?, diferida_id=NULL, monto_bolsillo=0, monto_bolsillo_usd=0, descripcion=? WHERE id=?`)
+        .run(Math.round(q0.monto), q0.fecha || c.fecha, q0.ciclo, q0.es_internacional ? 1 : 0, c.descripcion + ' (cuota 1/' + n + ')', c.id);
+      const out = [c.id];
+      // Cuotas 2..N: nuevas compras de 1 cuota con ciclo_manual.
+      for (let i = 1; i < n; i++) {
+        const q = cuotas[i];
+        const r = db.prepare(`INSERT INTO compras (tarjeta_id, fecha, descripcion, valor_cop, persona_id, estado, ciclo, notas, es_internacional, ciclo_manual)
+                              VALUES (?,?,?,?,?,?,?,?,?,1)`)
+          .run(c.tarjeta_id, q.fecha || c.fecha, c.descripcion + ' (cuota ' + (i + 1) + '/' + n + ')', Math.round(q.monto), c.persona_id || null, 'pendiente', q.ciclo, c.notas || null, q.es_internacional ? 1 : 0);
+        out.push(r.lastInsertRowid);
+      }
+      // La diferida quedó sin compras vinculadas → eliminarla (cascade limpia sus bolsillo_cuotas).
+      if (difId) {
+        const ref = db.prepare('SELECT COUNT(*) as n FROM compras WHERE diferida_id=?').get(difId);
+        if (!ref || ref.n === 0) db.prepare('DELETE FROM diferidas WHERE id=?').run(difId);
+      }
+      return out;
+    })();
+
+    logAction('editar', tjNombre(c.tarjeta_id) + 'Compra dividida en ' + n + ' cuotas individuales: ' + c.descripcion);
+    res.json({ ok: true, ids });
   });
 
   router.delete('/:id', (req, res) => {

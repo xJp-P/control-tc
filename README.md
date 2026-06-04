@@ -22,7 +22,7 @@ App de escritorio para gestión personal de tarjetas de crédito. Soporta múlti
 - **Multi-banco y multi-tarjeta** — motor de cálculo diferenciado por banco y franquicia, tasas MV independientes por tarjeta
 - **Bimonetario (COP/USD)** — deuda nativa en dólares para Mastercard/Amex Bancolombia (extracto dual: saldar la porción COP y la USD por separado), bolsillo en USD, y TRM diaria automática del Banco de la República (datos.gov.co) como tasa por defecto y para estimar el cupo usado en COP
 - **Compras** — COP y USD, bolsillo (total o parcial), dividir entre personas; flag `Compra internacional` para procesadores intl que cobran en COP (Apple, Rappi, MercadoPago); registro USD opcional. Una compra dividida puede convertirse de vuelta a **100% personal** (fusiona las partes; protege el dinero ya reembolsado por terceros con doble confirmación)
-- **Intereses internacionales (INTL)** — cálculo automático de intereses corrientes sobre compras marcadas como `es_internacional` en tarjetas que aplican (hoy: Bancolombia Visa). Desglose en cards "Deuda Personal" (porción propia) y "Me Deben Corte" (porción de terceros). En compras divididas, cada parte recibe su porción proporcional del interés
+- **Intereses internacionales (INTL)** — cálculo automático de intereses corrientes sobre compras marcadas como `es_internacional` en tarjetas que aplican (hoy: Bancolombia Visa). Desglose en cards "Deuda Personal" (porción propia) y "Me Deben Corte" (porción de terceros). En compras divididas, cada parte recibe su porción proporcional del interés. Cada compra puede **congelar la tasa exacta del extracto** (`tasa_intl`): así su interés no se reescribe si la tasa de la tarjeta cambia después; las compras nuevas la congelan automáticamente al registrarse y una columna "Tasa" muestra la de cada compra
 - **Avances** — tabla de amortización completa, abonos a capital con redistribución cronológica; modelo "saldo facturado" para Bancolombia
 - **Diferidas** — amortización a X cuotas con badge de progreso (1/3, 2/3…), diferidas divididas, bolsillo per-cuota (cada cuota guarda monto apartado independiente)
 - **Extractos** — auto-generados mensualmente, pago mínimo y total calculados, historial de pagos. Los intereses internacionales se persisten al cerrar el extracto y permanecen fieles aunque cambien las compras o tasas después
@@ -80,6 +80,7 @@ Ruta por defecto: `%APPDATA%\CreditCardManager\data.db` (Windows). La ubicación
 │   ├── helpers/
 │   │   ├── dates.js     # Utilidades de fecha: hoyLocal, addMonths, daysBetween
 │   │   ├── banco.js     # Detección banco/franquicia: esNuBank, nuOpts, isDualExtracto, aplicaIntInternacional
+│   │   ├── bolsillo.js  # Liberación de bolsillo al abonar a capital (con guard de terceros)
 │   │   ├── scraper.js   # Web scraping y extracción de texto PDF para tasas
 │   │   └── log.js       # Factory de logAction y tjNombre (requiere DB)
 │   ├── services/        # Asistente de IA

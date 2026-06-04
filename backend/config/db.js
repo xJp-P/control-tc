@@ -6,6 +6,7 @@ const { calcularAmortizacionAvance } = require('../engine/amortizacion');
 const { calcularAmortizacionDiferida } = require('../engine/amortizacion');
 const { esNuBank, nuOpts, avanceOpts } = require('../helpers/banco');
 const { primerCorteAvance } = require('../helpers/dates');
+const { liberarBolsilloDiferida, liberarBolsilloAvance } = require('../helpers/bolsillo');
 
 const DEFAULT_DB_DIR = path.join(require('os').homedir(), 'AppData', 'Roaming', 'CreditCardManager');
 const DB_CONFIG_FILE = path.join(DEFAULT_DB_DIR, 'db_location.json');
@@ -125,6 +126,16 @@ function syncData(db) {
     if (fix.changes > 0) { fixes += fix.changes; console.log('[Sync] ' + fix.changes + ' compras USD de extracto pagado ' + ext.ciclo + ' marcadas como pagadas'); }
   });
 
+  // 6b. Limpieza de bolsillo huérfano SOLO en compras PERSONALES ya pagadas (plata propia apartada
+  //     que ya cumplió su fin; el dashboard solo cuenta el bolsillo de compras NO pagadas). NUNCA
+  //     toca compras de tercero (persona_id IS NOT NULL): ahí monto_bolsillo es el reembolso del
+  //     deudor (lo usan la vista Terceros y la card "Me Deben" como valor_cop - monto_bolsillo) y
+  //     debe conservarse. Limpia retroactivamente y en cada arranque (también auto-cura otras DBs).
+  const bolsilloPagadoHuerfano = db.prepare(`UPDATE compras SET monto_bolsillo=0, monto_bolsillo_usd=0
+    WHERE estado='pagado' AND persona_id IS NULL
+      AND (COALESCE(monto_bolsillo,0) > 0 OR COALESCE(monto_bolsillo_usd,0) > 0)`).run();
+  if (bolsilloPagadoHuerfano.changes > 0) { fixes += bolsilloPagadoHuerfano.changes; console.log('[Sync] ' + bolsilloPagadoHuerfano.changes + ' compras personales pagadas con bolsillo residual limpiadas'); }
+
   // 7. Compras vinculadas a diferidas: marcar como 'diferida'
   const comprasDiferidas = db.prepare("UPDATE compras SET estado='diferida' WHERE estado NOT IN ('pagado','diferida') AND notas LIKE '%Diferida a%cuotas%'").run();
   if (comprasDiferidas.changes > 0) { fixes += comprasDiferidas.changes; console.log('[Sync] ' + comprasDiferidas.changes + ' compras marcadas como diferidas'); }
@@ -208,6 +219,7 @@ function syncData(db) {
         const aplicar = Math.min(restante, saldo);
         restante -= aplicar;
         db.prepare('INSERT INTO abonos_diferida (diferida_id, fecha, monto, notas) VALUES (?,?,?,?)').run(d.id, ab.fecha, aplicar, 'Abono a capital (redistribuido)');
+        liberarBolsilloDiferida(db, d.id);
         detalleNuevo.push(d.etiqueta);
         fixes++;
       }
@@ -225,6 +237,7 @@ function syncData(db) {
         const aplicar = Math.min(restante, saldo);
         restante -= aplicar;
         db.prepare('INSERT INTO abonos_avance (avance_id, fecha, monto, notas) VALUES (?,?,?,?)').run(av.id, ab.fecha, aplicar, 'Abono a capital (redistribuido)');
+        liberarBolsilloAvance(db, av.id);
         detalleNuevo.push(av.etiqueta);
         fixes++;
       }
@@ -314,6 +327,7 @@ function syncData(db) {
         const aplicar = Math.min(restante, saldo);
         restante -= aplicar;
         db.prepare('INSERT INTO abonos_diferida (diferida_id, fecha, monto, notas) VALUES (?,?,?,?)').run(d.id, pago.fecha, aplicar, 'Abono a capital (redistribuido)');
+        liberarBolsilloDiferida(db, d.id);
         detalleNuevo.push(d.etiqueta);
         fixes++;
       }
@@ -331,6 +345,7 @@ function syncData(db) {
         const aplicar = Math.min(restante, saldo);
         restante -= aplicar;
         db.prepare('INSERT INTO abonos_avance (avance_id, fecha, monto, notas) VALUES (?,?,?,?)').run(av.id, pago.fecha, aplicar, 'Abono a capital (redistribuido)');
+        liberarBolsilloAvance(db, av.id);
         detalleNuevo.push(av.etiqueta);
         fixes++;
       }
@@ -589,6 +604,20 @@ function initDb(dbPathOverride) {
   // ordenar/mostrar, pero pertenece al ciclo que se le asigne).
   try { db.prepare('SELECT ciclo_manual FROM compras LIMIT 1').get(); }
   catch (e) { db.exec('ALTER TABLE compras ADD COLUMN ciclo_manual INTEGER DEFAULT 0'); }
+
+  // nota_personal: nota privada del usuario (ej. "iCloud") separada del nombre OFICIAL del extracto
+  // (columna descripcion). El nombre oficial es el que se cruza con el extracto del banco; la nota
+  // es solo display/contexto (se muestra bajo el nombre en las tablas y se envía a la IA como tal).
+  try { db.prepare('SELECT nota_personal FROM compras LIMIT 1').get(); }
+  catch (e) { db.exec('ALTER TABLE compras ADD COLUMN nota_personal TEXT'); }
+
+  // tasa_intl: tasa de interés mensual CONGELADA por compra internacional (snapshot histórico). El
+  // banco fija la tasa al facturar y NO la cambia retroactivamente; la tasa global de la tarjeta sí
+  // fluctúa. Si tasa_intl está seteada, el interés intl de esa compra se calcula con ELLA (no con la
+  // global) → el histórico no se reescribe al cambiar la tasa. NULL = no capturada → usa la global
+  // actual (fallback). La fija el usuario (CompraForm), el cierre de extracto (piso) o la IA (futuro).
+  try { db.prepare('SELECT tasa_intl FROM compras LIMIT 1').get(); }
+  catch (e) { db.exec('ALTER TABLE compras ADD COLUMN tasa_intl REAL'); }
 
   // Retroactively assign grupo_id to existing split compras
   (() => {

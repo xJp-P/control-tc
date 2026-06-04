@@ -4,6 +4,7 @@ const { hoyLocal } = require('../helpers/dates');
 const { calcularAmortizacionAvance } = require('../engine/amortizacion');
 const { calcularAmortizacionDiferida } = require('../engine/amortizacion');
 const { nuOpts, avanceOpts } = require('../helpers/banco');
+const { liberarBolsilloDiferida, liberarBolsilloAvance } = require('../helpers/bolsillo');
 
 module.exports = function(db, { logAction, tjNombre }) {
   const router = Router();
@@ -15,18 +16,21 @@ module.exports = function(db, { logAction, tjNombre }) {
     comprasPendientes
       .filter(c => (c.valor_cop - (c.monto_abonado || 0)) > 0 && (!c.valor_usd || c.valor_usd === 0))
       .sort(sortFecha)
-      .forEach(c => { const s = c.valor_cop - (c.monto_abonado || 0); deudas.push({ tipo: 'compra', fecha: c.fecha, created_at: c.created_at, id: c.id, descripcion: c.descripcion, monto: s, montoOriginal: c.valor_cop, persona_id: c.persona_id, bolsillo: c.monto_bolsillo || 0 }); });
+      .forEach(c => { const s = c.valor_cop - (c.monto_abonado || 0); deudas.push({ tipo: 'compra', fecha: c.fecha, created_at: c.created_at, id: c.id, descripcion: c.descripcion, monto: s, montoOriginal: c.valor_cop, persona_id: c.persona_id, bolsillo: (c.persona_id == null) ? (c.monto_bolsillo || 0) : 0 }); });
     comprasPendientes
       .filter(c => (c.valor_cop - (c.monto_abonado || 0)) > 0 && c.valor_usd && c.valor_usd > 0)
       .sort(sortFecha)
-      .forEach(c => { const s = c.valor_cop - (c.monto_abonado || 0); deudas.push({ tipo: 'compra', fecha: c.fecha, created_at: c.created_at, id: c.id, descripcion: c.descripcion, monto: s, montoOriginal: c.valor_cop, persona_id: c.persona_id, bolsillo: c.monto_bolsillo || 0 }); });
+      .forEach(c => { const s = c.valor_cop - (c.monto_abonado || 0); deudas.push({ tipo: 'compra', fecha: c.fecha, created_at: c.created_at, id: c.id, descripcion: c.descripcion, monto: s, montoOriginal: c.valor_cop, persona_id: c.persona_id, bolsillo: (c.persona_id == null) ? (c.monto_bolsillo || 0) : 0 }); });
     diferidasActivas
       .sort((a, b) => a.fecha_compra.localeCompare(b.fecha_compra) || (a.created_at || '').localeCompare(b.created_at || ''))
       .forEach(d => {
         const abonosDif = db.prepare('SELECT * FROM abonos_diferida WHERE diferida_id=? ORDER BY fecha').all(d.id);
         const amort = calcularAmortizacionDiferida(d.monto, d.tasa_mv, d.num_cuotas, d.fecha_compra, d.fecha_primer_corte, abonosDif, nuOpts(db, d.tarjeta_id));
         const saldo = amort.resumen.saldoActual;
-        if (saldo > 0) deudas.push({ tipo: 'diferida', fecha: d.fecha_compra, created_at: d.created_at, id: d.id, descripcion: d.etiqueta, monto: saldo });
+        if (saldo > 0) {
+          const bolDif = db.prepare('SELECT COALESCE(SUM(COALESCE(monto_bolsillo,0)),0) AS t FROM compras WHERE diferida_id=? AND persona_id IS NULL').get(d.id);
+          deudas.push({ tipo: 'diferida', fecha: d.fecha_compra, created_at: d.created_at, id: d.id, descripcion: d.etiqueta, monto: saldo, bolsillo: bolDif ? bolDif.t : 0 });
+        }
       });
     avancesActivos
       .sort((a, b) => a.fecha_desembolso.localeCompare(b.fecha_desembolso) || (a.created_at || '').localeCompare(b.created_at || ''))
@@ -34,7 +38,7 @@ module.exports = function(db, { logAction, tjNombre }) {
         const abonos = db.prepare('SELECT * FROM abonos_avance WHERE avance_id=? ORDER BY fecha').all(av.id);
         const amort = calcularAmortizacionAvance(av.monto, av.tasa_mv, av.plazo, av.fecha_desembolso, av.dia_corte, abonos, av.comision, avanceOpts(db, av.tarjeta_id));
         const saldo = amort.resumen.saldoActual;
-        if (saldo > 0) deudas.push({ tipo: 'avance', fecha: av.fecha_desembolso, created_at: av.created_at, id: av.id, descripcion: av.etiqueta, monto: saldo });
+        if (saldo > 0) deudas.push({ tipo: 'avance', fecha: av.fecha_desembolso, created_at: av.created_at, id: av.id, descripcion: av.etiqueta, monto: saldo, bolsillo: av.monto_bolsillo || 0 });
       });
     return deudas;
   }
@@ -63,7 +67,7 @@ module.exports = function(db, { logAction, tjNombre }) {
       if (restante <= 0) break;
       const montoAplicar = Math.min(restante, d.monto);
       restante -= montoAplicar;
-      const liberado = (d.tipo === 'compra') ? (d.bolsillo || 0) : 0;
+      const liberado = d.bolsillo || 0;
       if (liberado > 0) bolsilloLiberado += liberado;
       detalle.push({ tipo: d.tipo, id: d.id, descripcion: d.descripcion, saldoOriginal: d.monto, montoAplicado: montoAplicar, cubierto: montoAplicar >= d.monto ? 'total' : 'parcial', bolsilloLiberado: liberado });
     }
@@ -97,31 +101,39 @@ module.exports = function(db, { logAction, tjNombre }) {
         const montoAplicar = Math.min(restante, d.monto);
         restante -= montoAplicar;
         const nuevoAbonado = (d.montoOriginal - d.monto) + montoAplicar;
-        // Liberar TODO el bolsillo de esta compra: el abono la pago/redujo, asi que la plata
-        // apartada queda libre (no proporcional). Si queda saldo, el usuario re-aparta si quiere.
-        const liberado = d.bolsillo || 0;
+        // Liberar el bolsillo SOLO si la compra es personal (plata propia apartada que el abono
+        // dejó libre, no proporcional). En compras de tercero, monto_bolsillo es el reembolso del
+        // deudor (lo usa la vista Terceros como valor_cop - monto_bolsillo) → se conserva intacto.
+        const esPersonal = (d.persona_id == null);
+        const liberado = esPersonal ? (d.bolsillo || 0) : 0;
         if (liberado > 0) bolsilloLiberado += liberado;
+        const setBol = esPersonal ? ', monto_bolsillo=0, monto_bolsillo_usd=0' : '';
         if (montoAplicar >= d.monto) {
-          db.prepare("UPDATE compras SET estado='pagado', monto_abonado=?, monto_bolsillo=0, monto_bolsillo_usd=0 WHERE id=?").run(nuevoAbonado, d.id);
+          db.prepare("UPDATE compras SET estado='pagado', monto_abonado=?" + setBol + " WHERE id=?").run(nuevoAbonado, d.id);
           detalle.push({ tipo: 'compra', id: d.id, descripcion: d.descripcion, saldoOriginal: d.monto, montoAplicado: montoAplicar, cubierto: 'total', bolsilloLiberado: liberado });
         } else {
-          // Parcial: queda saldo y ya no hay bolsillo → estado 'pendiente'.
-          db.prepare("UPDATE compras SET estado='pendiente', monto_abonado=?, monto_bolsillo=0, monto_bolsillo_usd=0 WHERE id=?").run(nuevoAbonado, d.id);
+          db.prepare("UPDATE compras SET estado='pendiente', monto_abonado=?" + setBol + " WHERE id=?").run(nuevoAbonado, d.id);
           detalle.push({ tipo: 'compra', id: d.id, descripcion: d.descripcion, saldoOriginal: d.monto, montoAplicado: montoAplicar, cubierto: 'parcial', bolsilloLiberado: liberado });
         }
       } else if (d.tipo === 'diferida') {
         const montoAbono = Math.min(restante, d.monto);
         restante -= montoAbono;
         db.prepare('INSERT INTO abonos_diferida (diferida_id, fecha, monto, notas) VALUES (?,?,?,?)').run(d.id, fechaAbono, montoAbono, 'Abono a capital');
+        // Liberar el bolsillo per-cuota: el abono redujo el capital, así que la plata apartada
+        // queda libre (siempre que se toque, total o parcial; no proporcional).
+        const liberado = liberarBolsilloDiferida(db, d.id);
+        if (liberado > 0) bolsilloLiberado += liberado;
         const cubierto = montoAbono >= d.monto ? 'total' : 'parcial';
-        detalle.push({ tipo: 'diferida', id: d.id, descripcion: d.descripcion, saldoOriginal: d.monto, montoAplicado: montoAbono, cubierto });
+        detalle.push({ tipo: 'diferida', id: d.id, descripcion: d.descripcion, saldoOriginal: d.monto, montoAplicado: montoAbono, cubierto, bolsilloLiberado: liberado });
         if (montoAbono >= d.monto) db.prepare("UPDATE diferidas SET estado='liquidado' WHERE id=?").run(d.id);
       } else if (d.tipo === 'avance') {
         const montoAbono = Math.min(restante, d.monto);
         restante -= montoAbono;
         db.prepare('INSERT INTO abonos_avance (avance_id, fecha, monto, notas) VALUES (?,?,?,?)').run(d.id, fechaAbono, montoAbono, 'Abono a capital');
+        const liberado = liberarBolsilloAvance(db, d.id);
+        if (liberado > 0) bolsilloLiberado += liberado;
         const cubierto = montoAbono >= d.monto ? 'total' : 'parcial';
-        detalle.push({ tipo: 'avance', id: d.id, descripcion: d.descripcion, saldoOriginal: d.monto, montoAplicado: montoAbono, cubierto });
+        detalle.push({ tipo: 'avance', id: d.id, descripcion: d.descripcion, saldoOriginal: d.monto, montoAplicado: montoAbono, cubierto, bolsilloLiberado: liberado });
         if (montoAbono >= d.monto) db.prepare("UPDATE avances SET estado='liquidado' WHERE id=?").run(d.id);
       }
     }

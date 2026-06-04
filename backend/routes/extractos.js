@@ -128,6 +128,22 @@ module.exports = function(db, { logAction, tjNombre }) {
           WHERE tarjeta_id=? AND ciclo=? AND estado NOT IN ('pagado','diferida')
             AND (valor_usd IS NULL OR valor_usd = 0)`)
           .run(ext.tarjeta_id, ext.ciclo);
+        // Limpiar bolsillo SOLO de compras personales recién pagadas (plata propia que ya cumplió su
+        // fin). En compras de tercero, monto_bolsillo es el reembolso del deudor → no se toca.
+        db.prepare(`UPDATE compras SET monto_bolsillo=0, monto_bolsillo_usd=0
+          WHERE tarjeta_id=? AND ciclo=? AND estado='pagado' AND persona_id IS NULL
+            AND (valor_usd IS NULL OR valor_usd = 0)`)
+          .run(ext.tarjeta_id, ext.ciclo);
+        // Freeze al cerrar: congela la tasa intl ACTUAL de la tarjeta en las compras internacionales
+        // de este ciclo que aún no tengan tasa propia (piso de seguridad contra drift futuro). Si el
+        // usuario o la IA ya fijaron una tasa por compra, no se toca.
+        const tjRateCop = db.prepare('SELECT tasa_mv_avances FROM tarjetas WHERE id=?').get(ext.tarjeta_id);
+        if (tjRateCop && tjRateCop.tasa_mv_avances != null) {
+          db.prepare(`UPDATE compras SET tasa_intl=?
+            WHERE tarjeta_id=? AND ciclo=? AND tasa_intl IS NULL
+              AND (es_internacional=1 OR (valor_usd IS NOT NULL AND valor_usd > 0))`)
+            .run(tjRateCop.tasa_mv_avances, ext.tarjeta_id, ext.ciclo);
+        }
       } else {
         db.prepare("UPDATE extractos SET monto_pagado=?, fecha_pagado=? WHERE id=?")
           .run(nuevoMontoPagado, fechaPagado, req.params.id);
@@ -153,6 +169,11 @@ module.exports = function(db, { logAction, tjNombre }) {
       // Solo marca como pagadas las compras USD del ciclo.
       db.prepare(`UPDATE compras SET estado='pagado', monto_abonado=valor_cop
         WHERE tarjeta_id=? AND ciclo=? AND estado NOT IN ('pagado','diferida')
+          AND valor_usd IS NOT NULL AND valor_usd > 0`)
+        .run(ext.tarjeta_id, ext.ciclo);
+      // Limpiar bolsillo SOLO de compras personales USD recién pagadas (no toca las de tercero).
+      db.prepare(`UPDATE compras SET monto_bolsillo=0, monto_bolsillo_usd=0
+        WHERE tarjeta_id=? AND ciclo=? AND estado='pagado' AND persona_id IS NULL
           AND valor_usd IS NOT NULL AND valor_usd > 0`)
         .run(ext.tarjeta_id, ext.ciclo);
     } else {

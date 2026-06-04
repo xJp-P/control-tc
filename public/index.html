@@ -255,6 +255,16 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '4.1.0': [
+    'El Asistente de IA ahora puede reprogramar las cuotas de una compra con un clic. Cuando el banco cambia el número de cuotas de una compra (por ejemplo, de 36 a 2), la app lo detecta en el extracto y te propone ajustarlo: puedes dejar las cuotas parejas o, si el banco las dejó con montos o fechas distintos, dividir la compra en cuotas individuales. Siempre con una confirmación que te muestra qué se va a cambiar, y sin tocar los meses que ya pagaste.',
+    'Nuevo "Re-analizar con tu contexto": después de ver el análisis de la IA, puedes escribirle una aclaración (por ejemplo, "la compra de Apple la pasé a 2 cuotas en el banco") y volver a analizar al instante, con el mismo PDF y datos, sin subir nada de nuevo. La IA toma tu aclaración como una instrucción directa para corregir su análisis anterior.',
+    'El dinero que apartas para tus propias compras se ordena solo: cuando pagas el extracto de un mes, lo que habías reservado para esas compras tuyas se libera automáticamente (y se limpian de una vez los apartados que habían quedado de meses anteriores). Importante: esto aplica solo a tus compras propias; lo que te deben tus terceros (la pestaña Terceros) queda siempre intacto.',
+    'Un abono a capital sobre una compra a cuotas o un avance propios también libera el dinero que tenías apartado, igual que con las compras de una sola cuota, y te avisa cuánto quedó disponible. Las deudas de terceros nunca se ven afectadas.',
+    'Ahora separas el "Nombre en el Extracto" (cómo llega la compra al banco, por ejemplo APPLE.COM/BILL) de una "Nota personal" opcional (tu recordatorio, por ejemplo "iCloud"). El nombre del extracto ayuda a que la IA cruce bien tus compras, y tu nota aparece en letra pequeña bajo el nombre en las pestañas Resumen y Terceros.',
+    'En el Asistente de IA puedes elegir el modelo de cada proveedor desde un menú desplegable. Los modelos más avanzados razonan mejor, pero consumen más tokens.',
+    'Más protección para tus terceros: el dinero apartado en una compra de un tercero (lo que te ha reembolsado) solo se gestiona desde la pestaña Terceros; en las demás vistas se indica así. Además, si una compra de un tercero ya tiene reembolsos, la app no permite reprogramar ni dividir sus cuotas, para no descuadrar esa cuenta.',
+    'Las compras internacionales ahora pueden "congelar" la tasa de interés que el banco les aplicó. Al registrar o editar una compra internacional puedes escribir la tasa exacta del extracto (por ejemplo 2,0849 %) y su interés queda fijo: ya no se recalcula si después sube o baja la tasa de la tarjeta. Antes, al actualizar la tasa, el interés de compras de meses anteriores se reescribía con la tasa nueva y descuadraba las cuentas (sobre todo lo que te deben tus terceros). Las compras internacionales nuevas guardan automáticamente la tasa vigente al registrarlas (nacen congeladas), y una nueva columna "Tasa" en Resumen y Terceros muestra la de cada compra: en gris y cursiva cuando todavía usa la tasa actual de la tarjeta y conviene que la fijes desde el extracto.'
+  ],
   '4.0.0': [
     'Nuevo Asistente de IA para conciliar tus extractos. Subes el PDF del extracto del banco y la app lo compara con tus movimientos para explicarte por qué el pago mínimo del banco no coincide con el de la app y señalarte posibles diferencias (una compra que falta, un monto distinto o algo mal clasificado).',
     'Funciona con la IA que prefieras: conectas tu cuenta de OpenAI, Anthropic (Claude), Google Gemini o DeepSeek usando tu clave. La clave se guarda cifrada en tu equipo y nunca se incluye en las copias de seguridad. También hay un modo Demo, sin conexión, para ver cómo funciona sin gastar nada.',
@@ -1794,6 +1804,13 @@ function CardResumen({ tarjeta, onDataChange }) {
     toast('Compra eliminada');
   }
   function openBolsilloModal(compra) {
+    // El bolsillo de una compra de tercero es su reembolso (la deuda se calcula como valor - bolsillo).
+    // Su edición es EXCLUSIVA de la pestaña Terceros para no corromper esa contabilidad desde las
+    // vistas generales (Resumen / Tarjeta).
+    if (compra && compra.persona_id) {
+      infoDialog('El monto apartado en una compra de un tercero representa lo que te ha reembolsado. Gestiónalo desde la pestaña Terceros.', 'Gestionar abono desde la pestaña Terceros');
+      return;
+    }
     const mb = compra.monto_bolsillo || 0;
     const target = compra._bolsilloTarget || compra.valor_cop;
     const isPartial = mb > 0 && mb < target;
@@ -2367,6 +2384,7 @@ function CardResumen({ tarjeta, onDataChange }) {
             e('td', null, fmtDate(c.fecha)),
             e('td', null,
               c.descripcion,
+              c.nota_personal && e('div', { style: { fontSize: 11, color: 'var(--text-muted)', marginTop: 1 } }, c.nota_personal),
               // El valor USD ahora vive en su propia columna "Valor USD" — quitamos
               // la concatenación redundante en la descripción.
               isDif && c.cuota_num && e('span', { style: { fontSize: 10, color: 'var(--accent)', marginLeft: 8 } }, 'Cuota ' + c.cuota_num + '/' + c.cuotas_total),
@@ -2393,6 +2411,7 @@ function CardResumen({ tarjeta, onDataChange }) {
                 ? 'USD $' + new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(c.valor_usd)
                 : e('span', { style: { color: 'var(--text-muted)' } }, '—')
             ),
+            aplicaIntl && tasaIntlTd(c, tarjeta),
             aplicaIntl && e('td', { className: 'text-right text-mono', style: { fontSize: 12 } }, interesIntl > 0 ? fmtCOP(interesIntl) : e('span', { style: { color: 'var(--text-muted)' } }, '—')),
             aplicaIntl && e('td', { className: 'text-right text-mono', style: { fontWeight: interesIntl > 0 ? 600 : undefined } }, fmtCOP(interesIntl > 0 ? valorMostrar + interesIntl : valorMostrar)),
             e('td', null,
@@ -2401,9 +2420,10 @@ function CardResumen({ tarjeta, onDataChange }) {
                     e(Ico, { name: 'check', size: 12, color: 'currentColor' }), 'Pagado')
                 : (c.estado !== 'pagado'
                     ? e('span', {
-                        className: 'badge badge-' + badgeEstado + ' badge-clickable',
+                        className: c.persona_id ? 'badge' : ('badge badge-' + badgeEstado + ' badge-clickable'),
                         onClick: () => openBolsilloModal(c.es_internacional && interesIntl > 0 ? Object.assign({}, c, { _bolsilloTarget: bolsilloTarget }) : c),
-                        title: 'Clic para gestionar bolsillo'
+                        title: c.persona_id ? 'Gestionar abono desde la pestaña Terceros' : 'Clic para gestionar bolsillo',
+                        style: c.persona_id ? { background: 'var(--bg-input)', color: 'var(--text-muted)', cursor: 'not-allowed', border: '1px solid ' + estadoColor(badgeEstado) } : undefined
                       }, badgeEstado.replace(/_/g, ' '))
                     : null),
               !showAsPaid && faltaBolsillo > 0 && e('div', { style: { fontSize: 11, color: 'var(--warning)', marginTop: 2 } }, 'Falta: ' + fmtCOP(faltaBolsillo))
@@ -2428,6 +2448,7 @@ function CardResumen({ tarjeta, onDataChange }) {
               e('col', { style: { width: '160px' } }),
               e('col', { style: { width: aplicaIntl ? '120px' : '270px' } }),
               e('col', { style: { width: '110px' } }), // Valor USD
+              aplicaIntl && e('col', { style: { width: '85px' } }),
               aplicaIntl && e('col', { style: { width: '100px' } }),
               aplicaIntl && e('col', { style: { width: '130px' } }),
               e('col', { style: { width: '130px' } }),
@@ -2439,6 +2460,7 @@ function CardResumen({ tarjeta, onDataChange }) {
               e('th', null, 'Responsable'),
               e('th', { className: 'text-right' }, 'Valor COP'),
               e('th', { className: 'text-right', style: { whiteSpace: 'nowrap', color: '#4FC3F7' } }, 'Valor USD'),
+              aplicaIntl && e('th', { className: 'text-right', style: { whiteSpace: 'nowrap' } }, 'Tasa'),
               aplicaIntl && e('th', { className: 'text-right', style: { whiteSpace: 'nowrap' } }, 'Int Intl'),
               aplicaIntl && e('th', { className: 'text-right', style: { whiteSpace: 'nowrap' } }, 'Total'),
               e('th', null, 'Estado'),
@@ -2501,6 +2523,7 @@ function CardResumen({ tarjeta, onDataChange }) {
                           : e('span', { style: { color: 'var(--text-muted)' } }, '\u2014')
                       );
                     })(),
+                    aplicaIntl && tasaIntlTd(item.partes[0] || {}, tarjeta),
                     aplicaIntl && e('td', { className: 'text-right text-mono', style: { fontSize: 12 } }, grpInteres > 0 ? fmtCOP(grpInteres) : e('span', { style: { color: 'var(--text-muted)' } }, '\u2014')),
                     aplicaIntl && e('td', { className: 'text-right text-mono', style: { fontWeight: 700 } }, fmtCOP(grpInteres > 0 ? item.total + grpInteres : item.total)),
                     // Estado: cuando el grupo está pagado, el badge "Pagado" vive aquí (estilo unificado).
@@ -2561,6 +2584,7 @@ function CardResumen({ tarjeta, onDataChange }) {
                           ? 'USD $' + new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(c.valor_usd)
                           : e('span', { style: { color: 'var(--text-muted)' } }, '—')
                       ),
+                      aplicaIntl && tasaIntlTd(c, tarjeta),
                       aplicaIntl && e('td', { className: 'text-right text-mono', style: { fontSize: 12 } }, childIntl > 0 ? fmtCOP(childIntl) : e('span', { style: { color: 'var(--text-muted)' } }, '—')),
                       aplicaIntl && e('td', { className: 'text-right text-mono', style: { fontSize: 13, fontWeight: childIntl > 0 ? 600 : undefined } }, fmtCOP(childIntl > 0 ? childValor + childIntl : childValor)),
                       // Estado de la hija: cuando está pagado, el badge "Pagado" vive aquí.
@@ -2570,10 +2594,10 @@ function CardResumen({ tarjeta, onDataChange }) {
                               e(Ico, { name: 'check', size: 10, color: 'currentColor' }), 'Pagado')
                           : (childBadge
                               ? e('span', {
-                                  className: 'badge badge-' + childBadge + ' badge-clickable',
+                                  className: c.persona_id ? 'badge' : ('badge badge-' + childBadge + ' badge-clickable'),
                                   onClick: function() { openBolsilloModal(Object.assign({}, c, { _bolsilloTarget: childTarget, monto_bolsillo: childBol, cuota_num: item.esDiferida ? c.cuota_num : undefined, cuotas_total: item.esDiferida ? c.cuotas_total : undefined })); },
-                                  title: 'Clic para gestionar bolsillo',
-                                  style: { fontSize: 10 }
+                                  title: c.persona_id ? 'Gestionar abono desde la pestaña Terceros' : 'Clic para gestionar bolsillo',
+                                  style: c.persona_id ? { fontSize: 10, background: 'var(--bg-input)', color: 'var(--text-muted)', cursor: 'not-allowed', border: '1px solid ' + estadoColor(childBadge) } : { fontSize: 10 }
                                 }, childBadge.replace(/_/g, ' '))
                               : null),
                         childFalta > 0 && e('div', { style: { fontSize: 10, color: 'var(--warning)', marginTop: 2 } }, 'Falta: ' + fmtCOP(childFalta))
@@ -3121,6 +3145,9 @@ function CardResumen({ tarjeta, onDataChange }) {
 function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
   const [fecha, setFecha] = useState(item ? item.fecha : todayISO());
   const [descripcion, setDescripcion] = useState(item ? item.descripcion : '');
+  const [notaPersonal, setNotaPersonal] = useState(item ? (item.nota_personal || '') : '');
+  // Tasa de interés intl congelada por compra (se muestra/edita como % mensual). Vacío = usa la global.
+  const [tasaIntl, setTasaIntl] = useState(item && item.tasa_intl != null ? String(parseFloat((item.tasa_intl * 100).toFixed(6))) : '');
   const [valorCop, setValorCop] = useState(item ? item.valor_cop : '');
   const [valorUsd, setValorUsd] = useState(item ? (item.valor_usd || '') : '');
   const [tasaUsd, setTasaUsd] = useState(item ? (item.tasa_usd || '') : '');
@@ -3203,6 +3230,9 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
     if (tasaNum == null && esInternacional && _isDualEarly && trmInfo && trmInfo.trm) {
       tasaNum = Math.round(trmInfo.trm);
     }
+    // Tasa de interés intl congelada (snapshot): el usuario la escribe como % (ej. 2.0849) y se guarda
+    // como decimal (0.020849). Solo si la compra es internacional y el usuario la proveyó.
+    const tasaIntlNum = (esInternacional && tasaIntl !== '' && !isNaN(parseFloat(tasaIntl))) ? (parseFloat(tasaIntl) / 100) : null;
 
     // Conversión: grupo dividido con "Dividir" DESMARCADO → fusionar en compra personal.
     // El backend hace el merge transaccional (suma valores + bolsillo, maneja diferidas).
@@ -3282,7 +3312,7 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
         toast('Diferidas creadas a ' + numCuotas + ' cuotas' + (cobrarIntereses ? '' : ' (sin intereses)'));
       }
 
-      const base = { fecha, descripcion, valor_usd: usdNum, tasa_usd: tasaNum, estado: isDiferida ? 'diferida' : 'pendiente', ciclo, notas, grupo_id: grupoId, es_internacional: esInternacional ? 1 : 0 };
+      const base = { fecha, descripcion, valor_usd: usdNum, tasa_usd: tasaNum, estado: isDiferida ? 'diferida' : 'pendiente', ciclo, notas, nota_personal: notaPersonal || null, tasa_intl: tasaIntlNum, grupo_id: grupoId, es_internacional: esInternacional ? 1 : 0 };
       const compras = splits
         .filter(sp => sp.persona_id && parseFloat(sp.monto) > 0)
         .map(sp => ({ ...base, persona_id: parseInt(sp.persona_id), valor_cop: Math.round(parseFloat(sp.monto)), diferida_id: diferidaIds[sp.persona_id] || null }));
@@ -3353,7 +3383,9 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
       ciclo_manual: cicloManualVal ? 1 : 0,
       notas: numCuotas > 1 ? (notas ? notas + ' | ' : '') + 'Diferida a ' + numCuotas + ' cuotas' : notas,
       diferida_id,
-      es_internacional: esInternacional ? 1 : 0
+      es_internacional: esInternacional ? 1 : 0,
+      nota_personal: notaPersonal || null,
+      tasa_intl: tasaIntlNum
     };
     onSave(compraData);
   }
@@ -3393,8 +3425,11 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
       )
     ),
     e('div', { className: 'form-group' },
-      e('label', { className: 'form-label' }, 'Descripcion'),
-      e('input', { type: 'text', className: 'form-input', value: descripcion, onChange: ev => setDescripcion(ev.target.value), required: true }),
+      e('label', { className: 'form-label' }, 'Nombre en el Extracto'),
+      e('input', { type: 'text', className: 'form-input', value: descripcion, onChange: ev => setDescripcion(ev.target.value), required: true, placeholder: 'Tal como llega al banco/correo (ej. APPLE.COM/BILL)' }),
+      e('div', { className: 'form-hint', style: { color: 'var(--text-muted)' } }, 'Regístralo exactamente como aparece en el extracto: así la IA puede cruzarlo bien.'),
+      e('label', { className: 'form-label', style: { marginTop: 10, display: 'block' } }, 'Nota personal (opcional)'),
+      e('input', { type: 'text', className: 'form-input', value: notaPersonal, onChange: ev => setNotaPersonal(ev.target.value), placeholder: 'Tu nota privada (ej. iCloud). No se usa para cruzar con el banco.' }),
       // Asistente INTL: aviso proactivo cuando estamos en Bancolombia Visa y la descripción coincide con histórico intl.
       showIntlHint && e('div', {
         style: { fontSize: 12, color: '#fb923c', marginTop: 6, display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', background: 'rgba(251,146,60,0.08)', border: '1px solid rgba(251,146,60,0.25)', borderRadius: 6 }
@@ -3412,6 +3447,13 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
         aplicaIntlForm
           ? 'El banco cobra interés sobre el saldo. Si la compra fue en USD, puedes registrar valor y tasa abajo (opcional).'
           : 'Esta tarjeta no genera intereses internacionales en este sistema, pero puedes registrar el valor en USD y la tasa abajo (opcional).'
+      ),
+      esInternacional && aplicaIntlForm && e('div', { style: { marginTop: 8, marginLeft: 20 } },
+        e('label', { className: 'form-label', style: { fontSize: 12 } }, 'Tasa de interés del extracto (% mensual)'),
+        e('input', { type: 'number', step: '0.0001', className: 'form-input', value: tasaIntl, onChange: ev => setTasaIntl(ev.target.value),
+          placeholder: tarjeta && tarjeta.tasa_mv_avances ? (tarjeta.tasa_mv_avances * 100).toFixed(4) + '  (tasa actual de la tarjeta)' : 'Ej: 2.0849' }),
+        e('div', { className: 'form-hint', style: { color: 'var(--text-muted)' } },
+          'Congela la tasa que el banco aplicó a ESTA compra (la imprime el extracto, ej. 2,0849). Así su interés no cambia si la tasa de la tarjeta fluctúa después. Vacío = usa la tasa actual.')
       )
     ),
     // ── Inputs de valores según moneda ──────────────────────────────
@@ -3561,8 +3603,9 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
         )
       ),
       e('div', { className: 'form-group' },
-        e('label', { className: 'form-label' }, 'Notas'),
-        e('input', { type: 'text', className: 'form-input', value: notas, onChange: ev => setNotas(ev.target.value) })
+        e('label', { className: 'form-label', style: { color: 'var(--text-muted)' } }, 'Notas del Sistema (Legado/Automático)'),
+        e('input', { type: 'text', className: 'form-input', value: notas, onChange: ev => setNotas(ev.target.value), style: { opacity: 0.6, color: 'var(--text-muted)' } }),
+        e('div', { className: 'form-hint', style: { color: 'var(--text-muted)' } }, 'Campo automático del sistema (ej. marca de diferida). Para tus descripciones usa "Nota personal" arriba.')
       )
     ),
     // Ciclo manual (avanzado): solo al editar una compra individual de 1 cuota.
@@ -4883,11 +4926,11 @@ function BancosUrlsConfig() {
 // Proveedores de IA soportados por el Asistente de Conciliación.
 // 'mock' = Demo sin conexión (no requiere key; valida la UI sin gastar créditos).
 const IA_PROVIDERS = [
-  { id: 'mock',      label: 'Demo (sin conexion)',  defaultModel: '' },
-  { id: 'openai',    label: 'OpenAI',               defaultModel: 'gpt-4o' },
-  { id: 'anthropic', label: 'Anthropic (Claude)',   defaultModel: 'claude-3-5-sonnet-latest' },
-  { id: 'gemini',    label: 'Google Gemini',        defaultModel: 'gemini-1.5-pro' },
-  { id: 'deepseek',  label: 'DeepSeek',             defaultModel: 'deepseek-chat' },
+  { id: 'mock',      label: 'Demo (sin conexion)',  defaultModel: '',                          models: [] },
+  { id: 'openai',    label: 'OpenAI',               defaultModel: 'gpt-4o',                     models: ['gpt-4o', 'gpt-4o-mini', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4-turbo'] },
+  { id: 'anthropic', label: 'Anthropic (Claude)',   defaultModel: 'claude-3-5-sonnet-latest',   models: ['claude-3-5-sonnet-latest', 'claude-3-5-sonnet-20241022', 'claude-3-7-sonnet-latest', 'claude-3-5-haiku-latest', 'claude-3-opus-latest'] },
+  { id: 'gemini',    label: 'Google Gemini',        defaultModel: 'gemini-1.5-pro',             models: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'] },
+  { id: 'deepseek',  label: 'DeepSeek',             defaultModel: 'deepseek-chat',              models: ['deepseek-chat', 'deepseek-reasoner', 'deepseek-v4-flash', 'deepseek-v4-pro'] },
 ];
 const IA_LINKS = {
   openai:    'https://platform.openai.com/api-keys',
@@ -4902,6 +4945,38 @@ function iaProviderDefaultModel(pid) {
 function iaProviderLabel(pid) {
   const p = IA_PROVIDERS.find(x => x.id === pid);
   return p ? p.label : pid;
+}
+function iaProviderModels(pid) {
+  const p = IA_PROVIDERS.find(x => x.id === pid);
+  return (p && p.models) ? p.models : [];
+}
+
+// Celda "Tasa" para las tablas de Compras/Terceros: muestra la tasa efectiva de interés intl de la
+// compra. Congelada (tasa_intl) → texto normal; fallback a la tasa global viva → itálica/gris (señal
+// de "actualízala desde el extracto"). En blanco si la compra no es internacional.
+function tasaIntlTd(c, tarjeta) {
+  // Celda vacía → guion gris, igual que la columna "Valor USD" (consistencia visual).
+  const dash = e('td', { className: 'text-right text-mono', style: { fontSize: 12 } }, e('span', { style: { color: 'var(--text-muted)' } }, '—'));
+  const esIntl = !!(c.es_internacional || (c.valor_usd && c.valor_usd > 0));
+  if (!esIntl) return dash;
+  const frozen = (c.tasa_intl != null);
+  const tasa = frozen ? c.tasa_intl : (tarjeta && tarjeta.tasa_mv_avances ? tarjeta.tasa_mv_avances : 0);
+  if (!tasa) return dash;
+  return e('td', {
+    className: 'text-right text-mono',
+    style: Object.assign({ fontSize: 12 }, frozen ? {} : { fontStyle: 'italic', color: 'var(--text-muted)' }),
+    title: frozen ? 'Tasa congelada de esta compra (la del extracto)' : 'Usando la tasa ACTUAL de la tarjeta (no congelada). Edita la compra y fija la del extracto.'
+  }, (Number(tasa) * 100).toFixed(4) + '%');
+}
+
+// Color del estado real de una compra (para bordes/acentos). Mismas correspondencias que .badge-*.
+function estadoColor(estado) {
+  return estado === 'bolsillo' ? 'var(--success)'
+    : estado === 'bolsillo_parcial' ? 'var(--purple)'
+    : estado === 'pagado' ? 'var(--success)'
+    : estado === 'pendiente' ? 'var(--warning)'
+    : estado === 'vencido' ? 'var(--danger)'
+    : 'var(--border)';
 }
 
 function Configuracion({ iaConfig, onIaConfigChange }) {
@@ -5095,8 +5170,9 @@ function Configuracion({ iaConfig, onIaConfigChange }) {
             e('input', { type: 'password', className: 'form-input', value: iaKeyInput, onChange: ev => setIaKeyInput(ev.target.value), autoComplete: 'off', spellCheck: false, placeholder: (iaConfig && iaConfig.hasKey) ? 'Guardada. Escribe para reemplazarla' : 'Pega tu API key' })
           ),
           e('div', { className: 'form-group', style: { marginBottom: 12 } },
-            e('label', { className: 'form-label' }, 'Modelo'),
-            e('input', { type: 'text', className: 'form-input', value: iaModel, onChange: ev => setIaModel(ev.target.value), placeholder: iaProviderDefaultModel(iaProvider), spellCheck: false })
+            e('label', { className: 'form-label' }, 'Modelo Predeterminado'),
+            e('input', { type: 'text', className: 'form-input', value: iaModel, onChange: ev => setIaModel(ev.target.value), placeholder: iaProviderDefaultModel(iaProvider), spellCheck: false }),
+            e('div', { className: 'form-hint', style: { color: 'var(--text-muted)' } }, 'Es el modelo que el Asistente toma por defecto; allí puedes cambiarlo para cada análisis.')
           ),
           e('div', { style: { fontSize: 11.5, color: 'var(--warning)', background: 'rgba(251,191,36,0.10)', border: '1px solid rgba(251,191,36,0.25)', borderRadius: 8, padding: '8px 10px', marginBottom: 12, lineHeight: 1.45 } },
             'Al analizar un extracto, los movimientos y el texto del PDF se envian a ', iaProviderLabel(iaProvider), ' para el analisis. Cada analisis consume creditos de tu cuenta.'
@@ -5166,7 +5242,7 @@ function Configuracion({ iaConfig, onIaConfigChange }) {
 }
 
 // ── Render del resultado de conciliación + aplicar acciones con 1 clic (Fase 4) ──
-function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada }) {
+function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanalizar, reanalizando }) {
   const c = (resultado && resultado.conciliacion_pago_minimo) || {};
   const disc = Array.isArray(resultado && resultado.discrepancias) ? resultado.discrepancias : [];
   const pagos = Array.isArray(resultado && resultado.pagos_detectados) ? resultado.pagos_detectados : [];
@@ -5175,8 +5251,9 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada }) {
   const [aplicando, setAplicando] = useState(false);
   const [aplicadas, setAplicadas] = useState({});
   const [errAplicar, setErrAplicar] = useState('');
+  const [contextoUser, setContextoUser] = useState('');
   // Operaciones que la app puede aplicar automaticamente (mapean a endpoints existentes).
-  const AUTO = { crear_compra: 1, editar_valor: 1, mover_ciclo: 1 };
+  const AUTO = { crear_compra: 1, editar_valor: 1, mover_ciclo: 1, reprogramar_cuotas: 1 };
 
   function paramsDe(d) { return (d.accion_sugerida && d.accion_sugerida.parametros) || {}; }
   function resumenAccion(d) {
@@ -5186,6 +5263,11 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada }) {
     if (op === 'crear_compra') return { titulo: 'Crear compra nueva', endpoint: 'POST /api/compras', filas: [['Descripcion', p.descripcion || d.descripcion || ''], ['Valor', fmtCOP(p.valor_cop != null ? p.valor_cop : d.valor_extracto)], ['Ciclo', ciclo], ['Fecha', p.fecha || (ciclo + '-15')]] };
     if (op === 'editar_valor') return { titulo: 'Editar valor de la compra', endpoint: 'PUT /api/compras/' + cid, filas: [['Compra', '#' + cid], ['Valor actual (app)', fmtCOP(d.valor_app)], ['Nuevo valor (extracto)', fmtCOP(p.valor_cop != null ? p.valor_cop : d.valor_extracto)]] };
     if (op === 'mover_ciclo') return { titulo: 'Reasignar al ciclo (manual)', endpoint: 'PUT /api/compras/' + cid, filas: [['Compra', '#' + cid], ['Nuevo ciclo', p.ciclo || ciclo], ['Conserva su fecha real', 'si']] };
+    if (op === 'reprogramar_cuotas') {
+      const esDividir = Array.isArray(p.cuotas) && p.cuotas.length > 0;
+      if (esDividir) return { titulo: 'Reprogramar dividiendo en cuotas', endpoint: 'POST /api/compras/' + cid + '/dividir-cuotas', filas: [['Compra', '#' + cid], ['Cuotas (irregulares)', String(p.cuotas.length)], ['Detalle', p.cuotas.map(q => q.ciclo + ': ' + fmtCOP(q.monto)).join('   |   ')]] };
+      return { titulo: 'Reprogramar número de cuotas', endpoint: 'POST /api/diferidas/(de #' + cid + ')/reprogramar', filas: [['Compra', '#' + cid], ['Nuevo total de cuotas', String(p.num_cuotas || '')], ['Regenera la proyección', 'si']] };
+    }
     return { titulo: op, endpoint: '', filas: [] };
   }
 
@@ -5213,6 +5295,23 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada }) {
         else { body.ciclo = p.ciclo || ciclo; body.ciclo_manual = 1; }
         const r = await api('/compras/' + cid, { method: 'PUT', body });
         if (r && r.error) throw new Error(r.error);
+      } else if (op === 'reprogramar_cuotas') {
+        const cid = p.compra_id != null ? p.compra_id : d.compra_id;
+        if (!cid) throw new Error('No se identifico la compra a reprogramar.');
+        if (Array.isArray(p.cuotas) && p.cuotas.length > 0) {
+          // Ruta C: cuotas irregulares → dividir en compras de 1 cuota.
+          const r = await api('/compras/' + cid + '/dividir-cuotas', { method: 'POST', body: { cuotas: p.cuotas } });
+          if (r && r.error) throw new Error(r.error);
+        } else {
+          // Ruta A: reprogramacion uniforme → cambiar num_cuotas de la diferida vinculada.
+          if (!(Number(p.num_cuotas) > 0)) throw new Error('Falta el nuevo numero de cuotas.');
+          const lista = await api('/compras?tarjeta_id=' + Number(tarjetaId));
+          const a = Array.isArray(lista) ? lista.find(x => String(x.id) === String(cid)) : null;
+          if (!a) throw new Error('No se encontro la compra #' + cid + ' en la tarjeta.');
+          if (!a.diferida_id) throw new Error('La compra #' + cid + ' no es una compra a cuotas (diferida).');
+          const r = await api('/diferidas/' + a.diferida_id + '/reprogramar', { method: 'POST', body: { num_cuotas: Number(p.num_cuotas) } });
+          if (r && r.error) throw new Error(r.error);
+        }
       } else {
         throw new Error('Operacion no aplicable automaticamente.');
       }
@@ -5269,6 +5368,21 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada }) {
             !aplicada && op === 'convertir_a_diferida' && e('div', { style: { marginTop: 6, fontSize: 11.5, color: 'var(--text-muted)' } }, 'Convertir a diferida: hazlo manualmente desde la tarjeta (el numero de cuotas se define al crear).')
           );
         }),
+    // Re-análisis iterativo: el usuario aclara/corrige y la IA vuelve a analizar (mismo PDF y
+    // movimientos, + contexto_usuario). El resultado anterior se mantiene visible mientras corre.
+    onReanalizar && e('div', { style: { marginTop: 16, borderTop: '1px solid var(--border)', paddingTop: 14 } },
+      e('div', { style: { fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 } },
+        e(Ico, { name: 'sparkles', size: 14, color: 'var(--accent)' }), 'Re-analizar con tu contexto'),
+      e('div', { style: { fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8, lineHeight: 1.45 } },
+        'Si algo no cuadra, dale una aclaración a la IA y vuelve a analizar (mismo PDF y datos, sin re-subir nada).'),
+      e('textarea', { className: 'form-input', value: contextoUser, onChange: ev => setContextoUser(ev.target.value), rows: 3, disabled: reanalizando,
+        placeholder: "Aclaraciones sobre este análisis (ej. 'La compra de Apple la pasé a 2 cuotas en el banco')...", style: { resize: 'vertical', minHeight: 64, fontFamily: 'inherit' } }),
+      e('div', { style: { marginTop: 8, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' } },
+        e('button', { className: 'btn btn-primary', disabled: reanalizando || !contextoUser.trim(), onClick: () => onReanalizar(contextoUser.trim()) },
+          e(Ico, { name: 'refresh', size: 14 }), reanalizando ? ' Re-analizando...' : ' Re-analizar'),
+        contextoUser.trim() && !reanalizando && e('button', { className: 'btn', onClick: () => setContextoUser('') }, 'Limpiar')
+      )
+    ),
     // Modal de confirmación: muestra exactamente qué se enviará antes de ejecutar.
     accionSel && (function () {
       const rs = resumenAccion(accionSel.d);
@@ -5322,6 +5436,9 @@ function IaAsistente({ iaConfig, onIaConfigChange, tarjetas, onGoConfig, demoMod
   const [analizandoIA, setAnalizandoIA] = useState(false);
   const [resultado, setResultado] = useState(null);
   const [errorIA, setErrorIA] = useState('');
+  // Modelo seleccionable para este análisis (default = el configurado o el por defecto del proveedor).
+  const [modeloSel, setModeloSel] = useState('');
+  useEffect(() => { setModeloSel(cfg.model || iaProviderDefaultModel(cfg.provider)); }, [cfg.provider, cfg.model]);
 
   // Dep estable: solo cambia si cambia el conjunto de tarjetas activas (no en cada
   // render de App, que recrearia el array y dispararia el efecto de mas).
@@ -5427,12 +5544,17 @@ function IaAsistente({ iaConfig, onIaConfigChange, tarjetas, onGoConfig, demoMod
       navigator.clipboard.writeText(txt).then(function () { toast('Prompt copiado. Pegalo en tu IA preferida.'); }, function () { toastErr('No se pudo copiar al portapapeles'); });
     } else { toastErr('Portapapeles no disponible'); }
   }
-  async function analizarConIA() {
+  async function analizarConIA(contextoUsuario) {
     if (!preview) return;
     const prov = isMock ? 'mock' : cfg.provider;
-    setAnalizandoIA(true); setErrorIA(''); setResultado(null);
+    const esReanalisis = typeof contextoUsuario === 'string' && contextoUsuario.trim().length > 0;
+    setAnalizandoIA(true); setErrorIA('');
+    // En re-análisis mantenemos el resultado anterior visible hasta tener el nuevo.
+    if (!esReanalisis) setResultado(null);
     try {
-      const r = await api('/ia/analizar', { method: 'POST', body: { provider: prov, model: cfg.model || undefined, texto_redactado: preview.texto_redactado, movimientos: preview.movimientos } });
+      const body = { provider: prov, model: modeloSel || cfg.model || undefined, texto_redactado: preview.texto_redactado, movimientos: preview.movimientos };
+      if (esReanalisis) body.contexto_usuario = contextoUsuario.trim();
+      const r = await api('/ia/analizar', { method: 'POST', body });
       if (r && r.ok && r.resultado) setResultado(r.resultado);
       else setErrorIA((r && r.error) || 'No se pudo completar el analisis.');
       setAnalizandoIA(false);
@@ -5492,9 +5614,24 @@ function IaAsistente({ iaConfig, onIaConfigChange, tarjetas, onGoConfig, demoMod
     e('div', { style: { maxWidth: 760 } },
       e('div', { style: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 18, flexWrap: 'wrap' } },
         e('span', { style: { fontSize: 11.5, fontWeight: 600, color: isMock ? 'var(--warning)' : 'var(--accent)', background: isMock ? 'rgba(251,191,36,0.12)' : 'var(--accent-bg)', borderRadius: 99, padding: '4px 12px' } }, isMock ? 'Modo Demo (sin conexion)' : iaProviderLabel(cfg.provider)),
-        !isMock && e('span', { style: { fontSize: 12, color: 'var(--text-muted)' } }, 'Modelo: ' + (cfg.model || iaProviderDefaultModel(cfg.provider))),
+        !isMock && e('span', { style: { fontSize: 12, color: 'var(--text-muted)', display: 'inline-flex', alignItems: 'center', gap: 6 } },
+          'Modelo:',
+          e('select', {
+            value: modeloSel, onChange: ev => setModeloSel(ev.target.value),
+            title: 'Modelos más avanzados ofrecen mejor razonamiento, pero consumen más tokens',
+            style: { background: 'var(--bg-input)', color: 'var(--text-primary)', border: '1px solid var(--border)', borderRadius: 6, padding: '3px 6px', fontSize: 12 }
+          },
+            (function () {
+              const ms = iaProviderModels(cfg.provider);
+              const opts = (modeloSel && ms.indexOf(modeloSel) === -1) ? [modeloSel].concat(ms) : ms.slice();
+              if (opts.length === 0) opts.push(modeloSel || iaProviderDefaultModel(cfg.provider) || '');
+              return opts.map(m => e('option', { key: m, value: m }, m));
+            })()
+          )
+        ),
         isMock && e('button', { className: 'btn btn-sm', onClick: onSalirDemo, style: { marginLeft: 'auto' } }, 'Salir del Demo')
       ),
+      !isMock && e('div', { style: { fontSize: 11, color: 'var(--text-muted)', marginTop: -10, marginBottom: 14 } }, 'Modelos más avanzados ofrecen mejor razonamiento, pero consumen más tokens.'),
       activas.length === 0
         ? e('div', { style: { fontSize: 13, color: 'var(--text-muted)' } }, 'No hay tarjetas activas para conciliar.')
         : e(Fragment, null,
@@ -5570,12 +5707,12 @@ function IaAsistente({ iaConfig, onIaConfigChange, tarjetas, onGoConfig, demoMod
               e('pre', { style: { maxHeight: 220, overflow: 'auto', background: 'var(--bg-input)', border: '1px solid var(--border)', borderRadius: 8, padding: 10, fontSize: 11.5, lineHeight: 1.45, whiteSpace: 'pre-wrap', wordBreak: 'break-word', margin: 0, fontFamily: "'SF Mono','Consolas',monospace" } }, preview.texto_redactado || ''),
               e('div', { style: { marginTop: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' } },
                 e('button', { className: 'btn', onClick: copiarPrompt }, e(Ico, { name: 'clipboard', size: 14 }), ' Copiar prompt para IA'),
-                e('button', { className: 'btn btn-primary', onClick: analizarConIA, disabled: analizandoIA }, e(Ico, { name: 'sparkles', size: 14 }), analizandoIA ? ' Analizando...' : (isMock ? ' Analizar (Demo)' : ' Confirmar y analizar con IA')),
+                e('button', { className: 'btn btn-primary', onClick: () => analizarConIA(), disabled: analizandoIA }, e(Ico, { name: 'sparkles', size: 14 }), analizandoIA ? ' Analizando...' : (isMock ? ' Analizar (Demo)' : ' Confirmar y analizar con IA')),
                 e('button', { className: 'btn', onClick: () => { setPreview(null); setResultado(null); setErrorIA(''); } }, 'Descartar')
               ),
               e('div', { style: { marginTop: 8, fontSize: 11.5, color: 'var(--text-muted)' } }, 'Tip: "Copiar prompt para IA" arma un mensaje listo para pegar en ChatGPT, Claude o Gemini, sin gastar tokens de mas.'),
               errorIA && e('div', { style: { marginTop: 12, fontSize: 12.5, color: '#f87171', background: 'rgba(248,113,113,0.10)', border: '1px solid rgba(248,113,113,0.25)', borderRadius: 8, padding: '8px 10px' } }, errorIA),
-              resultado && e(IaResultado, { resultado: resultado, isMock: isMock, tarjetaId: tarjetaId, ciclo: ciclo, onAplicada: recargarMovimientos })
+              resultado && e(IaResultado, { resultado: resultado, isMock: isMock, tarjetaId: tarjetaId, ciclo: ciclo, onAplicada: recargarMovimientos, onReanalizar: analizarConIA, reanalizando: analizandoIA })
             )
           )
     )
@@ -5662,7 +5799,8 @@ function Terceros({ tarjeta }) {
     if (!compra.es_internacional) return 0;
     const saldo = compra.valor_cop;
     if (saldo <= 0) return 0;
-    const tasaIntl = tarjeta.tasa_mv_avances;
+    // Snapshot histórico: tasa congelada de la compra si existe; si no, la global actual de la tarjeta.
+    const tasaIntl = (compra.tasa_intl != null ? compra.tasa_intl : tarjeta.tasa_mv_avances);
     if (!tasaIntl || !compra.ciclo) return 0;
     const [yr, mo] = compra.ciclo.split('-').map(Number);
     const lastDay = new Date(yr, mo, 0).getDate();
@@ -5789,6 +5927,7 @@ function Terceros({ tarjeta }) {
                       e('th', null, 'Fecha'), e('th', null, 'Descripcion'),
                       e('th', { className: 'text-right' }, 'Valor COP'),
                       e('th', { className: 'text-right', style: { whiteSpace: 'nowrap', color: '#4FC3F7' } }, 'Valor USD'),
+                      aplicaIntl && e('th', { className: 'text-right', style: { whiteSpace: 'nowrap' } }, 'Tasa'),
                       aplicaIntl && e('th', { className: 'text-right', style: { whiteSpace: 'nowrap' } }, 'Int Intl'),
                       aplicaIntl && e('th', { className: 'text-right', style: { whiteSpace: 'nowrap' } }, 'Total'),
                       e('th', null, 'Estado TC'), e('th', null, 'Dinero'), e('th', null, '')
@@ -5817,8 +5956,9 @@ function Terceros({ tarjeta }) {
                                 ? 'USD $' + new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(c.valor_usd / c.cuotas.length)
                                 : e('span', { style: { color: 'var(--text-muted)' } }, '—')
                             ),
-                            aplicaIntl && e('td', null),
-                            aplicaIntl && e('td', null),
+                            aplicaIntl && e('td', { className: 'text-right text-mono', style: { fontSize: 12 } }, e('span', { style: { color: 'var(--text-muted)' } }, '—')),
+                            aplicaIntl && e('td', { className: 'text-right text-mono', style: { fontSize: 12 } }, e('span', { style: { color: 'var(--text-muted)' } }, '—')),
+                            aplicaIntl && e('td', { className: 'text-right text-mono', style: { fontSize: 12 } }, e('span', { style: { color: 'var(--text-muted)' } }, '—')),
                             e('td', null, e('span', { className: 'badge badge-' + c.estado }, c.estado.replace(/_/g, ' '))),
                             e('td', null,
                               c.tercero_pagado
@@ -5846,7 +5986,9 @@ function Terceros({ tarjeta }) {
                         const intlTercero = calcInteresIntlTercero(c);
                         return e('tr', { key: c.id, style: c.tercero_pagado ? { background: 'rgba(52,211,153,0.08)' } : bol > 0 && !bolCubre ? { background: 'rgba(167,139,250,0.06)' } : null },
                           e('td', null, fmtDate(c.fecha)),
-                          e('td', { style: { fontWeight: 600 } }, c.descripcion),
+                          e('td', { style: { fontWeight: 600 } }, c.descripcion,
+                            c.nota_personal && e('div', { style: { fontSize: 11, color: 'var(--text-muted)', fontWeight: 400, marginTop: 1 } }, c.nota_personal)
+                          ),
                           e('td', { className: 'text-right text-mono', style: { fontWeight: 600, color: (c.tercero_pagado || bolCubre) ? 'var(--success)' : undefined } },
                             (c.valor_usd && c.valor_usd > 0 && !c.valor_cop)
                               ? e('span', { style: { color: 'var(--text-muted)' } }, '—')
@@ -5857,9 +5999,14 @@ function Terceros({ tarjeta }) {
                               ? 'USD $' + new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(c.valor_usd)
                               : e('span', { style: { color: 'var(--text-muted)' } }, '—')
                           ),
+                          aplicaIntl && tasaIntlTd(c, tarjeta),
                           aplicaIntl && e('td', { className: 'text-right text-mono', style: { fontSize: 12 } }, intlTercero > 0 ? fmtCOP(intlTercero) : e('span', { style: { color: 'var(--text-muted)' } }, '—')),
                           aplicaIntl && e('td', { className: 'text-right text-mono', style: { fontWeight: intlTercero > 0 ? 600 : undefined } }, fmtCOP(intlTercero > 0 ? c.valor_cop + intlTercero : c.valor_cop)),
-                          e('td', null, e('span', { className: 'badge badge-' + c.estado }, c.estado.replace(/_/g, ' '))),
+                          // ESTADO TC = estado con el BANCO: ignora el bolsillo (que es plata del usuario, no
+                          // del banco). Una compra de tercero visible aquí aún no está pagada al banco → 'Pendiente'.
+                          // (La columna "Dinero" ya muestra si el tercero reembolsó; si el ciclo se paga, la compra
+                          // desaparece de Terceros.)
+                          e('td', null, e('span', { className: 'badge badge-' + (c.estado === 'pagado' ? 'pagado' : 'pendiente') }, c.estado === 'pagado' ? 'Pagado' : 'Pendiente')),
                           e('td', null,
                             c.tercero_pagado
                               ? e('span', { className: 'badge badge-pagado' }, 'Recibido')
