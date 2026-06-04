@@ -88,9 +88,13 @@ module.exports = function(db, { logAction, tjNombre }) {
         monto_bolsillo_cuota: bolMap[q.num] || 0,
         cubierta_bolsillo: (bolMap[q.num] || 0) >= q.total
       }));
-      const pendiente = cuotas.filter(q => !q.pagada && !q.cubierta_bolsillo).reduce((s, q) => s + q.total, 0);
+      // Deuda del tercero: una cuota cuenta como pendiente mientras el tercero NO la haya reembolsado
+      // (cubierta_bolsillo). NO se excluye por `pagada` (corte vencido): que el banco ya haya facturado
+      // la cuota no significa que el deudor te la haya pagado — si se excluyera, las cuotas vencidas e
+      // impagas desaparecerían silenciosamente de lo que el tercero debe.
+      const pendiente = cuotas.filter(q => !q.cubierta_bolsillo).reduce((s, q) => s + q.total, 0);
       // USD: prorrateo del valor_usd entre cuotas pendientes (mismo plazo que COP)
-      const pendientesCount = cuotas.filter(q => !q.pagada && !q.cubierta_bolsillo).length;
+      const pendientesCount = cuotas.filter(q => !q.cubierta_bolsillo).length;
       const valor_usd_pendiente = (c.valor_usd && c.valor_usd > 0)
         ? Math.round((c.valor_usd / dif.num_cuotas) * pendientesCount * 100) / 100
         : 0;

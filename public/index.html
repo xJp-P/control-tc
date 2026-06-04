@@ -255,6 +255,9 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '4.1.1': [
+    'Corregido un error en lo que te deben tus terceros por compras a cuotas (diferidas): cuando ya había pasado la fecha de corte de una cuota, la app la descontaba de la deuda del tercero como si estuviera saldada, aunque el tercero no te la hubiera reembolsado. Ahora una cuota solo se considera pagada cuando el tercero realmente te la devuelve, no por el simple paso del tiempo. Ejemplo: una compra a 3 cuotas de la que tu tercero solo te pagó 1 ahora muestra correctamente las 2 que aún te debe, tanto en la pestaña Terceros como en la tarjeta "Me Deben" del inicio.'
+  ],
   '4.1.0': [
     'El Asistente de IA ahora puede reprogramar las cuotas de una compra con un clic. Cuando el banco cambia el número de cuotas de una compra (por ejemplo, de 36 a 2), la app lo detecta en el extracto y te propone ajustarlo: puedes dejar las cuotas parejas o, si el banco las dejó con montos o fechas distintos, dividir la compra en cuotas individuales. Siempre con una confirmación que te muestra qué se va a cambiar, y sin tocar los meses que ya pagaste.',
     'Nuevo "Re-analizar con tu contexto": después de ver el análisis de la IA, puedes escribirle una aclaración (por ejemplo, "la compra de Apple la pasé a 2 cuotas en el banco") y volver a analizar al instante, con el mismo PDF y datos, sin subir nada de nuevo. La IA toma tu aclaración como una instrucción directa para corregir su análisis anterior.',

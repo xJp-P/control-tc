@@ -87,11 +87,13 @@ module.exports = function(db) {
           ...q,
           cubierta_bolsillo: (bolMapDash[i + 1] || 0) >= q.total
         }));
-        pendiente = cuotasArr.filter(q => !q.pagada && !q.cubierta_bolsillo).reduce((s, q) => s + q.total, 0);
+        // Deuda del tercero: cuenta como pendiente mientras NO esté reembolsada (cubierta_bolsillo);
+        // no se excluye por corte vencido (mismo criterio que routes/terceros.js).
+        pendiente = cuotasArr.filter(q => !q.cubierta_bolsillo).reduce((s, q) => s + q.total, 0);
         // USD: prorrateo del valor USD entre cuotas pendientes (asume mismo plazo).
         if (c.valor_usd && c.valor_usd > 0) {
           const cuotaUsd = c.valor_usd / dif.num_cuotas;
-          const pendientesCount = cuotasArr.filter(q => !q.pagada && !q.cubierta_bolsillo).length;
+          const pendientesCount = cuotasArr.filter(q => !q.cubierta_bolsillo).length;
           pendienteUsd = cuotaUsd * pendientesCount;
         }
       } else {
