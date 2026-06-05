@@ -4,11 +4,18 @@ const { extraerTextoPdf } = require('../services/pdfExtract');
 const { redactarPII } = require('../services/redactPII');
 const { construirMovimientos, leerBancoDoc } = require('../services/movimientos');
 const { analizar: analizarIA } = require('../services/aiProvider');
-const { cruzarConExtracto } = require('../services/matcher');
+const { cruzar } = require('../services/extracto/motorCruce');
+const { getEstrategiaExtracto } = require('../services/extracto');
 
 // Arma el system + user prompt para la conciliación (esquema JSON estricto).
-function construirPrompt(movimientos, textoExtracto, bancoDoc, contextoUsuario, cruce) {
+function construirPrompt(movimientos, textoExtracto, bancoDoc, contextoUsuario, cruce, estrategia) {
   const tj = movimientos.tarjeta || {};
+  // Reglas ESPECÍFICAS del banco/franquicia (Patrón Estrategia): se inyectan al system prompt junto
+  // a las universales. Si la estrategia no aporta reglas (fallback genérico), no se añade nada.
+  const reglasBanco = (estrategia && typeof estrategia.reglasPrompt === 'function') ? (estrategia.reglasPrompt() || []) : [];
+  const reglasEspecificas = reglasBanco.length
+    ? ['REGLAS ESPECIFICAS DE ESTA TARJETA (' + (estrategia.id || 'banco') + '):', ...reglasBanco]
+    : [];
   const systemArr = [
     'Eres un conciliador experto de extractos de tarjeta de credito en Colombia. Respondes SIEMPRE en espanol.',
     'Objetivo central: CONCILIAR EL PAGO MINIMO: comparar el pago minimo del extracto del banco con el calculado por la app y atribuir la diferencia a causas concretas.',
@@ -16,13 +23,12 @@ function construirPrompt(movimientos, textoExtracto, bancoDoc, contextoUsuario, 
     '1. Los movimientos tipo "ABONO SUCURSAL VIRTUAL" o similares NO son compras faltantes: por defecto son el pago del extracto anterior (a veces fraccionado). Reportalos en "pagos_detectados", nunca como discrepancia accionable.',
     '2. Si una parte de la diferencia no se explica con los datos, reportala en "residual_no_explicado"; NO inventes cargos.',
     '2b. La app trabaja en PESOS ENTEROS: si el monto del extracto y el de la app coinciden al redondear (diferencia < $1) NO es discrepancia y NO la incluyas en el array. Tampoco incluyas compras que el usuario divide entre varias personas (en la app son varias filas que SUMAN el monto del extracto): si la suma coincide, NO es discrepancia.',
-    '2c. Las cuotas de avances y diferidas que recibes YA incluyen su interes corriente (campos "interes"/"total" de cada una). Por eso los "intereses corrientes" del extracto en su mayoria YA estan reflejados en esas cuotas; NO asumas que la app no los incluye. La diferencia tipica es solo un residual pequeno (revolving / intl no modelado).',
     '2d. Si varias compras comparten el MISMO monto (ej. dos de $44.900), cruzalas por descripcion/comercio, NO solo por el monto. Antes de marcar una compra como mal clasificada (internacional o no), revisa el campo "es_internacional" de la compra correspondiente en los movimientos: si ya coincide con el extracto, NO la reportes.',
     '2e. Cada compra trae "descripcion" (el nombre OFICIAL tal como llega al extracto del banco — úsalo para identificar y cruzar contra el extracto) y a veces "nota_personal" (una nota privada del usuario, ej. "iCloud", que NO aparece en el extracto). Cruza SOLO por "descripcion"; la "nota_personal" es contexto para ti, nunca la uses para emparejar.',
     '3. Usa las reglas del banco provistas para intereses, fechas y comportamientos especiales.',
     '4. Para una cuota que el banco factura en un mes distinto al de su fecha, usa accion_sugerida.operacion="mover_ciclo".',
     '4b. Para una compra a cuotas (diferida) que el banco reprogramó a un número distinto de cuotas (ej. de 36 a 2), usa tipo="cuota_reprogramada" y accion_sugerida.operacion="reprogramar_cuotas" con parametros { compra_id, num_cuotas } si las cuotas quedan uniformes, o { compra_id, cuotas: [{ ciclo: "YYYY-MM", monto: 0 }] } si quedan irregulares (montos o fechas distintos).',
-    '4c. TASA DE INTERES INTERNACIONAL: extrae del extracto la tasa de interes CORRIENTE MENSUAL (M.V., mes vencido) aplicada a las compras INTERNACIONALES del ciclo. En el extracto cada compra trae su tasa como porcentaje con coma decimal (ej. "2,0849%"); las compras nacionales a 1 cuota muestran "0,0000%" (sin interes) y NO debes usar esas. Toma la tasa vigente (>0) de las compras internacionales y conviertela a DECIMAL con punto: "2,0849%" -> 0.020849. Devuelvela en el campo raiz "tasa_intl_extracto". Si el extracto solo muestra 0,0000% o no hay compras internacionales con tasa, devuelve null. NUNCA uses la tasa EFECTIVA ANUAL (E.A., ~25%); es la mensual. No inventes una tasa: si no la ves clara, null.',
+    ...reglasEspecificas,
     '5. Devuelve EXCLUSIVAMENTE un objeto JSON valido con EXACTAMENTE esta forma, sin texto adicional:',
     JSON.stringify({
       conciliacion_pago_minimo: { pago_minimo_extracto: 0, pago_minimo_app: 0, diferencia: 0, explicacion: ['string'], residual_no_explicado: 0 },
@@ -170,10 +176,13 @@ module.exports = function(db, ctx) {
       }
 
       const bancoDoc = mv.banco_doc ? leerBancoDoc(mv.banco_doc) : null;
+      // Estrategia por banco/franquicia (Patrón Estrategia): define cómo parsear el extracto y qué
+      // reglas específicas añadir al prompt. Cae a la estrategia genérica si el banco no tiene una propia.
+      const estrategia = getEstrategiaExtracto(mv.tarjeta && mv.tarjeta.banco, mv.tarjeta && mv.tarjeta.franquicia);
       // Capa 1 — cruce determinista exacto (sin IA): empareja compras app<->extracto por
       // monto + fecha (+/-1) + descripcion, con pool. Alimenta el prompt y filtra falsos positivos.
-      const cruce = cruzarConExtracto(texto_redactado, (mv && mv.compras) || []);
-      const { system, user } = construirPrompt(mv, texto_redactado, bancoDoc, contexto_usuario, cruce);
+      const cruce = cruzar(texto_redactado, (mv && mv.compras) || [], estrategia);
+      const { system, user } = construirPrompt(mv, texto_redactado, bancoDoc, contexto_usuario, cruce, estrategia);
 
       console.log('[IA] Iniciando analisis. Proveedor: ' + prov + ', Modelo: ' + (model || '(default del proveedor)'));
       let r;

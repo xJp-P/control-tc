@@ -1,12 +1,14 @@
-// backend/services/matcher.js
-// Capa 1 de conciliación: MATCH DETERMINISTA EXACTO entre las líneas de compra del texto del
-// extracto y las compras registradas en la app (BD), ANTES de involucrar el criterio de la IA.
+// backend/services/extracto/motorCruce.js
+// Motor GENÉRICO de cruce determinista compra(app) <-> línea(extracto). NO depende de ningún
+// banco: recibe una ESTRATEGIA que sabe parsear las líneas del layout de su banco, y aquí se hace
+// el emparejamiento por Monto (±tol) AND Fecha (±1 día) AND Descripción (Dice ≥ umbral), con pool.
 //
-// Filosofía: el matcher es CONSERVADOR y solo REDUCE ruido. Empareja una línea del extracto con
-// una compra de la app si y solo si coinciden Monto (±tol) AND Fecha (±1 día) AND Descripción
-// (similitud alta). Maneja un POOL: cada compra de la app y cada línea del extracto se emparejan
-// como máximo una vez (resuelve el caso de dos compras del mismo monto el mismo día). Si no logra
-// emparejar, no pasa nada: la IA concilia como antes. Nunca inventa cargos ni acciones.
+// Piezas reutilizables (comunes a los extractos colombianos), antes en services/matcher.js:
+//   - parseMontoCol: formato numérico colombiano ("43.440,78" -> 43440.78).
+//   - normalizarDesc + dice: similitud de descripción robusta a orden/typos.
+//   - fechaCercana: comparación de fecha con tolerancia (desfase de corte ±1 día).
+//   - parsearTabular: parser de layout TABULAR parametrizable (lo usan las estrategias tabulares).
+//   - cruzar: el algoritmo de pool greedy (asignación 1:1).
 
 // Parsea un monto en formato colombiano a número. "43.440,78" -> 43440.78 ; "44.900" -> 44900.
 function parseMontoCol(s) {
@@ -18,7 +20,6 @@ function parseMontoCol(s) {
 }
 
 // Normaliza una descripción para comparar: MAYÚSCULAS, sin acentos, solo alfanumérico + espacios.
-// El rango ̀-ͯ son los diacríticos combinantes que deja NFD al descomponer acentos.
 function normalizarDesc(s) {
   return String(s || '')
     .toUpperCase()
@@ -43,7 +44,6 @@ function dice(a, b) {
 }
 
 // ¿La fecha dia/mes del extracto cae a ±tolDias de la fecha (YYYY-MM-DD) de la compra de la app?
-// Usa el año de la compra de la app para ambos lados; tolera el desfase de corte (±1 día).
 function fechaCercana(dia, mes, fechaBD, tolDias) {
   if (!fechaBD) return false;
   const d = new Date(String(fechaBD).slice(0, 10) + 'T00:00:00');
@@ -53,81 +53,98 @@ function fechaCercana(dia, mes, fechaBD, tolDias) {
   return diff <= tolDias + 0.001;
 }
 
-// Extrae de cada línea del texto del extracto los movimientos con forma de compra:
-// { dia, mes, descripcion, monto, raw }. Conservador: exige una fecha DD/MM, un monto plausible
-// y una descripción con texto. Descarta tasas (X,XXXX%), cuotas (N/M) y el sub-renglón VR MONEDA ORIG.
-function parsearLineasExtracto(texto) {
+// Extractor de fecha por DEFECTO: DD/MM (o DD-MM) con año opcional, en cualquier parte de la línea.
+// Las estrategias con otro formato (ej. "19 SEP" de Davivienda) pasan su propio opts.parsearFecha.
+function parsearFechaDDMM(linea) {
+  const m = String(linea).match(/\b(\d{1,2})[\/\-](\d{1,2})(?:[\/\-]\d{2,4})?\b/);
+  if (!m) return null;
+  const dia = parseInt(m[1], 10), mes = parseInt(m[2], 10);
+  if (!(dia >= 1 && dia <= 31 && mes >= 1 && mes <= 12)) return null;
+  return { dia, mes, raw: m[0] };
+}
+
+// Parser de layout TABULAR genérico y parametrizable. Lo usan las estrategias cuyos extractos
+// tienen forma "una línea = [fecha] descripción + monto + cuotas + tasa" (Bancolombia, RappiCard...).
+//   opts.limpiezaExtra: regex ESPECÍFICAS del banco a quitar ANTES de extraer monto/descripción
+//                       (ej. el sub-renglón "VR MONEDA ORIG ..." de Bancolombia).
+//   opts.parsearFecha:  función (linea) -> { dia, mes, raw } | null. Por defecto, DD/MM.
+//   opts.montoMin: monto mínimo a considerar (por defecto 1).
+// Devuelve [{ dia, mes, descripcion, monto, raw }].
+function parsearTabular(texto, opts) {
+  opts = opts || {};
+  const limpiezaExtra = Array.isArray(opts.limpiezaExtra) ? opts.limpiezaExtra : [];
+  const montoMin = opts.montoMin != null ? opts.montoMin : 1;
+  const parsearFecha = (typeof opts.parsearFecha === 'function') ? opts.parsearFecha : parsearFechaDDMM;
   const out = [];
-  const reFecha = /\b(\d{1,2})[\/\-](\d{1,2})(?:[\/\-]\d{2,4})?\b/;
   const reMontoG = /\$?\s?(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d{4,}(?:,\d{1,2})?)/g;
   String(texto || '').split(/\r?\n/).forEach(raw => {
     const linea = raw.trim();
     if (linea.length < 6) return;
-    const mF = linea.match(reFecha);
-    if (!mF) return;
-    const dia = parseInt(mF[1], 10), mes = parseInt(mF[2], 10);
-    if (!(dia >= 1 && dia <= 31 && mes >= 1 && mes <= 12)) return;
-    // Quitar el ruido estructural ANTES de extraer monto/descripción, para que los dígitos de la
-    // tasa ("1,9110%" -> 9110), las cuotas ("1/36") o el VR MONEDA ORIG no se tomen como monto.
-    const limpia = linea
-      .replace(mF[0], ' ')                          // fecha
-      .replace(/VR\s+MONEDA\s+ORIG.*$/i, ' ')       // sub-fila VR orig (resto de la línea)
-      .replace(/\b\d+[.,]\d+\s+[A-Z]{2}\b/g, ' ')   // "11.6 FI" / "79.0 US"
-      .replace(/\b\d{1,2}[.,]\d{1,4}\s*%/g, ' ')    // tasa "1,9110%"
-      .replace(/\b\d{1,3}\/\d{1,3}\b/g, ' ');       // cuotas "1/1", "1/36"
-    // Monto principal = el mayor de los candidatos de la línea ya limpia (formato miles o entero).
+    const f = parsearFecha(linea);
+    if (!f) return;
+    const dia = f.dia, mes = f.mes;
+    // Quitar el ruido estructural ANTES de extraer monto/descripción: primero la fecha, luego la
+    // limpieza específica del banco (limpiezaExtra), luego lo común (tasa por línea y cuotas N/M).
+    let limpia = linea.replace(f.raw, ' ');
+    limpiezaExtra.forEach(re => { limpia = limpia.replace(re, ' '); });
+    limpia = limpia
+      .replace(/\b\d{1,2}[.,]\d{1,4}\s*%/g, ' ')   // tasa "1,9110%"
+      .replace(/\b\d{1,3}\/\d{1,3}\b/g, ' ');      // cuotas "1/1", "1/36"
     const montos = [];
     let mm; reMontoG.lastIndex = 0;
     while ((mm = reMontoG.exec(limpia)) !== null) {
       const v = parseMontoCol(mm[1]);
-      if (v != null && v >= 1) montos.push(v);
+      if (v != null && v >= montoMin) montos.push(v);
     }
     if (!montos.length) return;
     const monto = Math.max.apply(null, montos);
-    // Descripción: lo que queda tras quitar también los montos y los símbolos.
     const desc = limpia
       .replace(/\$?\s?\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?/g, ' ') // montos con miles
       .replace(/\b\d{4,}(?:,\d{1,2})?\b/g, ' ')               // enteros largos
       .replace(/[^A-Za-zÁÉÍÓÚÑáéíóúñ0-9\s*&./-]/g, ' ')
       .replace(/\s{2,}/g, ' ')
       .trim();
-    if (!/[A-Za-zÁÉÍÓÚÑáéíóúñ]{3,}/.test(desc)) return; // sin texto de comercio útil
+    if (!/[A-Za-zÁÉÍÓÚÑáéíóúñ]{3,}/.test(desc)) return;
     out.push({ dia, mes, descripcion: desc, monto: Math.round(monto), raw: linea });
   });
   return out;
 }
 
 /**
- * Cruza el texto del extracto con las compras de la app (1 cuota). Devuelve los emparejamientos
- * EXACTOS (con pool), las compras de la app sin contraparte y las líneas del extracto sin cruzar.
+ * Cruce determinista con pool. La ESTRATEGIA produce las líneas del extracto; aquí se emparejan
+ * con las compras de la app (1 cuota) por Monto (±tolMonto) AND Fecha (±tolDias) AND Descripción
+ * (Dice ≥ umbral), asignando greedy por mejor score (cada línea y cada compra, una sola vez).
  * @param {string} texto  Texto del extracto (ya redactado).
- * @param {Array}  comprasBD  movimientos.compras (detalleCompras): { id, descripcion, total, fecha, ... }
+ * @param {Array}  comprasBD  movimientos.compras: { id, descripcion, total, fecha, ... }
+ * @param {object} estrategia  objeto con parsearLineas(texto) -> [{ dia, mes, descripcion, monto }]
  * @param {object} [opts]  { tolMonto=2, tolDias=1, umbral=0.55 }
  */
-function cruzarConExtracto(texto, comprasBD, opts) {
+function cruzar(texto, comprasBD, estrategia, opts) {
   opts = opts || {};
   const tolMonto = opts.tolMonto != null ? opts.tolMonto : 2;
   const tolDias = opts.tolDias != null ? opts.tolDias : 1;
   const umbral = opts.umbral != null ? opts.umbral : 0.55;
 
-  const lineas = parsearLineasExtracto(texto);
+  const lineas = (estrategia && typeof estrategia.parsearLineas === 'function')
+    ? (estrategia.parsearLineas(texto) || [])
+    : [];
   const compras = (comprasBD || []).filter(c => c && c.id != null);
 
-  // 1) Generar TODOS los pares (línea, compra) que cumplen el match estricto, con su score.
+  // 1) Todos los pares (línea, compra) que cumplen el match estricto, con su score.
   const pares = [];
   lineas.forEach((L, li) => {
     compras.forEach((C, ci) => {
       const montoBD = Math.round(Number(C.total) || 0);
       if (montoBD <= 0) return;
-      if (Math.abs(Math.round(L.monto) - montoBD) > tolMonto) return;       // Monto
-      if (!fechaCercana(L.dia, L.mes, C.fecha, tolDias)) return;            // Fecha ±1
-      const score = dice(normalizarDesc(L.descripcion), normalizarDesc(C.descripcion)); // Descripción
+      if (Math.abs(Math.round(L.monto) - montoBD) > tolMonto) return;
+      if (!fechaCercana(L.dia, L.mes, C.fecha, tolDias)) return;
+      const score = dice(normalizarDesc(L.descripcion), normalizarDesc(C.descripcion));
       if (score < umbral) return;
       pares.push({ li, ci, score });
     });
   });
 
-  // 2) Asignación greedy por mejor score, respetando el POOL (cada línea y cada compra, una vez).
+  // 2) Asignación greedy por mejor score respetando el POOL (cada línea/compra una vez).
   pares.sort((a, b) => b.score - a.score);
   const usadosL = {}, usadosC = {}, matches = [];
   pares.forEach(p => {
@@ -157,4 +174,4 @@ function cruzarConExtracto(texto, comprasBD, opts) {
   };
 }
 
-module.exports = { cruzarConExtracto, parsearLineasExtracto, normalizarDesc, dice, parseMontoCol, fechaCercana };
+module.exports = { parseMontoCol, normalizarDesc, dice, fechaCercana, parsearTabular, parsearFechaDDMM, cruzar };
