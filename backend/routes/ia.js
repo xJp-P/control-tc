@@ -181,7 +181,9 @@ module.exports = function(db, ctx) {
       const estrategia = getEstrategiaExtracto(mv.tarjeta && mv.tarjeta.banco, mv.tarjeta && mv.tarjeta.franquicia);
       // Capa 1 — cruce determinista exacto (sin IA): empareja compras app<->extracto por
       // monto + fecha (+/-1) + descripcion, con pool. Alimenta el prompt y filtra falsos positivos.
-      const cruce = cruzar(texto_redactado, (mv && mv.compras) || [], estrategia);
+      // Compras agrupadas por moneda: COP (mv.compras) y USD (mv.compras_usd, tarjetas duales). Para
+      // tarjetas no duales el grupo USD va vacio y el cruce queda mono-moneda (comportamiento intacto).
+      const cruce = cruzar(texto_redactado, { COP: (mv && mv.compras) || [], USD: (mv && mv.compras_usd) || [] }, estrategia);
       const { system, user } = construirPrompt(mv, texto_redactado, bancoDoc, contexto_usuario, cruce, estrategia);
 
       console.log('[IA] Iniciando analisis. Proveedor: ' + prov + ', Modelo: ' + (model || '(default del proveedor)'));

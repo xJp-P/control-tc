@@ -76,7 +76,11 @@ function parsearTabular(texto, opts) {
   const montoMin = opts.montoMin != null ? opts.montoMin : 1;
   const parsearFecha = (typeof opts.parsearFecha === 'function') ? opts.parsearFecha : parsearFechaDDMM;
   const out = [];
-  const reMontoG = /\$?\s?(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d{4,}(?:,\d{1,2})?)/g;
+  // Montos: (a) CON $ de cualquier tamaño ("$44.900", "$11,75", "$236"); (b) sin $ pero con
+  // separador de miles ("287.890,49"); (c) decimal pequeño sin $ ("11,75", USD). NO se toma un
+  // entero largo suelto sin $ ni separador (ej. "37627409", una referencia de PayPal en la
+  // descripcion), que antes se confundia con el monto.
+  const reMontoG = /(\$\s?\d+(?:\.\d{3})*(?:,\d{1,2})?|\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d{1,3},\d{1,2})/g;
   String(texto || '').split(/\r?\n/).forEach(raw => {
     const linea = raw.trim();
     if (linea.length < 6) return;
@@ -99,78 +103,103 @@ function parsearTabular(texto, opts) {
     if (!montos.length) return;
     const monto = Math.max.apply(null, montos);
     const desc = limpia
+      .replace(/\$\s?\d[\d.,]*/g, ' ')                         // cualquier monto con $ (incl. USD "$11,50")
       .replace(/\$?\s?\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?/g, ' ') // montos con miles
       .replace(/\b\d{4,}(?:,\d{1,2})?\b/g, ' ')               // enteros largos
       .replace(/[^A-Za-zÁÉÍÓÚÑáéíóúñ0-9\s*&./-]/g, ' ')
       .replace(/\s{2,}/g, ' ')
       .trim();
     if (!/[A-Za-zÁÉÍÓÚÑáéíóúñ]{3,}/.test(desc)) return;
-    out.push({ dia, mes, descripcion: desc, monto: Math.round(monto), raw: linea });
+    // monto SIN redondear: el cruce compara con tolerancia por moneda y el USD necesita decimales.
+    out.push({ dia, mes, descripcion: desc, monto: monto, raw: linea });
   });
   return out;
 }
 
+// Campo de monto en la compra de la app, según la moneda de la línea.
+const CAMPO_MONTO = { COP: 'total', USD: 'total_usd' };
+
 /**
- * Cruce determinista con pool. La ESTRATEGIA produce las líneas del extracto; aquí se emparejan
- * con las compras de la app (1 cuota) por Monto (±tolMonto) AND Fecha (±tolDias) AND Descripción
- * (Dice ≥ umbral), asignando greedy por mejor score (cada línea y cada compra, una sola vez).
+ * Cruce determinista con pool, MULTI-MONEDA. La ESTRATEGIA produce las líneas del extracto, cada
+ * una con su `moneda` ('COP' por defecto, o 'USD'); aquí se emparejan con las compras de la app de
+ * SU MISMA moneda por Monto (±tol según moneda) AND Fecha (±tolDias) AND Descripción (Dice ≥ umbral),
+ * asignando greedy por mejor score (cada línea y cada compra, una sola vez).
  * @param {string} texto  Texto del extracto (ya redactado).
- * @param {Array}  comprasBD  movimientos.compras: { id, descripcion, total, fecha, ... }
- * @param {object} estrategia  objeto con parsearLineas(texto) -> [{ dia, mes, descripcion, monto }]
- * @param {object} [opts]  { tolMonto=2, tolDias=1, umbral=0.55 }
+ * @param {Array|object} comprasInput  Array = todo COP (mono-moneda, compatibilidad). Objeto
+ *        { COP:[...], USD:[...] } = multi-moneda. Cada compra: { id, descripcion, fecha, total (COP) | total_usd (USD) }.
+ * @param {object} estrategia  con parsearLineas(texto) -> [{ dia, mes, descripcion, monto, moneda? }]
+ * @param {object} [opts]  { tolMontoCOP=2, tolMontoUSD=0.01, tolDias=1, umbral=0.55 }
  */
-function cruzar(texto, comprasBD, estrategia, opts) {
+function cruzar(texto, comprasInput, estrategia, opts) {
   opts = opts || {};
-  const tolMonto = opts.tolMonto != null ? opts.tolMonto : 2;
   const tolDias = opts.tolDias != null ? opts.tolDias : 1;
   const umbral = opts.umbral != null ? opts.umbral : 0.55;
+  // Tolerancia de monto POR MONEDA: pesos enteros (±2) vs dólares al centavo (±0.01).
+  const tolMonto = { COP: opts.tolMontoCOP != null ? opts.tolMontoCOP : 2, USD: opts.tolMontoUSD != null ? opts.tolMontoUSD : 0.01 };
+  // Un array suelto se interpreta como compras en COP (mantiene el contrato mono-moneda de Visa/Rappi/Nu).
+  const grupos = Array.isArray(comprasInput) ? { COP: comprasInput } : (comprasInput || {});
+  const comprasDe = (moneda) => (grupos[moneda] || []).filter(c => c && c.id != null);
+  const montoDe = (c, moneda) => Number(c[CAMPO_MONTO[moneda]]) || 0;
 
   const lineas = (estrategia && typeof estrategia.parsearLineas === 'function')
     ? (estrategia.parsearLineas(texto) || [])
     : [];
-  const compras = (comprasBD || []).filter(c => c && c.id != null);
 
-  // 1) Todos los pares (línea, compra) que cumplen el match estricto, con su score.
+  // 1) Pares (línea, compra) válidos: cada línea SOLO se compara con compras de su misma moneda.
   const pares = [];
   lineas.forEach((L, li) => {
-    compras.forEach((C, ci) => {
-      const montoBD = Math.round(Number(C.total) || 0);
+    const moneda = (L.moneda === 'USD') ? 'USD' : 'COP';
+    comprasDe(moneda).forEach(C => {
+      const montoBD = montoDe(C, moneda);
       if (montoBD <= 0) return;
-      if (Math.abs(Math.round(L.monto) - montoBD) > tolMonto) return;
+      if (Math.abs(Number(L.monto) - montoBD) > tolMonto[moneda]) return;
       if (!fechaCercana(L.dia, L.mes, C.fecha, tolDias)) return;
       const score = dice(normalizarDesc(L.descripcion), normalizarDesc(C.descripcion));
       if (score < umbral) return;
-      pares.push({ li, ci, score });
+      pares.push({ li, moneda, cid: C.id, score });
     });
   });
 
-  // 2) Asignación greedy por mejor score respetando el POOL (cada línea/compra una vez).
+  // 2) Asignación greedy por mejor score, con POOL por (línea) y por (moneda+compra).
   pares.sort((a, b) => b.score - a.score);
   const usadosL = {}, usadosC = {}, matches = [];
   pares.forEach(p => {
-    if (usadosL[p.li] || usadosC[p.ci]) return;
-    usadosL[p.li] = 1; usadosC[p.ci] = 1;
-    const L = lineas[p.li], C = compras[p.ci];
+    const ck = p.moneda + ':' + p.cid;
+    if (usadosL[p.li] || usadosC[ck]) return;
+    usadosL[p.li] = 1; usadosC[ck] = 1;
+    const L = lineas[p.li];
+    const C = comprasDe(p.moneda).find(c => c.id === p.cid);
+    const m = montoDe(C, p.moneda);
     matches.push({
       compra_id: C.id,
+      moneda: p.moneda,
       descripcion_app: C.descripcion,
       descripcion_extracto: L.descripcion,
-      monto: Math.round(Number(C.total) || 0),
+      monto: p.moneda === 'USD' ? Math.round(m * 100) / 100 : Math.round(m),
       fecha_app: C.fecha,
       dia_extracto: L.dia, mes_extracto: L.mes,
       score: Math.round(p.score * 100) / 100
     });
   });
 
-  const comprasSinMatch = compras.filter((_, i) => !usadosC[i]).map(c => ({ compra_id: c.id, descripcion: c.descripcion, total: Math.round(Number(c.total) || 0), fecha: c.fecha }));
-  const lineasSinMatch = lineas.filter((_, i) => !usadosL[i]).map(L => ({ descripcion: L.descripcion, monto: L.monto, dia: L.dia, mes: L.mes }));
+  // Sobrantes: compras de la app sin contraparte (por moneda) y líneas del extracto sin cruzar.
+  const comprasSinMatch = [];
+  Object.keys(grupos).forEach(moneda => {
+    comprasDe(moneda).forEach(c => {
+      if (usadosC[moneda + ':' + c.id]) return;
+      const m = montoDe(c, moneda);
+      comprasSinMatch.push({ compra_id: c.id, moneda, descripcion: c.descripcion, total: moneda === 'USD' ? Math.round(m * 100) / 100 : Math.round(m), fecha: c.fecha });
+    });
+  });
+  const lineasSinMatch = lineas.filter((_, i) => !usadosL[i]).map(L => ({ descripcion: L.descripcion, monto: L.monto, dia: L.dia, mes: L.mes, moneda: L.moneda || 'COP' }));
+  const totalCompras = Object.keys(grupos).reduce((s, mon) => s + comprasDe(mon).length, 0);
 
   return {
     matches,
     comprasSinMatch,
     lineasSinMatch,
     total_lineas_extracto: lineas.length,
-    total_compras_app: compras.length
+    total_compras_app: totalCompras
   };
 }
 

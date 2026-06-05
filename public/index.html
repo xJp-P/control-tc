@@ -255,6 +255,10 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '4.3.0': [
+    'El Asistente de Conciliación ahora entiende los extractos de más tarjetas, no solo Bancolombia Visa. Reconoce el formato de Bancolombia Mastercard y American Express (que traen dos extractos, uno en pesos y otro en dólares), el de RappiCard y el de Nu, cada uno con sus reglas propias: por ejemplo, que RappiCard no maneja un cobro de interés internacional aparte, o la comisión por cambio de moneda de Nu.',
+    'En las tarjetas Mastercard y American Express, las compras en dólares ahora se cuadran con el extracto comparando dólar contra dólar (sin pasar por la tasa de cambio), que es la forma exacta de hacerlo. Además se corrigió un error que, en compras cuyo nombre incluye un número de referencia largo (como algunas de PayPal), tomaba ese número como si fuera el valor de la compra.'
+  ],
   '4.2.1': [
     'El Asistente de Conciliación ahora cruza tus compras con el extracto de forma más precisa: primero empareja por su cuenta las que coinciden exactamente en monto, fecha y nombre del comercio, antes de pedirle ayuda a la IA. Así, cuando tienes dos compras por el mismo valor (por ejemplo dos viajes del mismo día), ya no las confunde entre sí, y deja de marcar como "diferencia" compras que en realidad ya están bien registradas. Verás un aviso de cuántas compras se conciliaron automáticamente.'
   ],

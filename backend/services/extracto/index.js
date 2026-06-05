@@ -12,15 +12,16 @@
 
 const estrategiaBase = require('./estrategiaBase');
 const bancolombiaVisa = require('./strategies/bancolombiaVisa');
+const bancolombiaDual = require('./strategies/bancolombiaDual');
 const rappiCard = require('./strategies/rappiCard');
 const nu = require('./strategies/nu');
 
 // Estrategias específicas, en orden de evaluación (la primera cuyo aplica() sea true gana).
 const ESTRATEGIAS = [
   bancolombiaVisa,
+  bancolombiaDual,
   rappiCard,
   nu
-  // Pendiente: bancolombiaDual (MC/Amex) — hoy cae a la estrategia generica.
 ];
 
 function getEstrategiaExtracto(banco, franquicia) {

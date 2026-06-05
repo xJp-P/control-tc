@@ -138,7 +138,7 @@ function calcExtracto(db, tarjetaId, cicloStr, incluirPagadas) {
     const todasUsd = [...comprasUsdPagadas, ...comprasUsdCiclo];
     comprasUsdTotal = Math.round(comprasUsdCiclo.reduce((s, c) => s + c.valor_usd, 0) * 100) / 100;
     todasUsd.forEach(c => {
-      detalleComprasUsd.push({ fecha: c.fecha, descripcion: c.descripcion, total_usd: Math.round(c.valor_usd * 100) / 100, tasa_usd: c.tasa_usd || null });
+      detalleComprasUsd.push({ id: c.id, fecha: c.fecha, descripcion: c.descripcion, total_usd: Math.round(c.valor_usd * 100) / 100, tasa_usd: c.tasa_usd || null, persona_id: c.persona_id || null });
     });
     pagoMinimoUsd = Math.round((comprasUsdTotal + interesesComprasUsd) * 100) / 100;
   }
