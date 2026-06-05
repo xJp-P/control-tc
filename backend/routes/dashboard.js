@@ -3,6 +3,7 @@ const { Router } = require('express');
 const { hoyLocal, daysBetween, addDays } = require('../helpers/dates');
 const { calcularAmortizacionAvance } = require('../engine/amortizacion');
 const { calcularAmortizacionDiferida } = require('../engine/amortizacion');
+const { calcExtracto } = require('../engine/extracto');
 const { nuOpts, avanceOpts, isDualExtracto, aplicaIntInternacional } = require('../helpers/banco');
 
 module.exports = function(db) {
@@ -409,42 +410,17 @@ module.exports = function(db) {
     }
     const diasParaPago = Math.ceil((fechaPago - now) / 86400000);
 
-    // Recalcula el pago mínimo REAL de un ciclo, con la MISMA fórmula que extractos.js
-    // (compras del ciclo + cuotas de avances/diferidas del ciclo + interés intl). Se usa para
-    // "Próximos Pagos" en vez del valor persistido en extractos.pago_minimo, que solo se
-    // refresca al entrar a la vista Pagos — así la card siempre muestra el monto al día, sin
+    // Pago mínimo REAL de un ciclo, EN VIVO, vía el motor único calcExtracto (engine/extracto.js).
+    // Se usa para "Próximos Pagos" en vez del valor persistido en extractos.pago_minimo, que solo
+    // se refresca al entrar a la vista Pagos — así la card siempre muestra el monto al día, sin
     // depender del orden de navegación. Solo aplica en vista per-card (tarjeta_id presente).
-    // NOTA: mantener sincronizada con calcExtracto de extractos.js si esa fórmula cambia.
-    function calcPagoMinimoCiclo(ciclo) {
-      const cC = db.prepare("SELECT COALESCE(SUM(valor_cop - COALESCE(monto_abonado,0)),0) as total FROM compras WHERE ciclo=? AND estado NOT IN ('pagado','diferida')" + tjFilter).get(ciclo, ...tjParams);
-      let cuotas = 0;
-      avancesActivos.forEach(av => {
-        const abs = db.prepare('SELECT * FROM abonos_avance WHERE avance_id=? ORDER BY fecha').all(av.id);
-        const am = calcularAmortizacionAvance(av.monto, av.tasa_mv, av.plazo, av.fecha_desembolso, av.dia_corte, abs, av.comision, avanceOpts(db, av.tarjeta_id));
-        const cu = am.tabla.find(r => r.fechaCorte.slice(0, 7) === ciclo);
-        if (cu) cuotas += cu.totalExtracto;
-      });
-      diferidasActivas.forEach(d => {
-        const abs = db.prepare('SELECT * FROM abonos_diferida WHERE diferida_id=? ORDER BY fecha').all(d.id);
-        const am = calcularAmortizacionDiferida(d.monto, d.tasa_mv, d.num_cuotas, d.fecha_compra, d.fecha_primer_corte, abs, nuOpts(db, d.tarjeta_id));
-        const cu = am.tabla.find(r => r.fechaCorte.slice(0, 7) === ciclo);
-        if (cu) cuotas += cu.totalPagar;
-      });
-      let intl = 0;
-      if (aplicaIntlDash) {
-        const [yr, mo] = ciclo.split('-').map(Number);
-        const lastDay = new Date(yr, mo, 0).getDate();
-        const fCorte = new Date(yr, mo - 1, Math.min(diaCorte, lastDay)).toISOString().slice(0, 10);
-        const cIntl = db.prepare("SELECT fecha, valor_cop, COALESCE(monto_abonado,0) as ma FROM compras WHERE ciclo=? AND estado NOT IN ('pagado','diferida') AND (es_internacional=1 OR (valor_usd IS NOT NULL AND valor_usd > 0))" + tjFilter).all(ciclo, ...tjParams);
-        cIntl.forEach(c => {
-          const saldo = c.valor_cop - c.ma;
-          if (saldo <= 0) return;
-          const dias = daysBetween(c.fecha, fCorte);
-          if (dias > 0) intl += saldo * tasaIntlGlobal * (dias / 30);
-        });
-      }
-      return Math.round(cC.total + cuotas + intl);
-    }
+    // incluirPagadas=false: el pago mínimo cuenta solo lo pendiente del ciclo.
+    // Antes esta función duplicaba a mano la fórmula del extracto (compras + cuotas + intl);
+    // unificado en v4.2.0 para tener un único punto de verdad (deuda técnica (c)).
+    const calcPagoMinimoCiclo = (ciclo) => {
+      const ext = calcExtracto(db, tarjeta_id, ciclo, false);
+      return ext ? ext.pagoMinimo : 0;
+    };
 
     let extractosVencidos = [];
     if (tarjeta_id) {

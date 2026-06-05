@@ -21,9 +21,11 @@ function construirPrompt(movimientos, textoExtracto, bancoDoc, contextoUsuario) 
     '3. Usa las reglas del banco provistas para intereses, fechas y comportamientos especiales.',
     '4. Para una cuota que el banco factura en un mes distinto al de su fecha, usa accion_sugerida.operacion="mover_ciclo".',
     '4b. Para una compra a cuotas (diferida) que el banco reprogramó a un número distinto de cuotas (ej. de 36 a 2), usa tipo="cuota_reprogramada" y accion_sugerida.operacion="reprogramar_cuotas" con parametros { compra_id, num_cuotas } si las cuotas quedan uniformes, o { compra_id, cuotas: [{ ciclo: "YYYY-MM", monto: 0 }] } si quedan irregulares (montos o fechas distintos).',
+    '4c. TASA DE INTERES INTERNACIONAL: extrae del extracto la tasa de interes CORRIENTE MENSUAL (M.V., mes vencido) aplicada a las compras INTERNACIONALES del ciclo. En el extracto cada compra trae su tasa como porcentaje con coma decimal (ej. "2,0849%"); las compras nacionales a 1 cuota muestran "0,0000%" (sin interes) y NO debes usar esas. Toma la tasa vigente (>0) de las compras internacionales y conviertela a DECIMAL con punto: "2,0849%" -> 0.020849. Devuelvela en el campo raiz "tasa_intl_extracto". Si el extracto solo muestra 0,0000% o no hay compras internacionales con tasa, devuelve null. NUNCA uses la tasa EFECTIVA ANUAL (E.A., ~25%); es la mensual. No inventes una tasa: si no la ves clara, null.',
     '5. Devuelve EXCLUSIVAMENTE un objeto JSON valido con EXACTAMENTE esta forma, sin texto adicional:',
     JSON.stringify({
       conciliacion_pago_minimo: { pago_minimo_extracto: 0, pago_minimo_app: 0, diferencia: 0, explicacion: ['string'], residual_no_explicado: 0 },
+      tasa_intl_extracto: 0.020849,
       pagos_detectados: [{ fecha: 'YYYY-MM-DD', monto: 0, etiqueta_extracto: 'string', coincide_con_pago_app: true }],
       discrepancias: [{ tipo: 'compra_omitida|monto_erroneo|clasificacion_incorrecta|cuota_reprogramada|otro', descripcion: 'string', valor_extracto: 0, valor_app: 0, compra_id: null, severidad: 'alta|media|baja', accion_sugerida: { operacion: 'crear_compra|editar_valor|convertir_a_diferida|reprogramar_cuotas|mover_ciclo|ninguna', parametros: {} } }]
     })
@@ -205,6 +207,45 @@ module.exports = function(db, ctx) {
           }
         });
       }
+      // ── Discrepancia de TASA INTERNACIONAL (cruce determinista) ──
+      // La IA solo extrae el numero (resu.tasa_intl_extracto); el backend lo contrasta contra el
+      // snapshot tasa_intl de cada compra intl del ciclo y arma la discrepancia + accion. Asi el
+      // emparejamiento compra<->extracto y el UPDATE no dependen del criterio del modelo.
+      try {
+        const tasaExtracto = (resu.tasa_intl_extracto != null && resu.tasa_intl_extracto !== '') ? Number(resu.tasa_intl_extracto) : null;
+        if (tasaExtracto != null && tasaExtracto > 0 && tasaExtracto < 1 && mv && mv.tarjeta && Array.isArray(mv.compras)) {
+          const tjRow = db.prepare('SELECT tasa_mv_avances FROM tarjetas WHERE id=?').get(mv.tarjeta.id);
+          const tasaGlobal = (tjRow && tjRow.tasa_mv_avances != null) ? tjRow.tasa_mv_avances : 0.01911;
+          const EPS = 1e-6;
+          const intlComp = mv.compras.filter(c => c && (c.es_internacional || Number(c.interes_intl) > 0));
+          const afectadas = intlComp.filter(c => {
+            const actual = (c.tasa_intl != null) ? Number(c.tasa_intl) : null;
+            return actual == null || Math.abs(actual - tasaExtracto) > EPS;
+          });
+          if (afectadas.length) {
+            const compras_afectadas = afectadas.map(c => {
+              const actualEfectiva = (c.tasa_intl != null) ? Number(c.tasa_intl) : tasaGlobal;
+              const interes_actual = Math.round(Number(c.interes_intl) || 0);
+              const interes_nuevo = actualEfectiva > 0 ? Math.round(interes_actual * (tasaExtracto / actualEfectiva)) : interes_actual;
+              return { id: c.id, descripcion: c.descripcion, tasa_actual: (c.tasa_intl != null ? Number(c.tasa_intl) : null), interes_actual, interes_nuevo };
+            });
+            const algunaSinFijar = afectadas.some(c => c.tasa_intl == null);
+            if (!Array.isArray(resu.discrepancias)) resu.discrepancias = [];
+            resu.discrepancias.push({
+              tipo: 'tasa_intl_incorrecta',
+              descripcion: algunaSinFijar
+                ? 'El extracto factura las compras internacionales a una tasa mensual que la app aun no tiene fijada (snapshot ausente o distinto). Sincronizala para que el interes intl use la tasa real del extracto.'
+                : 'El extracto factura las compras internacionales con una tasa mensual distinta a la registrada en la app. Sincronizala para que el interes intl use la tasa real del extracto.',
+              severidad: 'media',
+              tasa_extracto: tasaExtracto,
+              tasa_app: (afectadas[0].tasa_intl != null ? Number(afectadas[0].tasa_intl) : tasaGlobal),
+              compra_id: null,
+              compras_afectadas,
+              accion_sugerida: { operacion: 'actualizar_tasa_intl', parametros: { tarjeta_id: mv.tarjeta.id, ciclo: mv.ciclo, tasa_intl: tasaExtracto, compra_ids: afectadas.map(c => c.id) } }
+            });
+          }
+        }
+      } catch (e) { console.log('[ia/analizar] comparacion tasa intl:', e && e.message); }
       return res.json({ ok: true, resultado: resu, modelo: r.modelo, provider: prov });
     } catch (err) {
       console.log('[ia/analizar] error:', err && err.message);

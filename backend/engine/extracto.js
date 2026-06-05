@@ -103,32 +103,31 @@ function calcExtracto(db, tarjetaId, cicloStr, incluirPagadas) {
 
   const comprasTotalPendientes = db.prepare("SELECT COALESCE(SUM(valor_cop - COALESCE(monto_abonado,0)),0) as total FROM compras WHERE tarjeta_id=? AND estado NOT IN ('pagado','diferida')").get(tarjetaId);
   const tasaIntl = tj.tasa_mv_avances || 0.01911;
-  let interesesComprasIntl = 0, interesesComprasUsd = 0;
 
-  comprasIndividuales.forEach(c => {
-    if (dualExtracto) {
-      // Mastercard / Amex (extracto dual):
-      // Las compras USD a 1 cuota NO devengan intereses si se pagan al vencimiento.
-      // El banco solo cobra interés en USD cuando:
-      //   (a) la compra se difiere a más de 1 cuota (manejado por amortizacion.js diferidas), o
-      //   (b) hay saldo del mes anterior que no se cubrió (revolving) — pendiente de modelar.
-      // Por eso ya NO aplicamos el proxy `valor_usd × tasa × días/30` que sobre-estimaba.
-      // Las compras de comprasIndividuales son por definición de 1 cuota (estado != 'diferida').
-      return;
-    }
-    // Solo tarjetas que aplican (Bancolombia Visa por ahora) cobran intereses
-    // sobre compras en COP marcadas como internacionales o sobre compras USD.
-    // Otras tarjetas (RappiCard, Nu, etc.) NO acumulan estos intereses hasta
-    // tener evidencia de extracto que confirme el cobro.
-    if (!aplicaIntl) return;
-    const esIntl = (c.valor_usd && c.valor_usd > 0) || c.es_internacional;
-    if (!esIntl) return;
-    const saldo = c.valor_cop - c.monto_abonado;
-    if (saldo <= 0) return;
+  // Interés INTL atribuido a UNA compra individual. ÚNICO punto de verdad: lo usan tanto el
+  // total del pago mínimo (interesesComprasIntl, abajo) como el desglose por compra
+  // (detalleCompras[].interes_intl), de modo que el total sea SIEMPRE la suma exacta del detalle.
+  //   - Solo las tarjetas que aplican (Bancolombia Visa) cobran interés sobre compras intl en COP.
+  //     En duales (MC/Amex) aplicaIntl=false → 0: las compras USD a 1 cuota no devengan interés si
+  //     se pagan al vencimiento (el interés USD solo nace en diferidas o revolving — pendiente).
+  //   - Tasa: snapshot histórico de la compra (c.tasa_intl) si existe; si no, la global de la
+  //     tarjeta (v4.1.0). Nunca con la global sola: reescribiría la historia al fluctuar la tasa.
+  const calcInteresIntlPorCompra = (c) => {
+    if (!aplicaIntl) return 0;
+    if (!c.es_internacional && !(c.valor_usd && c.valor_usd > 0)) return 0;
+    const saldo = incluirPagadas ? c.valor_cop : (c.valor_cop - (c.monto_abonado || 0));
+    if (saldo <= 0) return 0;
     const dias = daysBetween(c.fecha, fechaCorte);
-    interesesComprasIntl += saldo * tasaIntl * (dias / 30);
-  });
-  interesesComprasIntl = Math.round(interesesComprasIntl);
+    if (dias <= 0) return 0;
+    const tasa = (c.tasa_intl != null ? c.tasa_intl : tasaIntl);
+    return Math.round(saldo * tasa * (dias / 30));
+  };
+
+  // Total INTL del extracto = suma del interés por compra (mismo cálculo que el desglose).
+  // Solo sobre comprasIndividuales (1 cuota, no pagadas); diferidas/avances devengan su interés
+  // vía el motor de amortización. interesesComprasUsd queda 0 (revolving USD aún sin modelar).
+  let interesesComprasIntl = 0, interesesComprasUsd = 0;
+  comprasIndividuales.forEach(c => { interesesComprasIntl += calcInteresIntlPorCompra(c); });
   interesesComprasUsd = Math.round(interesesComprasUsd * 100) / 100;
 
   let comprasUsdTotal = 0, pagoMinimoUsd = 0;
@@ -152,19 +151,6 @@ function calcExtracto(db, tarjetaId, cicloStr, incluirPagadas) {
   const comprasCopParaDetalle = dualExtracto
     ? todasComprasCiclo.filter(c => !c.valor_usd || c.valor_usd <= 0)
     : todasComprasCiclo;
-  // Calcula el interés INTL atribuido a cada compra individual para el desglose.
-  // Solo aplica a tarjetas que devengan intereses internacionales (Bancolombia Visa).
-  const calcInteresIntlPorCompra = (c) => {
-    if (!aplicaIntl) return 0;
-    if (!c.es_internacional && !(c.valor_usd && c.valor_usd > 0)) return 0;
-    const saldo = incluirPagadas ? c.valor_cop : (c.valor_cop - (c.monto_abonado || 0));
-    if (saldo <= 0) return 0;
-    const dias = daysBetween(c.fecha, fechaCorte);
-    if (dias <= 0) return 0;
-    // Snapshot histórico por compra (tasa_intl) si existe; si no, la tasa global de la tarjeta.
-    const tasa = (c.tasa_intl != null ? c.tasa_intl : tasaIntl);
-    return Math.round(saldo * tasa * (dias / 30));
-  };
   const detalleCompras = comprasCopParaDetalle.map(c => {
     const capital = Math.round(incluirPagadas ? c.valor_cop : (c.valor_cop - c.monto_abonado));
     const interes_intl = calcInteresIntlPorCompra(c);
@@ -173,6 +159,7 @@ function calcExtracto(db, tarjetaId, cicloStr, incluirPagadas) {
       fecha: c.fecha, descripcion: c.descripcion, nota_personal: c.nota_personal || null,
       total: capital,
       interes_intl,
+      tasa_intl: c.tasa_intl != null ? c.tasa_intl : null,
       es_internacional: !!(c.es_internacional || (c.valor_usd && c.valor_usd > 0)),
       valor_usd: c.valor_usd || null, tasa_usd: c.tasa_usd || null,
       grupo_id: c.grupo_id || null,

@@ -255,6 +255,10 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '4.2.0': [
+    'El interés de tus compras internacionales ahora se calcula igual en todos lados: el pago mínimo del inicio, el de la sección de Pagos y el detalle de cada compra siempre coinciden. Antes, cuando la tasa de la tarjeta subía o bajaba, el pago mínimo podía mostrar un interés internacional un poco distinto al del detalle de las compras; ahora ambos usan la tasa real congelada de cada compra y cuadran al peso.',
+    'El Asistente de Conciliación ahora lee del extracto la tasa de interés de tus compras internacionales (por ejemplo 2,0849 %) y, si no coincide con la que tienes guardada, te lo señala: te muestra a qué compras afecta y cómo cambiaría el interés de cada una. Con un clic, y tu confirmación, la app actualiza esa tasa en esas compras. Como siempre, la IA solo lo sugiere: nada cambia sin que lo apruebes, y si el extracto de ese mes ya está pagado, no se toca.'
+  ],
   '4.1.1': [
     'Corregido un error en lo que te deben tus terceros por compras a cuotas (diferidas): cuando ya había pasado la fecha de corte de una cuota, la app la descontaba de la deuda del tercero como si estuviera saldada, aunque el tercero no te la hubiera reembolsado. Ahora una cuota solo se considera pagada cuando el tercero realmente te la devuelve, no por el simple paso del tiempo. Ejemplo: una compra a 3 cuotas de la que tu tercero solo te pagó 1 ahora muestra correctamente las 2 que aún te debe, tanto en la pestaña Terceros como en la tarjeta "Me Deben" del inicio.'
   ],
@@ -5256,8 +5260,10 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
   const [errAplicar, setErrAplicar] = useState('');
   const [contextoUser, setContextoUser] = useState('');
   // Operaciones que la app puede aplicar automaticamente (mapean a endpoints existentes).
-  const AUTO = { crear_compra: 1, editar_valor: 1, mover_ciclo: 1, reprogramar_cuotas: 1 };
+  const AUTO = { crear_compra: 1, editar_valor: 1, mover_ciclo: 1, reprogramar_cuotas: 1, actualizar_tasa_intl: 1 };
 
+  // Formatea una tasa mensual decimal a porcentaje colombiano (0.020849 -> "2,0849%").
+  const fmtPct = (x) => (x == null || x === '') ? '—' : (Number(x) * 100).toFixed(4).replace('.', ',') + '%';
   function paramsDe(d) { return (d.accion_sugerida && d.accion_sugerida.parametros) || {}; }
   function resumenAccion(d) {
     const op = d.accion_sugerida ? d.accion_sugerida.operacion : 'ninguna';
@@ -5270,6 +5276,11 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
       const esDividir = Array.isArray(p.cuotas) && p.cuotas.length > 0;
       if (esDividir) return { titulo: 'Reprogramar dividiendo en cuotas', endpoint: 'POST /api/compras/' + cid + '/dividir-cuotas', filas: [['Compra', '#' + cid], ['Cuotas (irregulares)', String(p.cuotas.length)], ['Detalle', p.cuotas.map(q => q.ciclo + ': ' + fmtCOP(q.monto)).join('   |   ')]] };
       return { titulo: 'Reprogramar número de cuotas', endpoint: 'POST /api/diferidas/(de #' + cid + ')/reprogramar', filas: [['Compra', '#' + cid], ['Nuevo total de cuotas', String(p.num_cuotas || '')], ['Regenera la proyección', 'si']] };
+    }
+    if (op === 'actualizar_tasa_intl') {
+      const n = Array.isArray(p.compra_ids) ? p.compra_ids.length : 0;
+      return { titulo: 'Sincronizar tasa internacional con el extracto', endpoint: 'POST /api/compras/aplicar-tasa-intl',
+        filas: [['Tasa en la app', fmtPct(d.tasa_app)], ['Tasa del extracto', fmtPct(p.tasa_intl != null ? p.tasa_intl : d.tasa_extracto)], ['Compras a actualizar', String(n)], ['Ciclo', ciclo]] };
     }
     return { titulo: op, endpoint: '', filas: [] };
   }
@@ -5315,6 +5326,13 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
           const r = await api('/diferidas/' + a.diferida_id + '/reprogramar', { method: 'POST', body: { num_cuotas: Number(p.num_cuotas) } });
           if (r && r.error) throw new Error(r.error);
         }
+      } else if (op === 'actualizar_tasa_intl') {
+        const ids = Array.isArray(p.compra_ids) ? p.compra_ids : [];
+        if (!ids.length) throw new Error('No hay compras internacionales para actualizar.');
+        const tasa = Number(p.tasa_intl != null ? p.tasa_intl : d.tasa_extracto);
+        if (!(tasa > 0)) throw new Error('La tasa del extracto no es valida.');
+        const r = await api('/compras/aplicar-tasa-intl', { method: 'POST', body: { tarjeta_id: Number(tarjetaId), ciclo: ciclo, tasa_intl: tasa, compra_ids: ids } });
+        if (r && r.error) throw new Error(r.error);
       } else {
         throw new Error('Operacion no aplicable automaticamente.');
       }
@@ -5358,7 +5376,16 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
               aplicada && e('span', { style: { marginLeft: 'auto', fontSize: 11, fontWeight: 600, color: 'var(--success)' } }, 'Aplicada')
             ),
             e('div', { style: { fontSize: 12.5, color: 'var(--text-secondary)', marginBottom: 4, lineHeight: 1.45 } }, d.descripcion || ''),
-            (d.valor_extracto != null || d.valor_app != null) && e('div', { style: { fontSize: 12, color: 'var(--text-muted)' } }, 'Extracto: ' + fmtCOP(d.valor_extracto) + '   App: ' + fmtCOP(d.valor_app)),
+            d.tipo === 'tasa_intl_incorrecta'
+              ? e('div', { style: { fontSize: 12, color: 'var(--text-muted)' } },
+                  e('div', { style: { marginBottom: 4 } }, 'Tasa en la app: ', e('strong', { style: { color: 'var(--text-secondary)' } }, (d.tasa_app != null ? fmtPct(d.tasa_app) : 'sin fijar')), '   ·   Tasa del extracto: ', e('strong', { style: { color: 'var(--accent)' } }, fmtPct(d.tasa_extracto))),
+                  Array.isArray(d.compras_afectadas) && d.compras_afectadas.length > 0 && e('div', { style: { marginTop: 2 } },
+                    e('div', { style: { fontSize: 11.5, color: 'var(--text-muted)', marginBottom: 2 } }, 'Compras afectadas (interes actual -> con tasa del extracto):'),
+                    d.compras_afectadas.map((cc, ci) => e('div', { key: ci, style: { fontSize: 11.5, color: 'var(--text-secondary)' } },
+                      '· ' + (cc.descripcion || ('#' + cc.id)) + ': ' + fmtCOP(cc.interes_actual) + ' -> ' + fmtCOP(cc.interes_nuevo) + (cc.tasa_actual == null ? '  (sin tasa fijada)' : '')))
+                  )
+                )
+              : (d.valor_extracto != null || d.valor_app != null) && e('div', { style: { fontSize: 12, color: 'var(--text-muted)' } }, 'Extracto: ' + fmtCOP(d.valor_extracto) + '   App: ' + fmtCOP(d.valor_app)),
             d.posible_falso_positivo && e('div', { style: { marginTop: 6, fontSize: 11.5, color: 'var(--warning)', background: 'rgba(251,191,36,0.10)', border: '1px solid rgba(251,191,36,0.25)', borderRadius: 6, padding: '6px 8px', lineHeight: 1.4 } },
               e('div', { style: { fontWeight: 700, marginBottom: 2 } }, 'Posible falso positivo'),
               e('div', { style: { color: 'var(--text-secondary)' } }, 'Tu app ya tiene una compra de este monto bien clasificada; la IA pudo confundir estas:'),

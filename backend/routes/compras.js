@@ -500,5 +500,37 @@ module.exports = function(db, { logAction, tjNombre }) {
     res.json({ ok: true });
   });
 
+  // POST /api/compras/aplicar-tasa-intl — acción 1-clic del Asistente de Conciliación IA.
+  // Body: { tarjeta_id, ciclo, tasa_intl, compra_ids }
+  // Fija el snapshot de tasa internacional (compras.tasa_intl) de un conjunto de compras del
+  // ciclo con la tasa REAL leída del extracto, para que el interés intl deje de calcularse con la
+  // tasa global. Quirúrgico: SOLO toca tasa_intl (no bolsillo, estado ni nada más). Respeta la
+  // inmutabilidad (403 si el extracto del ciclo ya está pagado). La IA solo PROPONE; este UPDATE
+  // lo dispara el usuario tras confirmar en el modal — nunca el flujo de análisis.
+  router.post('/aplicar-tasa-intl', (req, res) => {
+    const { tarjeta_id, ciclo, tasa_intl, compra_ids } = req.body || {};
+    if (!tarjeta_id || !ciclo || tasa_intl == null || tasa_intl === '' || !Array.isArray(compra_ids) || compra_ids.length === 0) {
+      return res.status(400).json({ error: 'Faltan datos: se requieren tarjeta_id, ciclo, tasa_intl y compra_ids.' });
+    }
+    const tasa = Number(tasa_intl);
+    // Decimal mensual razonable: > 0 y < 1 (ej. 0.020849). Atrapa el error de mandar 2.0849 (porcentaje).
+    if (!(tasa > 0) || tasa >= 1) {
+      return res.status(400).json({ error: 'La tasa debe ser un decimal mensual válido (ej. 0.020849), no un porcentaje.' });
+    }
+    // Inmutabilidad: un ciclo cerrado/pagado no admite cambios (espejo del resto de endpoints).
+    const ext = db.prepare("SELECT estado FROM extractos WHERE tarjeta_id=? AND ciclo=?").get(tarjeta_id, ciclo);
+    if (ext && ext.estado === 'pagado') {
+      return res.status(403).json({ error: 'No se puede aplicar: el extracto del ciclo ' + ciclo + ' ya está pagado.' });
+    }
+    // Acotar a compras de ESTA tarjeta y ciclo: el WHERE evita tocar nada fuera del alcance conciliado.
+    const ids = compra_ids.map(Number).filter(n => Number.isInteger(n) && n > 0);
+    if (!ids.length) return res.status(400).json({ error: 'compra_ids no contiene identificadores válidos.' });
+    const placeholders = ids.map(() => '?').join(',');
+    const info = db.prepare(`UPDATE compras SET tasa_intl=? WHERE tarjeta_id=? AND ciclo=? AND id IN (${placeholders})`)
+      .run(tasa, tarjeta_id, ciclo, ...ids);
+    logAction('editar', tjNombre(tarjeta_id) + 'Tasa internacional del ciclo ' + ciclo + ' fijada en ' + (tasa * 100).toFixed(4) + '% para ' + info.changes + ' compra(s)');
+    res.json({ ok: true, actualizadas: info.changes, tasa_intl: tasa });
+  });
+
   return router;
 };

@@ -44,6 +44,12 @@ function mockResultado(mockContexto) {
   const dif = pmExtracto - pmApp;
   const compras = Array.isArray(mv.compras) ? mv.compras : [];
   const ej = compras[0] || null;
+  // Demo: simula que el extracto trae una tasa intl ~3% menor a la registrada en la app, para que
+  // se vea la discrepancia de tasa internacional en la UI sin gastar tokens. Si no hay compras
+  // intl en el ciclo, devuelve null (no aplica).
+  const intlEj = compras.find(c => c && (c.es_internacional || Number(c.interes_intl) > 0));
+  const tasaBase = (intlEj && intlEj.tasa_intl != null) ? Number(intlEj.tasa_intl) : 0.02;
+  const tasaDemoIntl = intlEj ? Math.round(tasaBase * 0.97 * 1e6) / 1e6 : null;
   return {
     conciliacion_pago_minimo: {
       pago_minimo_extracto: pmExtracto,
@@ -55,6 +61,7 @@ function mockResultado(mockContexto) {
       ],
       residual_no_explicado: Math.max(0, Math.round(dif * 0.1))
     },
+    tasa_intl_extracto: tasaDemoIntl,
     pagos_detectados: [
       { fecha: mv.fecha_corte || '', monto: pmApp, etiqueta_extracto: 'ABONO SUCURSAL VIRTUAL', coincide_con_pago_app: true }
     ],
