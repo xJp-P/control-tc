@@ -255,6 +255,9 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '4.2.1': [
+    'El Asistente de Conciliación ahora cruza tus compras con el extracto de forma más precisa: primero empareja por su cuenta las que coinciden exactamente en monto, fecha y nombre del comercio, antes de pedirle ayuda a la IA. Así, cuando tienes dos compras por el mismo valor (por ejemplo dos viajes del mismo día), ya no las confunde entre sí, y deja de marcar como "diferencia" compras que en realidad ya están bien registradas. Verás un aviso de cuántas compras se conciliaron automáticamente.'
+  ],
   '4.2.0': [
     'El interés de tus compras internacionales ahora se calcula igual en todos lados: el pago mínimo del inicio, el de la sección de Pagos y el detalle de cada compra siempre coinciden. Antes, cuando la tasa de la tarjeta subía o bajaba, el pago mínimo podía mostrar un interés internacional un poco distinto al del detalle de las compras; ahora ambos usan la tasa real congelada de cada compra y cuadran al peso.',
     'El Asistente de Conciliación ahora lee del extracto la tasa de interés de tus compras internacionales (por ejemplo 2,0849 %) y, si no coincide con la que tienes guardada, te lo señala: te muestra a qué compras afecta y cómo cambiaría el interés de cada una. Con un clic, y tu confirmación, la app actualiza esa tasa en esas compras. Como siempre, la IA solo lo sugiere: nada cambia sin que lo apruebes, y si el extracto de ese mes ya está pagado, no se toca.'
@@ -5359,6 +5362,10 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
     pagos.length > 0 && e('div', { style: { marginBottom: 10 } },
       e('div', { style: { fontSize: 12.5, fontWeight: 600, marginBottom: 4 } }, 'Pagos detectados (no son compras faltantes)'),
       pagos.map((p, i) => e('div', { key: i, style: { fontSize: 12, color: 'var(--text-secondary)' } }, (p.fecha || '') + '  ' + fmtCOP(p.monto) + '  ' + (p.etiqueta_extracto || '') + (p.coincide_con_pago_app ? '  (coincide con un pago en la app)' : '')))
+    ),
+    (resultado && resultado.cruce_determinista && resultado.cruce_determinista.conciliadas > 0) && e('div', { style: { fontSize: 12, color: 'var(--success)', background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.22)', borderRadius: 8, padding: '8px 10px', marginBottom: 10, lineHeight: 1.45 } },
+      e('strong', null, 'Cruce exacto: ' + resultado.cruce_determinista.conciliadas + ' compra(s) conciliada(s) automaticamente'),
+      ' con el extracto por monto + fecha + descripcion (antes de consultar a la IA). Estas no se reportan como discrepancia.'
     ),
     e('div', { style: { fontSize: 14, fontWeight: 700, color: 'var(--text-primary)', margin: '12px 0 8px' } },
       'Discrepancias (' + disc.length + ')',

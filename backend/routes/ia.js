@@ -4,9 +4,10 @@ const { extraerTextoPdf } = require('../services/pdfExtract');
 const { redactarPII } = require('../services/redactPII');
 const { construirMovimientos, leerBancoDoc } = require('../services/movimientos');
 const { analizar: analizarIA } = require('../services/aiProvider');
+const { cruzarConExtracto } = require('../services/matcher');
 
 // Arma el system + user prompt para la conciliación (esquema JSON estricto).
-function construirPrompt(movimientos, textoExtracto, bancoDoc, contextoUsuario) {
+function construirPrompt(movimientos, textoExtracto, bancoDoc, contextoUsuario, cruce) {
   const tj = movimientos.tarjeta || {};
   const systemArr = [
     'Eres un conciliador experto de extractos de tarjeta de credito en Colombia. Respondes SIEMPRE en espanol.',
@@ -35,6 +36,15 @@ function construirPrompt(movimientos, textoExtracto, bancoDoc, contextoUsuario) 
   }
   const system = systemArr.join('\n');
 
+  // Sección del cruce determinista: compras ya emparejadas 1:1 con el extracto (capa 1, sin IA),
+  // para que la IA NO las vuelva a marcar como discrepancia (reduce falsos positivos de antemano).
+  const cm = (cruce && Array.isArray(cruce.matches)) ? cruce.matches : [];
+  const cruceTexto = cm.length
+    ? ['=== CRUCE EXACTO YA REALIZADO POR LA APP (capa determinista, no depende de tu criterio) ===',
+       'Estas compras de la app YA fueron emparejadas 1 a 1 con una linea del extracto por coincidencia EXACTA de monto + fecha (+/- 1 dia) + descripcion. Dalas por CONCILIADAS: NO las reportes como compra_omitida, monto_erroneo ni clasificacion_incorrecta.',
+       cm.map(m => '  - compra #' + m.compra_id + ' "' + m.descripcion_app + '" $' + m.monto).join('\n'), ''].join('\n')
+    : '';
+
   const user = [
     'TARJETA: ' + (tj.banco || '') + ' ' + (tj.franquicia || '') + '. Ciclo a conciliar: ' + (movimientos.ciclo || '') + '.',
     'PAGO MINIMO SEGUN LA APP: ' + (movimientos.pago_minimo_app != null ? movimientos.pago_minimo_app : 's/d') + '.',
@@ -53,6 +63,7 @@ function construirPrompt(movimientos, textoExtracto, bancoDoc, contextoUsuario) 
     '=== TEXTO DEL EXTRACTO OFICIAL (datos personales ya ocultados) ===',
     String(textoExtracto || ''),
     '',
+    cruceTexto,
     'Concilia el pago minimo y entrega UNICAMENTE el JSON pedido.'
   ].join('\n');
 
@@ -159,7 +170,10 @@ module.exports = function(db, ctx) {
       }
 
       const bancoDoc = mv.banco_doc ? leerBancoDoc(mv.banco_doc) : null;
-      const { system, user } = construirPrompt(mv, texto_redactado, bancoDoc, contexto_usuario);
+      // Capa 1 — cruce determinista exacto (sin IA): empareja compras app<->extracto por
+      // monto + fecha (+/-1) + descripcion, con pool. Alimenta el prompt y filtra falsos positivos.
+      const cruce = cruzarConExtracto(texto_redactado, (mv && mv.compras) || []);
+      const { system, user } = construirPrompt(mv, texto_redactado, bancoDoc, contexto_usuario, cruce);
 
       console.log('[IA] Iniciando analisis. Proveedor: ' + prov + ', Modelo: ' + (model || '(default del proveedor)'));
       let r;
@@ -246,6 +260,32 @@ module.exports = function(db, ctx) {
           }
         }
       } catch (e) { console.log('[ia/analizar] comparacion tasa intl:', e && e.message); }
+
+      // ── Refuerzo del cruce determinista: una compra emparejada 1:1 (monto+fecha+desc) no puede
+      // ser ni faltante ni de monto erroneo; si la IA igual la reporto asi, se descarta. ──
+      try {
+        const idsConciliados = new Set((cruce.matches || []).map(m => Number(m.compra_id)));
+        if (Array.isArray(resu.discrepancias) && idsConciliados.size) {
+          const antes = resu.discrepancias.length;
+          resu.discrepancias = resu.discrepancias.filter(d => {
+            const cid = d && (d.compra_id != null ? d.compra_id : (d.accion_sugerida && d.accion_sugerida.parametros && d.accion_sugerida.parametros.compra_id));
+            if (cid != null && idsConciliados.has(Number(cid)) && (d.tipo === 'compra_omitida' || d.tipo === 'monto_erroneo')) return false;
+            return true;
+          });
+          const om = antes - resu.discrepancias.length;
+          if (om > 0) resu.discrepancias_omitidas = (resu.discrepancias_omitidas || 0) + om;
+        }
+      } catch (e) { console.log('[ia/analizar] refuerzo cruce determinista:', e && e.message); }
+
+      // Transparencia para la UI: cuántas concilió la capa determinista y qué quedó sin cruzar.
+      resu.cruce_determinista = {
+        conciliadas: cruce.matches.length,
+        total_lineas_extracto: cruce.total_lineas_extracto,
+        total_compras_app: cruce.total_compras_app,
+        detalle: cruce.matches,
+        compras_sin_cruce: cruce.comprasSinMatch,
+        lineas_extracto_sin_cruce: cruce.lineasSinMatch
+      };
       return res.json({ ok: true, resultado: resu, modelo: r.modelo, provider: prov });
     } catch (err) {
       console.log('[ia/analizar] error:', err && err.message);

@@ -1,6 +1,6 @@
 {
   "name": "control-tc",
-  "version": "4.2.0",
+  "version": "4.2.1",
   "description": "Control TC — Gestor personal de tarjetas de crédito (compras, avances, diferidas, terceros y extractos)",
   "main": "desktop/main.js",
   "author": "xJp-P",
