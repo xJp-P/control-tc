@@ -255,6 +255,10 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '4.3.1': [
+    'El Asistente de Conciliación ahora detecta si el banco movió la fecha límite de pago de un ciclo (por ejemplo por un festivo o un fin de semana) y te deja ajustarla con un solo clic, sin entrar a los ajustes. Es solo un cambio visual: no altera tus intereses ni el pago mínimo.',
+    'También te avisa cuando la fecha de corte del banco no coincide con la calculada por la app: te explica qué compras quedaron por fuera de este extracto (porque las hiciste después del corte real) y te ofrece moverlas, una por una, al mes en que el banco realmente las factura.'
+  ],
   '4.3.0': [
     'El Asistente de Conciliación ahora entiende los extractos de más tarjetas, no solo Bancolombia Visa. Reconoce el formato de Bancolombia Mastercard y American Express (que traen dos extractos, uno en pesos y otro en dólares), el de RappiCard y el de Nu, cada uno con sus reglas propias: por ejemplo, que RappiCard no maneja un cobro de interés internacional aparte, o la comisión por cambio de moneda de Nu.',
     'En las tarjetas Mastercard y American Express, las compras en dólares ahora se cuadran con el extracto comparando dólar contra dólar (sin pasar por la tasa de cambio), que es la forma exacta de hacerlo. Además se corrigió un error que, en compras cuyo nombre incluye un número de referencia largo (como algunas de PayPal), tomaba ese número como si fuera el valor de la compra.'
@@ -5267,7 +5271,7 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
   const [errAplicar, setErrAplicar] = useState('');
   const [contextoUser, setContextoUser] = useState('');
   // Operaciones que la app puede aplicar automaticamente (mapean a endpoints existentes).
-  const AUTO = { crear_compra: 1, editar_valor: 1, mover_ciclo: 1, reprogramar_cuotas: 1, actualizar_tasa_intl: 1 };
+  const AUTO = { crear_compra: 1, editar_valor: 1, mover_ciclo: 1, reprogramar_cuotas: 1, actualizar_tasa_intl: 1, actualizar_fecha_pago: 1 };
 
   // Formatea una tasa mensual decimal a porcentaje colombiano (0.020849 -> "2,0849%").
   const fmtPct = (x) => (x == null || x === '') ? '—' : (Number(x) * 100).toFixed(4).replace('.', ',') + '%';
@@ -5288,6 +5292,11 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
       const n = Array.isArray(p.compra_ids) ? p.compra_ids.length : 0;
       return { titulo: 'Sincronizar tasa internacional con el extracto', endpoint: 'POST /api/compras/aplicar-tasa-intl',
         filas: [['Tasa en la app', fmtPct(d.tasa_app)], ['Tasa del extracto', fmtPct(p.tasa_intl != null ? p.tasa_intl : d.tasa_extracto)], ['Compras a actualizar', String(n)], ['Ciclo', ciclo]] };
+    }
+    if (op === 'actualizar_fecha_pago') {
+      const fp = p.fecha_pago != null ? p.fecha_pago : d.fecha_extracto;
+      return { titulo: 'Ajustar la fecha de pago de este ciclo', endpoint: 'PUT /api/extractos/fecha-pago-custom',
+        filas: [['Fecha en la app', fmtDate(d.fecha_app)], ['Fecha del extracto', fmtDate(fp)], ['Ciclo', ciclo], ['Alcance', 'solo cambia lo que ves; no afecta intereses ni pago minimo']] };
     }
     return { titulo: op, endpoint: '', filas: [] };
   }
@@ -5340,6 +5349,11 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
         if (!(tasa > 0)) throw new Error('La tasa del extracto no es valida.');
         const r = await api('/compras/aplicar-tasa-intl', { method: 'POST', body: { tarjeta_id: Number(tarjetaId), ciclo: ciclo, tasa_intl: tasa, compra_ids: ids } });
         if (r && r.error) throw new Error(r.error);
+      } else if (op === 'actualizar_fecha_pago') {
+        const fp = p.fecha_pago != null ? p.fecha_pago : d.fecha_extracto;
+        if (!fp) throw new Error('No hay una fecha de pago para aplicar.');
+        const r = await api('/extractos/fecha-pago-custom', { method: 'PUT', body: { tarjeta_id: Number(tarjetaId), ciclo: ciclo, fecha_pago: fp } });
+        if (r && r.error) throw new Error(r.error);
       } else {
         throw new Error('Operacion no aplicable automaticamente.');
       }
@@ -5380,10 +5394,32 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
       : disc.map((d, i) => {
           const op = d.accion_sugerida ? d.accion_sugerida.operacion : 'ninguna';
           const aplicada = !!aplicadas[i];
+          // Aviso INFORMATIVO (no accionable, operacion 'ninguna'): el banco corto en una fecha
+          // distinta a la calculada. Estilo de "aviso" (borde punteado + fondo azul tenue) que
+          // contrasta con las tarjetas accionables. Las compras que cayeron fuera se listan abajo
+          // como acciones mover_ciclo separadas (con su badge "por desfase de corte").
+          if (d.tipo === 'corte_desfasado') {
+            const afc = Array.isArray(d.compras_afectadas) ? d.compras_afectadas : [];
+            return e('div', { key: i, style: { border: '1px dashed rgba(79,140,255,0.5)', background: 'rgba(79,140,255,0.06)', borderRadius: 8, padding: '10px 12px', marginBottom: 8 } },
+              e('div', { style: { display: 'flex', alignItems: 'center', gap: 6, marginBottom: 5 } },
+                e(Ico, { name: 'bulb', size: 14, color: 'var(--accent)' }),
+                e('span', { style: { fontSize: 11, fontWeight: 700, color: 'var(--accent)', textTransform: 'uppercase', letterSpacing: 0.4 } }, 'Aviso · desfase de fecha de corte')
+              ),
+              e('div', { style: { fontSize: 12.5, color: 'var(--text-secondary)', lineHeight: 1.45 } },
+                'El banco cortó el ', e('strong', { style: { color: 'var(--text-primary)' } }, fmtDate(d.fecha_extracto)),
+                ', pero la app calculó el ', e('strong', { style: { color: 'var(--text-primary)' } }, fmtDate(d.fecha_app)), '.'),
+              afc.length > 0
+                ? e('div', { style: { marginTop: 6, fontSize: 11.5, color: 'var(--text-muted)', lineHeight: 1.4 } },
+                    'Estas ' + afc.length + ' compra(s) quedaron después del corte real; el banco las factura en ' + (afc[0].ciclo_destino || 'el próximo ciclo') + '. Abajo aparecen como acciones para moverlas:',
+                    afc.map((cc, ci) => e('div', { key: ci, style: { color: 'var(--text-secondary)', marginTop: 2 } }, '· ' + (cc.descripcion || ('#' + cc.compra_id)) + '  (' + fmtDate(cc.fecha) + ')')))
+                : e('div', { style: { marginTop: 6, fontSize: 11.5, color: 'var(--text-muted)' } }, 'No hay compras de la app dentro de la ventana del desfase; es solo informativo.')
+            );
+          }
           return e('div', { key: i, style: { border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px', marginBottom: 8, background: 'var(--bg-input)' } },
             e('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 } },
               e('span', { style: { fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: sevColor(d.severidad) } }, d.severidad || ''),
               e('span', { style: { fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)' } }, d.tipo || ''),
+              d.motivo === 'corte_desfasado' && e('span', { style: { fontSize: 10, fontWeight: 600, color: 'var(--accent)', background: 'rgba(79,140,255,0.12)', borderRadius: 4, padding: '1px 6px' } }, 'por desfase de corte'),
               aplicada && e('span', { style: { marginLeft: 'auto', fontSize: 11, fontWeight: 600, color: 'var(--success)' } }, 'Aplicada')
             ),
             e('div', { style: { fontSize: 12.5, color: 'var(--text-secondary)', marginBottom: 4, lineHeight: 1.45 } }, d.descripcion || ''),

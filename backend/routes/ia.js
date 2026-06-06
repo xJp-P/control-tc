@@ -28,11 +28,14 @@ function construirPrompt(movimientos, textoExtracto, bancoDoc, contextoUsuario, 
     '3. Usa las reglas del banco provistas para intereses, fechas y comportamientos especiales.',
     '4. Para una cuota que el banco factura en un mes distinto al de su fecha, usa accion_sugerida.operacion="mover_ciclo".',
     '4b. Para una compra a cuotas (diferida) que el banco reprogramó a un número distinto de cuotas (ej. de 36 a 2), usa tipo="cuota_reprogramada" y accion_sugerida.operacion="reprogramar_cuotas" con parametros { compra_id, num_cuotas } si las cuotas quedan uniformes, o { compra_id, cuotas: [{ ciclo: "YYYY-MM", monto: 0 }] } si quedan irregulares (montos o fechas distintos).',
+    '4d. FECHAS DEL EXTRACTO: lee la FECHA DE CORTE (cierre del periodo) y la FECHA LIMITE DE PAGO impresas en el extracto y devuelvelas en los campos raiz "fecha_corte_extracto" y "fecha_pago_extracto" (formato YYYY-MM-DD; null si no las ves claras). Los movimientos que recibes ya traen la fecha_corte y fecha_pago que CALCULO la app: si la del extracto no coincide, explicalo en la conciliacion. Si la fecha de corte real es ANTERIOR a la calculada, razona que las compras hechas DESPUES del corte real quedaron fuera de este extracto y entran al del proximo mes. NO inventes fechas: el backend hara la comparacion exacta y armara las acciones.',
     ...reglasEspecificas,
     '5. Devuelve EXCLUSIVAMENTE un objeto JSON valido con EXACTAMENTE esta forma, sin texto adicional:',
     JSON.stringify({
       conciliacion_pago_minimo: { pago_minimo_extracto: 0, pago_minimo_app: 0, diferencia: 0, explicacion: ['string'], residual_no_explicado: 0 },
       tasa_intl_extracto: 0.020849,
+      fecha_corte_extracto: 'YYYY-MM-DD',
+      fecha_pago_extracto: 'YYYY-MM-DD',
       pagos_detectados: [{ fecha: 'YYYY-MM-DD', monto: 0, etiqueta_extracto: 'string', coincide_con_pago_app: true }],
       discrepancias: [{ tipo: 'compra_omitida|monto_erroneo|clasificacion_incorrecta|cuota_reprogramada|otro', descripcion: 'string', valor_extracto: 0, valor_app: 0, compra_id: null, severidad: 'alta|media|baja', accion_sugerida: { operacion: 'crear_compra|editar_valor|convertir_a_diferida|reprogramar_cuotas|mover_ciclo|ninguna', parametros: {} } }]
     })
@@ -287,6 +290,94 @@ module.exports = function(db, ctx) {
           if (om > 0) resu.discrepancias_omitidas = (resu.discrepancias_omitidas || 0) + om;
         }
       } catch (e) { console.log('[ia/analizar] refuerzo cruce determinista:', e && e.message); }
+
+      // ── Discrepancias de FECHAS (cruce determinista) ──
+      // La IA extrae fecha_corte_extracto / fecha_pago_extracto; el backend las compara contra las
+      // que calculo la app (mv.fecha_corte / mv.fecha_pago) y arma:
+      //   - fecha_pago_movida (accionable): override visual via fechas_pago_custom (no toca calculos).
+      //   - corte_desfasado (informativa) + cascada de mover_ciclo para las compras que cayeron fuera
+      //     del corte real (compras_sin_cruce en la ventana corte_real < fecha <= corte_app), con dedupe.
+      // Sanity: solo si el desfase es de 1..5 dias (mas alla = probable mala lectura del OCR/IA).
+      try {
+        const reFecha = /^\d{4}-\d{2}-\d{2}$/;
+        const difDias = (a, b) => {
+          if (!a || !b) return null;
+          const da = new Date(String(a).slice(0, 10) + 'T00:00:00'), dbb = new Date(String(b).slice(0, 10) + 'T00:00:00');
+          if (isNaN(da.getTime()) || isNaN(dbb.getTime())) return null;
+          return Math.round((da.getTime() - dbb.getTime()) / 86400000);
+        };
+        const cicloMasUno = (ciclo) => {
+          const [y, m] = String(ciclo).split('-').map(Number);
+          if (!y || !m) return ciclo;
+          const ny = m === 12 ? y + 1 : y, nm = m === 12 ? 1 : m + 1;
+          return ny + '-' + String(nm).padStart(2, '0');
+        };
+        if (!Array.isArray(resu.discrepancias)) resu.discrepancias = [];
+
+        // (a) Fecha de PAGO movida (accionable: override visual seguro).
+        const fpExt = (resu.fecha_pago_extracto && reFecha.test(resu.fecha_pago_extracto)) ? resu.fecha_pago_extracto : null;
+        const fpApp = mv.fecha_pago;
+        if (fpExt && fpApp) {
+          const d = difDias(fpExt, fpApp);
+          if (d != null && d !== 0 && Math.abs(d) <= 5) {
+            resu.discrepancias.push({
+              tipo: 'fecha_pago_movida',
+              descripcion: 'La fecha limite de pago del extracto (' + fpExt + ') no coincide con la calculada por la app (' + fpApp + '). Suele moverse por festivos o fines de semana.',
+              severidad: 'media',
+              fecha_app: fpApp,
+              fecha_extracto: fpExt,
+              compra_id: null,
+              accion_sugerida: { operacion: 'actualizar_fecha_pago', parametros: { tarjeta_id: mv.tarjeta.id, ciclo: mv.ciclo, fecha_pago: fpExt } }
+            });
+          }
+        }
+
+        // (b) CORTE desfasado (informativa) + cascada de mover_ciclo para lo que cayo fuera.
+        const fcExt = (resu.fecha_corte_extracto && reFecha.test(resu.fecha_corte_extracto)) ? resu.fecha_corte_extracto : null;
+        const fcApp = mv.fecha_corte;
+        if (fcExt && fcApp) {
+          const d = difDias(fcExt, fcApp);
+          if (d != null && d !== 0 && Math.abs(d) <= 5) {
+            const cicloDestino = cicloMasUno(mv.ciclo);
+            // Dedupe: compra_ids que la IA YA marco con mover_ciclo (regla 4), para no duplicar.
+            const yaMover = new Set();
+            resu.discrepancias.forEach(dd => {
+              const op = dd.accion_sugerida && dd.accion_sugerida.operacion;
+              const cid = dd.compra_id != null ? dd.compra_id : (dd.accion_sugerida && dd.accion_sugerida.parametros && dd.accion_sugerida.parametros.compra_id);
+              if (op === 'mover_ciclo' && cid != null) yaMover.add(Number(cid));
+            });
+            // Compras de la app que NO cruzaron y cayeron en la ventana (corte_real, corte_app].
+            const afectadas = (cruce.comprasSinMatch || []).filter(c => {
+              if (!c.fecha || c.compra_id == null || yaMover.has(Number(c.compra_id))) return false;
+              const dReal = difDias(c.fecha, fcExt), dApp = difDias(c.fecha, fcApp);
+              return dReal != null && dApp != null && dReal > 0 && dApp <= 0;
+            });
+            resu.discrepancias.push({
+              tipo: 'corte_desfasado',
+              descripcion: 'El banco cerro el ciclo el ' + fcExt + ', no el ' + fcApp + ' que calculo la app. Las compras hechas despues del ' + fcExt + ' entran al extracto de ' + cicloDestino + '.',
+              severidad: 'media',
+              fecha_app: fcApp,
+              fecha_extracto: fcExt,
+              compra_id: null,
+              accion_sugerida: { operacion: 'ninguna', parametros: {} },
+              compras_afectadas: afectadas.map(c => ({ compra_id: c.compra_id, descripcion: c.descripcion, fecha: c.fecha, ciclo_destino: cicloDestino }))
+            });
+            // Cascada: una accion mover_ciclo por compra afectada (dedup garantizado).
+            afectadas.forEach(c => {
+              yaMover.add(Number(c.compra_id));
+              resu.discrepancias.push({
+                tipo: 'mover_ciclo',
+                descripcion: 'Compra "' + (c.descripcion || ('#' + c.compra_id)) + '" del ' + c.fecha + ': quedo despues del corte real (' + fcExt + '), el banco la factura en ' + cicloDestino + '. Muevela a ese ciclo.',
+                severidad: 'media',
+                valor_app: c.total,
+                compra_id: c.compra_id,
+                motivo: 'corte_desfasado',
+                accion_sugerida: { operacion: 'mover_ciclo', parametros: { compra_id: c.compra_id, ciclo: cicloDestino } }
+              });
+            });
+          }
+        }
+      } catch (e) { console.log('[ia/analizar] comparacion de fechas:', e && e.message); }
 
       // Transparencia para la UI: cuántas concilió la capa determinista y qué quedó sin cruzar.
       resu.cruce_determinista = {

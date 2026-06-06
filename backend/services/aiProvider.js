@@ -50,6 +50,9 @@ function mockResultado(mockContexto) {
   const intlEj = compras.find(c => c && (c.es_internacional || Number(c.interes_intl) > 0));
   const tasaBase = (intlEj && intlEj.tasa_intl != null) ? Number(intlEj.tasa_intl) : 0.02;
   const tasaDemoIntl = intlEj ? Math.round(tasaBase * 0.97 * 1e6) / 1e6 : null;
+  // Demo: simula que el extracto cerro 1 dia antes (corte desfasado) y que la fecha de pago se movio
+  // 2 dias (festivo), para ver las discrepancias de fechas en la UI sin gastar tokens.
+  const addDiasISO = (iso, n) => { if (!iso) return null; const dt = new Date(String(iso).slice(0, 10) + 'T00:00:00'); if (isNaN(dt.getTime())) return null; dt.setDate(dt.getDate() + n); return dt.toISOString().slice(0, 10); };
   return {
     conciliacion_pago_minimo: {
       pago_minimo_extracto: pmExtracto,
@@ -62,6 +65,8 @@ function mockResultado(mockContexto) {
       residual_no_explicado: Math.max(0, Math.round(dif * 0.1))
     },
     tasa_intl_extracto: tasaDemoIntl,
+    fecha_corte_extracto: addDiasISO(mv.fecha_corte, -1),
+    fecha_pago_extracto: addDiasISO(mv.fecha_pago, -2),
     pagos_detectados: [
       { fecha: mv.fecha_corte || '', monto: pmApp, etiqueta_extracto: 'ABONO SUCURSAL VIRTUAL', coincide_con_pago_app: true }
     ],
