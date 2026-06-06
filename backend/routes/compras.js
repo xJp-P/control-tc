@@ -508,28 +508,47 @@ module.exports = function(db, { logAction, tjNombre }) {
   // inmutabilidad (403 si el extracto del ciclo ya está pagado). La IA solo PROPONE; este UPDATE
   // lo dispara el usuario tras confirmar en el modal — nunca el flujo de análisis.
   router.post('/aplicar-tasa-intl', (req, res) => {
-    const { tarjeta_id, ciclo, tasa_intl, compra_ids } = req.body || {};
-    if (!tarjeta_id || !ciclo || tasa_intl == null || tasa_intl === '' || !Array.isArray(compra_ids) || compra_ids.length === 0) {
-      return res.status(400).json({ error: 'Faltan datos: se requieren tarjeta_id, ciclo, tasa_intl y compra_ids.' });
+    const { tarjeta_id, ciclo } = req.body || {};
+    // Multi-grupo (split del día 1°): { grupos: [{ tasa_intl, compra_ids }] } aplica una tasa distinta
+    // por mes. Compatibilidad: el formato viejo { tasa_intl, compra_ids } se trata como un solo grupo.
+    let grupos = Array.isArray(req.body && req.body.grupos) ? req.body.grupos : null;
+    if (!grupos && req.body && req.body.tasa_intl != null && req.body.tasa_intl !== '' && Array.isArray(req.body.compra_ids)) {
+      grupos = [{ tasa_intl: req.body.tasa_intl, compra_ids: req.body.compra_ids }];
     }
-    const tasa = Number(tasa_intl);
-    // Decimal mensual razonable: > 0 y < 1 (ej. 0.020849). Atrapa el error de mandar 2.0849 (porcentaje).
-    if (!(tasa > 0) || tasa >= 1) {
-      return res.status(400).json({ error: 'La tasa debe ser un decimal mensual válido (ej. 0.020849), no un porcentaje.' });
+    if (!tarjeta_id || !ciclo || !Array.isArray(grupos) || grupos.length === 0) {
+      return res.status(400).json({ error: 'Faltan datos: se requieren tarjeta_id, ciclo y al menos un grupo (tasa_intl + compra_ids).' });
     }
+    // Normalizar y validar cada grupo: tasa decimal mensual (> 0 y < 1, atrapa el error de mandar 2.0849
+    // como porcentaje) + ids enteros válidos.
+    const limpios = [];
+    for (const g of grupos) {
+      const tasa = Number(g && g.tasa_intl);
+      if (!(tasa > 0) || tasa >= 1) {
+        return res.status(400).json({ error: 'Cada tasa debe ser un decimal mensual válido (ej. 0.020849), no un porcentaje.' });
+      }
+      const ids = (Array.isArray(g.compra_ids) ? g.compra_ids : []).map(Number).filter(n => Number.isInteger(n) && n > 0);
+      if (ids.length) limpios.push({ tasa, ids });
+    }
+    if (!limpios.length) return res.status(400).json({ error: 'Ningún grupo trae compra_ids válidos.' });
     // Inmutabilidad: un ciclo cerrado/pagado no admite cambios (espejo del resto de endpoints).
     const ext = db.prepare("SELECT estado FROM extractos WHERE tarjeta_id=? AND ciclo=?").get(tarjeta_id, ciclo);
     if (ext && ext.estado === 'pagado') {
       return res.status(403).json({ error: 'No se puede aplicar: el extracto del ciclo ' + ciclo + ' ya está pagado.' });
     }
-    // Acotar a compras de ESTA tarjeta y ciclo: el WHERE evita tocar nada fuera del alcance conciliado.
-    const ids = compra_ids.map(Number).filter(n => Number.isInteger(n) && n > 0);
-    if (!ids.length) return res.status(400).json({ error: 'compra_ids no contiene identificadores válidos.' });
-    const placeholders = ids.map(() => '?').join(',');
-    const info = db.prepare(`UPDATE compras SET tasa_intl=? WHERE tarjeta_id=? AND ciclo=? AND id IN (${placeholders})`)
-      .run(tasa, tarjeta_id, ciclo, ...ids);
-    logAction('editar', tjNombre(tarjeta_id) + 'Tasa internacional del ciclo ' + ciclo + ' fijada en ' + (tasa * 100).toFixed(4) + '% para ' + info.changes + ' compra(s)');
-    res.json({ ok: true, actualizadas: info.changes, tasa_intl: tasa });
+    // Transacción: cada grupo fija SU tasa en sus compras, acotado a esta tarjeta+ciclo (el WHERE evita
+    // tocar nada fuera del alcance conciliado).
+    let total = 0;
+    const aplicar = db.transaction(() => {
+      for (const g of limpios) {
+        const placeholders = g.ids.map(() => '?').join(',');
+        const info = db.prepare(`UPDATE compras SET tasa_intl=? WHERE tarjeta_id=? AND ciclo=? AND id IN (${placeholders})`)
+          .run(g.tasa, tarjeta_id, ciclo, ...g.ids);
+        total += info.changes;
+      }
+    });
+    aplicar();
+    logAction('editar', tjNombre(tarjeta_id) + 'Tasa internacional del ciclo ' + ciclo + ' sincronizada (' + limpios.length + ' tasa(s)) para ' + total + ' compra(s)');
+    res.json({ ok: true, actualizadas: total, grupos: limpios.length });
   });
 
   return router;

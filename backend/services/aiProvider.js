@@ -64,7 +64,14 @@ function mockResultado(mockContexto) {
       ],
       residual_no_explicado: Math.max(0, Math.round(dif * 0.1))
     },
-    tasa_intl_extracto: tasaDemoIntl,
+    // Mapa mes->tasa (split del día 1°). Demo: misma tasa para cada mes con compras intl en el ciclo.
+    tasas_intl_extracto: (() => {
+      if (tasaDemoIntl == null) return {};
+      const m = {};
+      compras.filter(c => c && (c.es_internacional || Number(c.interes_intl) > 0))
+        .forEach(c => { const k = String(c.fecha || '').slice(0, 7); if (k) m[k] = tasaDemoIntl; });
+      return m;
+    })(),
     fecha_corte_extracto: addDiasISO(mv.fecha_corte, -1),
     fecha_pago_extracto: addDiasISO(mv.fecha_pago, -2),
     pagos_detectados: [

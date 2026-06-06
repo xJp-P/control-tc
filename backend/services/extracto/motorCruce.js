@@ -91,6 +91,17 @@ function parsearTabular(texto, opts) {
     // limpieza específica del banco (limpiezaExtra), luego lo común (tasa por línea y cuotas N/M).
     let limpia = linea.replace(f.raw, ' ');
     limpiezaExtra.forEach(re => { limpia = limpia.replace(re, ' '); });
+    // Capturar la tasa MV de la línea (la primera > 0) ANTES de borrarla. La Tasa de Usura cambia el
+    // 1° de cada mes, así que un ciclo que abarca dos meses puede traer tasas distintas por compra;
+    // leerla de la línea es la fuente determinista exacta. Las compras 1/1 nacionales muestran
+    // "0,0000%" → sin tasa intl. Decimal mensual: "1,9110%" -> 0.01911.
+    let tasaLinea = null;
+    const reTasaLinea = /\b(\d{1,2})[.,](\d{1,4})\s*%/g;
+    let tmTasa;
+    while ((tmTasa = reTasaLinea.exec(limpia)) !== null) {
+      const v = parseFloat(tmTasa[1] + '.' + tmTasa[2]) / 100;
+      if (v > 0) { tasaLinea = Math.round(v * 1e6) / 1e6; break; }
+    }
     limpia = limpia
       .replace(/\b\d{1,2}[.,]\d{1,4}\s*%/g, ' ')   // tasa "1,9110%"
       .replace(/\b\d{1,3}\/\d{1,3}\b/g, ' ');      // cuotas "1/1", "1/36"
@@ -111,7 +122,8 @@ function parsearTabular(texto, opts) {
       .trim();
     if (!/[A-Za-zÁÉÍÓÚÑáéíóúñ]{3,}/.test(desc)) return;
     // monto SIN redondear: el cruce compara con tolerancia por moneda y el USD necesita decimales.
-    out.push({ dia, mes, descripcion: desc, monto: monto, raw: linea });
+    // `tasa`: tasa MV mensual capturada de la línea (decimal) o null (fuente del split del día 1°).
+    out.push({ dia, mes, descripcion: desc, monto: monto, tasa: tasaLinea, raw: linea });
   });
   return out;
 }
@@ -185,6 +197,7 @@ function cruzar(texto, comprasInput, estrategia, opts) {
       monto: p.moneda === 'USD' ? Math.round(m * 100) / 100 : Math.round(m),
       fecha_app: C.fecha,
       dia_extracto: L.dia, mes_extracto: L.mes,
+      tasa_extracto: (L.tasa != null ? L.tasa : null), // tasa MV de la línea del extracto (split día 1°)
       score: Math.round(p.score * 100) / 100
     });
   });

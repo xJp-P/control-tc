@@ -33,7 +33,7 @@ function construirPrompt(movimientos, textoExtracto, bancoDoc, contextoUsuario, 
     '5. Devuelve EXCLUSIVAMENTE un objeto JSON valido con EXACTAMENTE esta forma, sin texto adicional:',
     JSON.stringify({
       conciliacion_pago_minimo: { pago_minimo_extracto: 0, pago_minimo_app: 0, diferencia: 0, explicacion: ['string'], residual_no_explicado: 0 },
-      tasa_intl_extracto: 0.020849,
+      tasas_intl_extracto: { 'YYYY-MM': 0.020849 },
       fecha_corte_extracto: 'YYYY-MM-DD',
       fecha_pago_extracto: 'YYYY-MM-DD',
       pagos_detectados: [{ fecha: 'YYYY-MM-DD', monto: 0, etiqueta_extracto: 'string', coincide_con_pago_app: true }],
@@ -253,41 +253,73 @@ module.exports = function(db, ctx) {
           }
         });
       }
-      // ── Discrepancia de TASA INTERNACIONAL (cruce determinista) ──
-      // La IA solo extrae el numero (resu.tasa_intl_extracto); el backend lo contrasta contra el
-      // snapshot tasa_intl de cada compra intl del ciclo y arma la discrepancia + accion. Asi el
-      // emparejamiento compra<->extracto y el UPDATE no dependen del criterio del modelo.
+      // ── Discrepancia de TASA INTERNACIONAL (cruce determinista, MULTI-MES / split del día 1°) ──
+      // La Tasa de Usura cambia el 1° de cada mes: un ciclo que abarca dos meses puede traer DOS tasas.
+      // Fuente de verdad por compra: la tasa que el MOTOR capturó en su línea del extracto
+      // (cruce.matches[].tasa_extracto). Fallback: el mapa mes->tasa de la IA (resu.tasas_intl_extracto,
+      // o el escalar viejo resu.tasa_intl_extracto por compatibilidad). Si ninguna fuente da una tasa
+      // válida para una compra, se omite. Se agrupa por tasa objetivo → una sola acción con varios grupos.
       try {
-        const tasaExtracto = (resu.tasa_intl_extracto != null && resu.tasa_intl_extracto !== '') ? Number(resu.tasa_intl_extracto) : null;
-        if (tasaExtracto != null && tasaExtracto > 0 && tasaExtracto < 1 && mv && mv.tarjeta && Array.isArray(mv.compras)) {
+        const validTasa = (t) => t != null && t > 0 && t < 1;
+        const mapaIA = (resu.tasas_intl_extracto && typeof resu.tasas_intl_extracto === 'object') ? resu.tasas_intl_extracto : null;
+        const escalarIA = (resu.tasa_intl_extracto != null && resu.tasa_intl_extracto !== '') ? Number(resu.tasa_intl_extracto) : null;
+        // Tasa capturada por el motor en la línea del extracto, por compra_id (fuente PRIMARIA).
+        const tasaDet = {};
+        (cruce.matches || []).forEach(m => { if (m && m.compra_id != null && validTasa(Number(m.tasa_extracto))) tasaDet[Number(m.compra_id)] = Number(m.tasa_extracto); });
+
+        if (mv && mv.tarjeta && Array.isArray(mv.compras)) {
           const tjRow = db.prepare('SELECT tasa_mv_avances FROM tarjetas WHERE id=?').get(mv.tarjeta.id);
           const tasaGlobal = (tjRow && tjRow.tasa_mv_avances != null) ? tjRow.tasa_mv_avances : 0.01911;
           const EPS = 1e-6;
+          const tasaObjetivoDe = (c) => {
+            const det = tasaDet[Number(c.id)];
+            if (validTasa(det)) return det;                                          // 1) la de SU línea (motor)
+            const mes = String(c.fecha || '').slice(0, 7);
+            if (mapaIA && validTasa(Number(mapaIA[mes]))) return Number(mapaIA[mes]); // 2) la del mes (IA)
+            if (validTasa(escalarIA)) return escalarIA;                              // 3) escalar viejo (compat)
+            return null;                                                             // 4) sin fuente -> omitir
+          };
+          const actualEfectiva = (c) => (c.tasa_intl != null ? Number(c.tasa_intl) : tasaGlobal);
           const intlComp = mv.compras.filter(c => c && (c.es_internacional || Number(c.interes_intl) > 0));
-          const afectadas = intlComp.filter(c => {
+          // Agrupar las afectadas (tasa objetivo != snapshot actual) por su tasa objetivo (clave: 6 dec).
+          const porTasa = {};
+          intlComp.forEach(c => {
+            const obj = tasaObjetivoDe(c);
+            if (obj == null) return;
             const actual = (c.tasa_intl != null) ? Number(c.tasa_intl) : null;
-            return actual == null || Math.abs(actual - tasaExtracto) > EPS;
+            if (actual != null && Math.abs(actual - obj) <= EPS) return; // ya correcta
+            const key = obj.toFixed(6);
+            (porTasa[key] = porTasa[key] || { tasa: obj, compras: [] }).compras.push(c);
           });
-          if (afectadas.length) {
-            const compras_afectadas = afectadas.map(c => {
-              const actualEfectiva = (c.tasa_intl != null) ? Number(c.tasa_intl) : tasaGlobal;
-              const interes_actual = Math.round(Number(c.interes_intl) || 0);
-              const interes_nuevo = actualEfectiva > 0 ? Math.round(interes_actual * (tasaExtracto / actualEfectiva)) : interes_actual;
-              return { id: c.id, descripcion: c.descripcion, tasa_actual: (c.tasa_intl != null ? Number(c.tasa_intl) : null), interes_actual, interes_nuevo };
-            });
-            const algunaSinFijar = afectadas.some(c => c.tasa_intl == null);
+          const grupos = Object.keys(porTasa).map(k => {
+            const g = porTasa[k];
+            return {
+              tasa_intl: g.tasa,
+              compra_ids: g.compras.map(c => c.id),
+              meses: [...new Set(g.compras.map(c => String(c.fecha || '').slice(0, 7)))],
+              compras_afectadas: g.compras.map(c => {
+                const ef = actualEfectiva(c);
+                const interes_actual = Math.round(Number(c.interes_intl) || 0);
+                const interes_nuevo = ef > 0 ? Math.round(interes_actual * (g.tasa / ef)) : interes_actual;
+                return { id: c.id, descripcion: c.descripcion, mes: String(c.fecha || '').slice(0, 7), tasa_actual: (c.tasa_intl != null ? Number(c.tasa_intl) : null), interes_actual, interes_nuevo };
+              })
+            };
+          });
+          if (grupos.length) {
+            const algunaSinFijar = grupos.some(g => g.compras_afectadas.some(c => c.tasa_actual == null));
+            const multi = grupos.length > 1;
             if (!Array.isArray(resu.discrepancias)) resu.discrepancias = [];
             resu.discrepancias.push({
               tipo: 'tasa_intl_incorrecta',
-              descripcion: algunaSinFijar
-                ? 'El extracto factura las compras internacionales a una tasa mensual que la app aun no tiene fijada (snapshot ausente o distinto). Sincronizala para que el interes intl use la tasa real del extracto.'
-                : 'El extracto factura las compras internacionales con una tasa mensual distinta a la registrada en la app. Sincronizala para que el interes intl use la tasa real del extracto.',
+              descripcion: (multi
+                ? 'El ciclo abarca dos meses y el extracto factura las compras internacionales con una tasa por mes (la usura cambia el 1°). '
+                : 'El extracto factura las compras internacionales con una tasa mensual distinta a la registrada en la app. ')
+                + (algunaSinFijar ? 'Algunas compras aun no tienen su tasa fijada. ' : '')
+                + 'Sincronizalas para que el interes intl use la tasa real de cada mes.',
               severidad: 'media',
-              tasa_extracto: tasaExtracto,
-              tasa_app: (afectadas[0].tasa_intl != null ? Number(afectadas[0].tasa_intl) : tasaGlobal),
               compra_id: null,
-              compras_afectadas,
-              accion_sugerida: { operacion: 'actualizar_tasa_intl', parametros: { tarjeta_id: mv.tarjeta.id, ciclo: mv.ciclo, tasa_intl: tasaExtracto, compra_ids: afectadas.map(c => c.id) } }
+              grupos,
+              accion_sugerida: { operacion: 'actualizar_tasa_intl', parametros: { tarjeta_id: mv.tarjeta.id, ciclo: mv.ciclo, grupos: grupos.map(g => ({ tasa_intl: g.tasa_intl, compra_ids: g.compra_ids })) } }
             });
           }
         }

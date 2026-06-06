@@ -64,7 +64,7 @@ module.exports = {
       'D2. Las compras INTERNACIONALES (Apple, Habbo, PayPal, Hoyoverse, etc.) viven en el extracto en DOLARES, NO en el de pesos. En la app son compras con valor_usd > 0. No las reportes como faltantes en el extracto en pesos ni viceversa.',
       'D3. "VR MONEDA ORIG <valor> USA" dentro de una linea en dolares es el valor ORIGINAL en COP (solo informativo); el monto facturado real es el USD de la linea (ej. "$11,50"). Usa el monto USD para conciliar, nunca el VR MONEDA ORIG.',
       'D4. Las compras a 1 cuota muestran 0,0000% y no generan interes si se pagan al vencimiento (igual en COP y en USD). Los intereses corrientes se facturan como UN movimiento agregado el dia del corte (capitalizacion diaria); la app los aproxima por cuota, asi que una diferencia pequena va en "residual_no_explicado", no como discrepancia.',
-      'D5. tasa_intl_extracto debe ser null: Bancolombia Mastercard/Amex NO cobran el cargo "INT INTL" estilo Visa. El interes sobre compras en USD solo se cobra (en el extracto en dolares) si el saldo no se paga al vencimiento, no como un cargo automatico por ser internacional.'
+      'D5. tasas_intl_extracto debe ser {} (vacio): Bancolombia Mastercard/Amex NO cobran el cargo "INT INTL" estilo Visa. El interes sobre compras en USD solo se cobra (en el extracto en dolares) si el saldo no se paga al vencimiento, no como un cargo automatico por ser internacional.'
     ];
   }
 };

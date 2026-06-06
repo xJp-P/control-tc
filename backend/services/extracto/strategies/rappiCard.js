@@ -60,7 +60,7 @@ module.exports = {
   // Reglas específicas de RappiCard para el system prompt de la IA.
   reglasPrompt() {
     return [
-      'R1. RappiCard (emisor Davivienda) usa un extracto UNICO en COP: NO existe seccion USD ni "compra internacional" con interes especial. Las compras hechas en el exterior ya vienen convertidas a COP y se muestran como compras normales. Por eso "tasa_intl_extracto" debe ser null y NUNCA reportes discrepancias de clasificacion internacional ni cobros de interes intl.',
+      'R1. RappiCard (emisor Davivienda) usa un extracto UNICO en COP: NO existe seccion USD ni "compra internacional" con interes especial. Las compras hechas en el exterior ya vienen convertidas a COP y se muestran como compras normales. Por eso "tasas_intl_extracto" debe ser {} (vacio) y NUNCA reportes discrepancias de clasificacion internacional ni cobros de interes intl.',
       'R2. Las compras a 1 cuota aparecen con tasa 0,0000% (no generan interes si se pagan en el ciclo). Las compras diferidas (2 o mas cuotas) usan la tasa MV vigente y SI cobran interes desde la cuota 1 (a diferencia de Bancolombia, RappiCard no difiere el interes de la primera cuota).',
       'R3. El cashback (~0,1% del consumo, suele aparecer como "Cashback") NO es una compra ni un abono accionable: ignoralo por completo, nunca lo reportes como discrepancia.',
       'R4. Los movimientos "PAGOS RAPPIPAY APP" son desembolsos del producto Rappi (a veces a 1 cuota, a veces diferidos); trátalos como esten registrados en la app, no los marques como compras faltantes por defecto.'
