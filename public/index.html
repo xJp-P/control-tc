@@ -142,6 +142,7 @@ tbody tr.row-highlight { background: var(--accent-bg); }
 .form-group { margin-bottom: 16px; }
 .form-label { display: block; font-size: 12px; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px; }
 .form-input, .form-select { width: 100%; padding: 9px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-input); color: var(--text-primary); font-size: 13.5px; transition: border-color var(--transition); }
+.form-input:disabled, .form-select:disabled { background: var(--bg-tertiary); color: var(--text-muted); cursor: not-allowed; opacity: 0.7; }
 .form-input:focus, .form-select:focus { outline: none; border-color: var(--accent); }
 .form-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; }
 .form-hint { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
@@ -255,6 +256,12 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '4.3.2': [
+    'El Asistente de Conciliación ahora maneja el desfase de la fecha de corte en los dos sentidos. Antes solo entendía cuando el banco cerraba el mes ANTES de lo calculado (y movía tus compras al mes siguiente); ahora también detecta cuando el banco cierra DESPUÉS y te trae al mes actual las compras que la app había puesto en el siguiente. En ambos casos te las muestra una por una para moverlas con un clic, al mes en que el banco realmente las factura.',
+    'Las compras a cuotas (diferidas) y los avances ahora se cuadran con el extracto usando su capital (el valor sin intereses), que es justo lo que el banco imprime en cada línea. Antes la app comparaba el valor con los intereses ya incluidos y esas líneas no lograban cruzarse; ahora coinciden de forma exacta.',
+    'Ya puedes corregir el nombre de una compra a cuotas o de un avance en curso (y agregarle una nota), sin riesgo de tocar sus montos, fechas o tasas, que quedan fijos. Al cambiar el nombre, este se actualiza en toda la app a la vez: si era una compra dividida entre varias personas, el nuevo nombre aparece también en la pestaña Terceros y en cada una de sus partes.',
+    'La pestaña de Diferidas ahora agrupa las compras divididas igual que el resto de la app: una fila principal con la etiqueta "Dividida" y debajo cada parte (cada persona), en vez de mostrarlas sueltas. Además, al editar una compra a cuotas o un avance, los campos que no se pueden cambiar (monto, fecha, tasa, cuotas) se ven en gris para que quede claro de un vistazo cuáles son fijos.'
+  ],
   '4.3.1': [
     'El Asistente de Conciliación ahora detecta si el banco movió la fecha límite de pago de un ciclo (por ejemplo por un festivo o un fin de semana) y te deja ajustarla con un solo clic, sin entrar a los ajustes. Es solo un cambio visual: no altera tus intereses ni el pago mínimo.',
     'También te avisa cuando la fecha de corte del banco no coincide con la calculada por la app: te explica qué compras quedaron por fuera de este extracto (porque las hiciste después del corte real) y te ofrece moverlas, una por una, al mes en que el banco realmente las factura.'
@@ -2678,80 +2685,115 @@ function CardResumen({ tarjeta, onDataChange }) {
                 e('th', null, '')
               )),
               e('tbody', null,
-                diferidasCiclo.map(d => {
-                  var rowStyleD = { cursor: 'pointer' };
-                  if (cicloPagadoDif) rowStyleD.background = 'rgba(52,211,153,0.10)';
-                  // Per-cuota: determinar cuota_num para este ciclo y su bolsillo específico
-                  var cuotaNumDif = d.ciclos ? d.ciclos.indexOf(ciclo) + 1 : 1;
-                  var bolDif = (d.bolsillo_por_cuota && d.bolsillo_por_cuota[cuotaNumDif]) || 0;
-                  var targetDif = d.cuotaCorte || 0;
-                  var bolBadge = cicloPagadoDif
-                    ? 'pagado'
-                    : esFuturoCicloDif
-                      ? 'pendiente'
-                      : (Math.round(bolDif) >= Math.round(targetDif) && targetDif > 0 ? 'bolsillo' : bolDif > 0 ? 'bolsillo_parcial' : 'pendiente');
-                  var faltaDif = (!esFuturoCicloDif && bolBadge === 'bolsillo_parcial') ? Math.round(targetDif - bolDif) : 0;
-                  return e('tr', { key: d.id, onClick: () => loadDiferidaDetail(d.id), style: rowStyleD, className: selectedDiferida === d.id ? 'row-highlight' : '' },
-                    // Fecha
-                    e('td', null, fmtDate(d.fecha_compra)),
-                    // Descripcion: limpia (el nombre del tercero se movió a la columna Responsable).
-                    e('td', { style: { fontWeight: 600 } }, d.etiqueta),
-                    // Responsable: persona-dot + nombre si es de tercero, "—" si es Personal.
-                    e('td', { style: { fontSize: 12 } },
-                      d.es_de_tercero
-                        ? e('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 6 } },
-                            e('span', { style: { background: d.persona_color || 'var(--accent)', width: 8, height: 8, display: 'inline-block', borderRadius: '50%' } }),
-                            e('span', { style: { color: 'var(--text-primary)' } }, d.persona_nombre))
-                        : e('span', { style: { color: 'var(--text-muted)' } }, '—')
-                    ),
-                    // Cuota Corte
-                    e('td', { className: 'text-right text-mono', style: { fontWeight: 700, color: cicloPagadoDif ? 'var(--success)' : 'var(--danger)' } }, fmtCOP(d.cuotaCorte)),
-                    // Cuotas (N/X)
-                    e('td', null, (d.ciclos ? d.ciclos.indexOf(ciclo) + 1 : (d.num_cuotas - d.cuotasRestantes + 1)) + '/' + d.num_cuotas),
-                    // Tasa MV
-                    e('td', { className: 'text-mono' }, (d.tasa_mv * 100).toFixed(2) + '%'),
-                    // Saldo Actual
-                    e('td', { className: 'text-right text-mono', style: { fontWeight: 700, color: d.saldoActual > 0 ? 'var(--danger)' : 'var(--success)' } }, fmtCOP(d.saldoActual)),
-                    // Estado: una sola columna que captura ciclo pagado / liquidado / bolsillo / bolsillo_parcial / pendiente.
-                    // (Antes había una columna "Bolsillo" separada + otra "Estado" con "activo" redundante.)
-                    e('td', null,
+                (() => {
+                  // Agrupar las diferidas del ciclo por grupo_id (compra dividida = una diferida por parte):
+                  // las que comparten grupo_id se muestran como madre virtual + hijas indentadas (igual que
+                  // en Compras), evitando que aparezcan como items sueltos. El resto, filas individuales.
+                  const dGrupos = {}, dSingles = [];
+                  diferidasCiclo.forEach(d => { if (d.grupo_id) { (dGrupos[d.grupo_id] = dGrupos[d.grupo_id] || []).push(d); } else { dSingles.push(d); } });
+                  Object.keys(dGrupos).forEach(gid => { if (dGrupos[gid].length < 2) { dGrupos[gid].forEach(x => dSingles.push(x)); delete dGrupos[gid]; } });
+
+                  // Celda Estado/bolsillo de UNA diferida (cuota del corte). Reutilizada por filas
+                  // individuales e hijas. El intercept de openBolsilloModal ya bloquea editar bolsillo de tercero.
+                  const bolsilloCellDif = (d) => {
+                    var cn = d.ciclos ? d.ciclos.indexOf(ciclo) + 1 : 1;
+                    var bol = (d.bolsillo_por_cuota && d.bolsillo_por_cuota[cn]) || 0;
+                    var target = d.cuotaCorte || 0;
+                    var badge = cicloPagadoDif ? 'pagado' : esFuturoCicloDif ? 'pendiente' : (Math.round(bol) >= Math.round(target) && target > 0 ? 'bolsillo' : bol > 0 ? 'bolsillo_parcial' : 'pendiente');
+                    var falta = (!esFuturoCicloDif && badge === 'bolsillo_parcial') ? Math.round(target - bol) : 0;
+                    return e('td', null,
                       cicloPagadoDif
-                        ? e('span', { className: 'badge badge-pagado', style: { display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, padding: '4px 10px' } },
-                            e(Ico, { name: 'check', size: 12, color: 'currentColor' }), 'Pagado')
+                        ? e('span', { className: 'badge badge-pagado', style: { display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, padding: '4px 10px' } }, e(Ico, { name: 'check', size: 12, color: 'currentColor' }), 'Pagado')
                         : d.estado === 'liquidado'
                           ? e('span', { className: 'badge badge-liquidado' }, 'liquidado')
                           : e('span', {
-                              className: 'badge badge-' + bolBadge + ' badge-clickable',
+                              className: 'badge badge-' + badge + ' badge-clickable',
                               onClick: (ev) => {
                                 ev.stopPropagation();
                                 if (d.compra_id) {
-                                  openBolsilloModal({
-                                    id: d.compra_id,
-                                    descripcion: d.etiqueta + (d.es_de_tercero ? ' (' + d.persona_nombre + ')' : ''),
-                                    estado: 'diferida',
-                                    valor_cop: targetDif,
-                                    cuotaCorte: targetDif,
-                                    monto_bolsillo: bolDif,
-                                    _bolsilloTarget: targetDif,
-                                    cuota_num: cuotaNumDif,
-                                    cuotas_total: d.num_cuotas
-                                  });
-                                } else {
-                                  openBolsilloDiferidaModal(d);
-                                }
+                                  openBolsilloModal({ id: d.compra_id, descripcion: d.etiqueta + (d.es_de_tercero ? ' (' + d.persona_nombre + ')' : ''), estado: 'diferida', valor_cop: target, cuotaCorte: target, monto_bolsillo: bol, _bolsilloTarget: target, cuota_num: cn, cuotas_total: d.num_cuotas });
+                                } else { openBolsilloDiferidaModal(d); }
                               },
                               title: 'Clic para gestionar bolsillo (cuota del corte)',
                               style: { fontSize: 10 }
-                            }, bolBadge.replace(/_/g, ' ')),
-                      !cicloPagadoDif && d.estado !== 'liquidado' && faltaDif > 0 && e('div', { style: { fontSize: 10, color: 'var(--warning)', marginTop: 2 } }, 'Falta: ' + fmtCOP(faltaDif))
-                    ),
-                    e('td', { style: { whiteSpace: 'nowrap' } },
-                      !cicloPagadoDif && e('button', { className: 'btn btn-sm', onClick: (ev) => { ev.stopPropagation(); setEditDiferida(d); setShowDiferidaModal(true); } }, e(Ico, { name: 'edit', size: 14, color: 'currentColor' })),
-                      !cicloPagadoDif && ' ',
-                      !cicloPagadoDif && e('button', { className: 'btn btn-sm btn-danger', onClick: (ev) => { ev.stopPropagation(); removeDiferida(d.id); } }, e(Ico, { name: 'trash', size: 14, color: 'currentColor' }))
-                    )
-                  );
-                })
+                            }, badge.replace(/_/g, ' ')),
+                      !cicloPagadoDif && d.estado !== 'liquidado' && falta > 0 && e('div', { style: { fontSize: 10, color: 'var(--warning)', marginTop: 2 } }, 'Falta: ' + fmtCOP(falta))
+                    );
+                  };
+
+                  // Fila de diferida INDIVIDUAL (sin grupo): editar siempre + borrar con guard de ciclo pagado.
+                  const renderSingleDif = (d) => {
+                    var rowStyleD = { cursor: 'pointer' };
+                    if (cicloPagadoDif) rowStyleD.background = 'rgba(52,211,153,0.10)';
+                    return e('tr', { key: d.id, onClick: () => loadDiferidaDetail(d.id), style: rowStyleD, className: selectedDiferida === d.id ? 'row-highlight' : '' },
+                      e('td', null, fmtDate(d.fecha_compra)),
+                      e('td', { style: { fontWeight: 600 } }, d.etiqueta),
+                      e('td', { style: { fontSize: 12 } },
+                        d.es_de_tercero
+                          ? e('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 6 } }, e('span', { style: { background: d.persona_color || 'var(--accent)', width: 8, height: 8, display: 'inline-block', borderRadius: '50%' } }), e('span', { style: { color: 'var(--text-primary)' } }, d.persona_nombre))
+                          : e('span', { style: { color: 'var(--text-muted)' } }, '—')
+                      ),
+                      e('td', { className: 'text-right text-mono', style: { fontWeight: 700, color: cicloPagadoDif ? 'var(--success)' : 'var(--danger)' } }, fmtCOP(d.cuotaCorte)),
+                      e('td', null, (d.ciclos ? d.ciclos.indexOf(ciclo) + 1 : (d.num_cuotas - d.cuotasRestantes + 1)) + '/' + d.num_cuotas),
+                      e('td', { className: 'text-mono' }, (d.tasa_mv * 100).toFixed(2) + '%'),
+                      e('td', { className: 'text-right text-mono', style: { fontWeight: 700, color: d.saldoActual > 0 ? 'var(--danger)' : 'var(--success)' } }, fmtCOP(d.saldoActual)),
+                      bolsilloCellDif(d),
+                      e('td', { style: { whiteSpace: 'nowrap' } },
+                        e('button', { className: 'btn btn-sm', title: 'Editar nombre y nota', onClick: (ev) => { ev.stopPropagation(); setEditDiferida(d); setShowDiferidaModal(true); } }, e(Ico, { name: 'edit', size: 14, color: 'currentColor' })),
+                        !cicloPagadoDif && ' ',
+                        !cicloPagadoDif && e('button', { className: 'btn btn-sm btn-danger', onClick: (ev) => { ev.stopPropagation(); removeDiferida(d.id); } }, e(Ico, { name: 'trash', size: 14, color: 'currentColor' }))
+                      )
+                    );
+                  };
+
+                  // Grupo (compra dividida diferida): madre virtual con totales agregados + hijas indentadas.
+                  const renderGrupoDif = (gid, partes) => {
+                    var primera = partes[0];
+                    var cuotaNumG = primera.ciclos ? primera.ciclos.indexOf(ciclo) + 1 : 1;
+                    var totalCuota = partes.reduce((s, p) => s + (p.cuotaCorte || 0), 0);
+                    var totalSaldo = partes.reduce((s, p) => s + (p.saldoActual || 0), 0);
+                    var totalBol = partes.reduce((s, p) => { var cn = p.ciclos ? p.ciclos.indexOf(ciclo) + 1 : 1; return s + ((p.bolsillo_por_cuota && p.bolsillo_por_cuota[cn]) || 0); }, 0);
+                    var grupoBadge = cicloPagadoDif ? 'pagado' : esFuturoCicloDif ? 'pendiente' : (Math.round(totalBol) >= Math.round(totalCuota) && totalCuota > 0 ? 'bolsillo' : totalBol > 0 ? 'bolsillo_parcial' : 'pendiente');
+                    var madre = e('tr', { key: 'dgrp-' + gid, style: { background: cicloPagadoDif ? 'rgba(52,211,153,0.10)' : 'var(--bg-tertiary)' } },
+                      e('td', null, fmtDate(primera.fecha_compra)),
+                      e('td', { style: { fontWeight: 700 } }, primera.etiqueta),
+                      e('td', { style: { fontSize: 12 } },
+                        e('span', { className: 'badge', style: { display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, padding: '3px 8px', background: 'rgba(56,189,248,0.15)', color: '#38bdf8' } }, e(Ico, { name: 'users', size: 10, color: 'currentColor' }), 'Dividida'),
+                        e('span', { style: { fontSize: 10, color: 'var(--text-muted)', marginLeft: 6 } }, partes.length + ' partes')
+                      ),
+                      e('td', { className: 'text-right text-mono', style: { fontWeight: 700, color: cicloPagadoDif ? 'var(--success)' : 'var(--danger)' } }, fmtCOP(totalCuota)),
+                      e('td', null, cuotaNumG + '/' + primera.num_cuotas),
+                      e('td', { className: 'text-mono' }, (primera.tasa_mv * 100).toFixed(2) + '%'),
+                      e('td', { className: 'text-right text-mono', style: { fontWeight: 700, color: totalSaldo > 0 ? 'var(--danger)' : 'var(--success)' } }, fmtCOP(totalSaldo)),
+                      e('td', null, cicloPagadoDif
+                        ? e('span', { className: 'badge badge-pagado', style: { display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, padding: '4px 10px' } }, e(Ico, { name: 'check', size: 12, color: 'currentColor' }), 'Pagado')
+                        : e('span', { className: 'badge badge-' + grupoBadge }, grupoBadge.replace(/_/g, ' '))),
+                      e('td', { style: { whiteSpace: 'nowrap' } },
+                        e('button', { className: 'btn btn-sm', title: 'Editar nombre y nota', onClick: (ev) => { ev.stopPropagation(); setEditDiferida(primera); setShowDiferidaModal(true); } }, e(Ico, { name: 'edit', size: 14, color: 'currentColor' })))
+                    );
+                    var hijas = partes.map(d => e('tr', { key: 'dchild-' + d.id, onClick: () => loadDiferidaDetail(d.id), style: { cursor: 'pointer', background: cicloPagadoDif ? 'rgba(52,211,153,0.08)' : 'rgba(99,102,241,0.04)' }, className: selectedDiferida === d.id ? 'row-highlight' : '' },
+                      e('td', null),
+                      e('td', { style: { paddingLeft: 24, fontSize: 12, color: 'var(--text-muted)' } }, '↳ parte', e('span', { style: { fontSize: 10, marginLeft: 6 } }, 'Cuota ' + (d.ciclos ? d.ciclos.indexOf(ciclo) + 1 : 1) + '/' + d.num_cuotas)),
+                      e('td', { style: { fontSize: 12 } },
+                        d.es_de_tercero
+                          ? e('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 6 } }, e('span', { style: { background: d.persona_color || 'var(--accent)', width: 8, height: 8, display: 'inline-block', borderRadius: '50%' } }), e('span', { style: { color: 'var(--text-primary)' } }, d.persona_nombre))
+                          : e('span', { style: { color: 'var(--text-primary)' } }, 'Personal')
+                      ),
+                      e('td', { className: 'text-right text-mono', style: { fontSize: 13, fontWeight: 600, color: cicloPagadoDif ? 'var(--success)' : 'var(--danger)' } }, fmtCOP(d.cuotaCorte)),
+                      e('td', null, (d.ciclos ? d.ciclos.indexOf(ciclo) + 1 : 1) + '/' + d.num_cuotas),
+                      e('td', { className: 'text-mono' }, (d.tasa_mv * 100).toFixed(2) + '%'),
+                      e('td', { className: 'text-right text-mono', style: { fontSize: 13, fontWeight: 600, color: d.saldoActual > 0 ? 'var(--danger)' : 'var(--success)' } }, fmtCOP(d.saldoActual)),
+                      bolsilloCellDif(d),
+                      e('td', null)
+                    ));
+                    return [madre].concat(hijas);
+                  };
+
+                  var out = [];
+                  dSingles.forEach(d => out.push(renderSingleDif(d)));
+                  Object.keys(dGrupos).forEach(gid => { renderGrupoDif(gid, dGrupos[gid]).forEach(r => out.push(r)); });
+                  return out;
+                })()
               )
             )
           ),
@@ -2834,8 +2876,10 @@ function CardResumen({ tarjeta, onDataChange }) {
                   if (cicloPagado) rowStyle.background = 'rgba(52,211,153,0.10)';
                   // Inmutabilidad de avances: solo se puede editar/eliminar si el desembolso es del ciclo actual
                   // (antigüedad < 1 mes) Y el extracto de ese ciclo aún no está pagado.
-                  var canEditAvance = tarjeta && calcCicloLocal(a.fecha_desembolso, tarjeta.dia_corte) === cicloVigente(tarjeta.dia_corte) && !cicloPagado;
-                  var canDeleteAvance = canEditAvance;
+                  // Renombrar/anotar: SIEMPRE permitido (no toca la amortizacion; sirve para ajustar el
+                  // nombre al texto del extracto y mejorar el cruce del Asistente IA). Eliminar: inmutable
+                  // salvo ciclo vigente + extracto no pagado.
+                  var canDeleteAvance = tarjeta && calcCicloLocal(a.fecha_desembolso, tarjeta.dia_corte) === cicloVigente(tarjeta.dia_corte) && !cicloPagado;
                   return e('tr', { key: a.id, onClick: () => loadAvanceDetail(a.id), style: rowStyle, className: selectedAvance === a.id ? 'row-highlight' : '' },
                     e('td', { style: { fontWeight: 600 } }, a.etiqueta),
                     e('td', { className: 'text-right text-mono' }, fmtCOP(a.monto)),
@@ -2862,8 +2906,8 @@ function CardResumen({ tarjeta, onDataChange }) {
                       !cicloPagado && a.estado !== 'liquidado' && avFalta > 0 && e('div', { style: { fontSize: 11, color: 'var(--warning)', marginTop: 2 } }, 'Falta: ' + fmtCOP(avFalta))
                     ),
                     e('td', { style: { whiteSpace: 'nowrap' } },
-                      canEditAvance && e('button', { className: 'btn btn-sm', onClick: (ev) => { ev.stopPropagation(); setEditAvance(a); setShowAvanceModal(true); } }, e(Ico, { name: 'edit', size: 14, color: 'currentColor' })),
-                      canEditAvance && ' ',
+                      e('button', { className: 'btn btn-sm', title: 'Editar nombre y nota', onClick: (ev) => { ev.stopPropagation(); setEditAvance(a); setShowAvanceModal(true); } }, e(Ico, { name: 'edit', size: 14, color: 'currentColor' })),
+                      canDeleteAvance && ' ',
                       canDeleteAvance && e('button', { className: 'btn btn-sm btn-danger', onClick: (ev) => { ev.stopPropagation(); removeAvance(a.id); } }, e(Ico, { name: 'trash', size: 14, color: 'currentColor' }))
                     )
                   );
@@ -2942,11 +2986,11 @@ function CardResumen({ tarjeta, onDataChange }) {
       e(CompraForm, { item: editCompra, personas, ciclo, tarjeta, onSave: saveCompra, onCancel: () => setShowCompraModal(false) })
     ),
     // Edit avance modal
-    e(Modal, { show: showAvanceModal, onClose: () => setShowAvanceModal(false), title: 'Editar Avance' },
+    e(Modal, { show: showAvanceModal, onClose: () => setShowAvanceModal(false), title: 'Editar Detalles de Avance' },
       e(AvanceForm, { item: editAvance, tarjeta, onSave: saveAvance, onCancel: () => setShowAvanceModal(false) })
     ),
     // Edit diferida modal
-    e(Modal, { show: showDiferidaModal, onClose: () => setShowDiferidaModal(false), title: 'Editar Diferida' },
+    e(Modal, { show: showDiferidaModal, onClose: () => setShowDiferidaModal(false), title: 'Editar Detalles de Diferida' },
       e(DiferidaForm, { item: editDiferida, tarjeta, onSave: saveDiferida, onCancel: () => setShowDiferidaModal(false) })
     ),
     // Abono a avance modal
@@ -3651,6 +3695,8 @@ function AvanceForm({ item, tarjeta, onSave, onCancel }) {
   const [comision, setComision] = useState(item ? (item.comision || '') : '');
   const [notas, setNotas] = useState(item ? (item.notas || '') : '');
   const [fetchingRate, setFetchingRate] = useState(false);
+  // En edicion solo se permiten nombre y nota; el resto es fijo (reescribiria la amortizacion).
+  const isEdit = !!item;
 
   async function fetchRate() {
     if (!tarjeta.url_tasas) { toastErr('Esta tarjeta no tiene URL de tasas configurada'); return; }
@@ -3669,6 +3715,7 @@ function AvanceForm({ item, tarjeta, onSave, onCancel }) {
 
   function submit(ev) {
     ev.preventDefault();
+    if (isEdit) { onSave({ etiqueta, notas }); return; } // edicion restringida: solo nombre + nota
     onSave({ etiqueta, monto: parseFloat(monto), tasa_mv: parseFloat(tasaMv) / 100, plazo: 24, fecha_desembolso: fechaDesembolso, dia_corte: tarjeta.dia_corte, estado: 'activo', notas, comision: parseFloat(comision) || 0 });
   }
 
@@ -3680,20 +3727,22 @@ function AvanceForm({ item, tarjeta, onSave, onCancel }) {
     e('div', { className: 'form-row' },
       e('div', { className: 'form-group' },
         e('label', { className: 'form-label' }, 'Monto'),
-        e(MoneyInput, { value: monto, onChange: val => setMonto(val), required: true })
+        isEdit
+          ? e('input', { type: 'text', className: 'form-input', value: fmtNumInput(monto), disabled: true })
+          : e(MoneyInput, { value: monto, onChange: val => setMonto(val), required: true })
       ),
       e('div', { className: 'form-group' },
         e('label', { className: 'form-label' }, 'Tasa Mensual (MV %)'),
         e('div', { style: { display: 'flex', gap: 6 } },
-          e('input', { type: 'number', step: '0.0001', className: 'form-input', value: tasaMv, onChange: ev => setTasaMv(ev.target.value), required: true }),
-          tarjeta.url_tasas && e('button', { type: 'button', className: 'rate-fetch-btn' + (fetchingRate ? ' loading' : ''), onClick: fetchRate, disabled: fetchingRate, title: 'Consultar tasa actual desde la web' }, e(Ico, { name: 'globe', size: 14, color: 'currentColor' }))
+          e('input', { type: 'number', step: '0.0001', className: 'form-input', value: tasaMv, onChange: ev => setTasaMv(ev.target.value), required: true, disabled: isEdit }),
+          !isEdit && tarjeta.url_tasas && e('button', { type: 'button', className: 'rate-fetch-btn' + (fetchingRate ? ' loading' : ''), onClick: fetchRate, disabled: fetchingRate, title: 'Consultar tasa actual desde la web' }, e(Ico, { name: 'globe', size: 14, color: 'currentColor' }))
         )
       )
     ),
     e('div', { className: 'form-row' },
       e('div', { className: 'form-group' },
         e('label', { className: 'form-label' }, 'Fecha Desembolso'),
-        e('input', { type: 'date', className: 'form-input', value: fechaDesembolso, onChange: ev => setFechaDesembolso(ev.target.value), required: true })
+        e('input', { type: 'date', className: 'form-input', value: fechaDesembolso, onChange: ev => setFechaDesembolso(ev.target.value), required: true, disabled: isEdit })
       ),
       e('div', { className: 'form-group' },
         e('label', { className: 'form-label' }, 'Plazo'),
@@ -3703,13 +3752,16 @@ function AvanceForm({ item, tarjeta, onSave, onCancel }) {
     e('div', { className: 'form-row' },
       e('div', { className: 'form-group' },
         e('label', { className: 'form-label' }, 'Comision del Avance'),
-        e(MoneyInput, { value: comision, onChange: val => setComision(val), placeholder: 'Ej: 6840' })
+        isEdit
+          ? e('input', { type: 'text', className: 'form-input', value: fmtNumInput(comision), disabled: true })
+          : e(MoneyInput, { value: comision, onChange: val => setComision(val), placeholder: 'Ej: 6840' })
       ),
       e('div', { className: 'form-group' },
         e('label', { className: 'form-label' }, 'Notas'),
         e('input', { type: 'text', className: 'form-input', value: notas, onChange: ev => setNotas(ev.target.value) })
       )
     ),
+    isEdit && e('div', { style: { fontSize: 12, color: 'var(--text-muted)', marginTop: 4 } }, 'En una transaccion en curso solo se puede cambiar el nombre y la nota; lo demas es fijo.'),
     e('div', { className: 'modal-actions' },
       e('button', { type: 'button', className: 'btn', onClick: onCancel }, 'Cancelar'),
       e('button', { type: 'submit', className: 'btn btn-primary' }, 'Guardar')
@@ -3745,6 +3797,8 @@ function DiferidaForm({ item, tarjeta, onSave, onCancel }) {
   const [estado, setEstado] = useState(item ? item.estado : 'activo');
   const [notas, setNotas] = useState(item ? (item.notas || '') : '');
   const [fetchingRate, setFetchingRate] = useState(false);
+  // En edicion solo se permiten nombre y nota; el resto es fijo (reescribiria la amortizacion).
+  const isEdit = !!item;
 
   useEffect(() => {
     if (fechaCompra && !item) {
@@ -3773,6 +3827,7 @@ function DiferidaForm({ item, tarjeta, onSave, onCancel }) {
 
   function submit(ev) {
     ev.preventDefault();
+    if (isEdit) { onSave({ etiqueta, notas }); return; } // edicion restringida: solo nombre + nota
     onSave({ etiqueta, monto: parseFloat(monto), tasa_mv: parseFloat(tasaMv) / 100, num_cuotas: parseInt(numCuotas), fecha_compra: fechaCompra, fecha_primer_corte: fechaPrimerCorte, estado, notas });
   }
 
@@ -3784,37 +3839,40 @@ function DiferidaForm({ item, tarjeta, onSave, onCancel }) {
     e('div', { className: 'form-row' },
       e('div', { className: 'form-group' },
         e('label', { className: 'form-label' }, 'Monto'),
-        e(MoneyInput, { value: monto, onChange: val => setMonto(val), required: true })
+        isEdit
+          ? e('input', { type: 'text', className: 'form-input', value: fmtNumInput(monto), disabled: true })
+          : e(MoneyInput, { value: monto, onChange: val => setMonto(val), required: true })
       ),
       e('div', { className: 'form-group' },
         e('label', { className: 'form-label' }, 'Tasa Mensual (MV %)'),
         e('div', { style: { display: 'flex', gap: 6 } },
-          e('input', { type: 'number', step: '0.0001', className: 'form-input', value: tasaMv, onChange: ev => setTasaMv(ev.target.value), required: true }),
-          tarjeta.url_tasas && e('button', { type: 'button', className: 'rate-fetch-btn' + (fetchingRate ? ' loading' : ''), onClick: fetchRate, disabled: fetchingRate, title: 'Consultar tasa actual' }, e(Ico, { name: 'globe', size: 14, color: 'currentColor' }))
+          e('input', { type: 'number', step: '0.0001', className: 'form-input', value: tasaMv, onChange: ev => setTasaMv(ev.target.value), required: true, disabled: isEdit }),
+          !isEdit && tarjeta.url_tasas && e('button', { type: 'button', className: 'rate-fetch-btn' + (fetchingRate ? ' loading' : ''), onClick: fetchRate, disabled: fetchingRate, title: 'Consultar tasa actual' }, e(Ico, { name: 'globe', size: 14, color: 'currentColor' }))
         )
       ),
       e('div', { className: 'form-group' },
         e('label', { className: 'form-label' }, 'Numero de Cuotas'),
-        e('input', { type: 'number', className: 'form-input', value: numCuotas, onChange: ev => setNumCuotas(ev.target.value), required: true })
+        e('input', { type: 'number', className: 'form-input', value: numCuotas, onChange: ev => setNumCuotas(ev.target.value), required: true, disabled: isEdit })
       )
     ),
     e('div', { className: 'form-row' },
       e('div', { className: 'form-group' },
         e('label', { className: 'form-label' }, 'Fecha Compra'),
-        e('input', { type: 'date', className: 'form-input', value: fechaCompra, onChange: ev => setFechaCompra(ev.target.value), required: true })
+        e('input', { type: 'date', className: 'form-input', value: fechaCompra, onChange: ev => setFechaCompra(ev.target.value), required: true, disabled: isEdit })
       ),
       e('div', { className: 'form-group' },
         e('label', { className: 'form-label' }, 'Fecha Primer Corte'),
-        e('input', { type: 'date', className: 'form-input', value: fechaPrimerCorte, onChange: ev => setFechaPrimerCorte(ev.target.value), required: true })
+        e('input', { type: 'date', className: 'form-input', value: fechaPrimerCorte, onChange: ev => setFechaPrimerCorte(ev.target.value), required: true, disabled: isEdit })
       ),
       e('div', { className: 'form-group' },
         e('label', { className: 'form-label' }, 'Estado'),
-        e('select', { className: 'form-select', value: estado, onChange: ev => setEstado(ev.target.value) },
+        e('select', { className: 'form-select', value: estado, onChange: ev => setEstado(ev.target.value), disabled: isEdit },
           e('option', { value: 'activo' }, 'Activo'), e('option', { value: 'liquidado' }, 'Liquidado')
         )
       )
     ),
     e('div', { className: 'form-group' }, e('label', { className: 'form-label' }, 'Notas'), e('input', { type: 'text', className: 'form-input', value: notas, onChange: ev => setNotas(ev.target.value) })),
+    isEdit && e('div', { style: { fontSize: 12, color: 'var(--text-muted)', marginTop: 4 } }, 'En una transaccion en curso solo se puede cambiar el nombre y la nota; lo demas es fijo.'),
     e('div', { className: 'modal-actions' },
       e('button', { type: 'button', className: 'btn', onClick: onCancel }, 'Cancelar'),
       e('button', { type: 'submit', className: 'btn btn-primary' }, 'Guardar')
@@ -5400,19 +5458,23 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
           // como acciones mover_ciclo separadas (con su badge "por desfase de corte").
           if (d.tipo === 'corte_desfasado') {
             const afc = Array.isArray(d.compras_afectadas) ? d.compras_afectadas : [];
+            const inverso = d.sentido === 'inverso';
             return e('div', { key: i, style: { border: '1px dashed rgba(79,140,255,0.5)', background: 'rgba(79,140,255,0.06)', borderRadius: 8, padding: '10px 12px', marginBottom: 8 } },
               e('div', { style: { display: 'flex', alignItems: 'center', gap: 6, marginBottom: 5 } },
                 e(Ico, { name: 'bulb', size: 14, color: 'var(--accent)' }),
                 e('span', { style: { fontSize: 11, fontWeight: 700, color: 'var(--accent)', textTransform: 'uppercase', letterSpacing: 0.4 } }, 'Aviso · desfase de fecha de corte')
               ),
               e('div', { style: { fontSize: 12.5, color: 'var(--text-secondary)', lineHeight: 1.45 } },
-                'El banco cortó el ', e('strong', { style: { color: 'var(--text-primary)' } }, fmtDate(d.fecha_extracto)),
-                ', pero la app calculó el ', e('strong', { style: { color: 'var(--text-primary)' } }, fmtDate(d.fecha_app)), '.'),
+                inverso
+                  ? ['El banco cerró el ', e('strong', { key: 'e', style: { color: 'var(--text-primary)' } }, fmtDate(d.fecha_extracto)), ', después del corte que calculó la app (', e('strong', { key: 'a', style: { color: 'var(--text-primary)' } }, fmtDate(d.fecha_app)), ').']
+                  : ['El banco cortó el ', e('strong', { key: 'e', style: { color: 'var(--text-primary)' } }, fmtDate(d.fecha_extracto)), ', pero la app calculó el ', e('strong', { key: 'a', style: { color: 'var(--text-primary)' } }, fmtDate(d.fecha_app)), '.']),
               afc.length > 0
                 ? e('div', { style: { marginTop: 6, fontSize: 11.5, color: 'var(--text-muted)', lineHeight: 1.4 } },
-                    'Estas ' + afc.length + ' compra(s) quedaron después del corte real; el banco las factura en ' + (afc[0].ciclo_destino || 'el próximo ciclo') + '. Abajo aparecen como acciones para moverlas:',
+                    inverso
+                      ? ('Estas ' + afc.length + ' compra(s) que la app puso en ' + (d.ciclo_origen || 'el próximo ciclo') + ' el banco las facturó en ESTE ciclo. Abajo aparecen como acciones para traerlas:')
+                      : ('Estas ' + afc.length + ' compra(s) quedaron después del corte real; el banco las factura en ' + (afc[0].ciclo_destino || 'el próximo ciclo') + '. Abajo aparecen como acciones para moverlas:'),
                     afc.map((cc, ci) => e('div', { key: ci, style: { color: 'var(--text-secondary)', marginTop: 2 } }, '· ' + (cc.descripcion || ('#' + cc.compra_id)) + '  (' + fmtDate(cc.fecha) + ')')))
-                : e('div', { style: { marginTop: 6, fontSize: 11.5, color: 'var(--text-muted)' } }, 'No hay compras de la app dentro de la ventana del desfase; es solo informativo.')
+                : e('div', { style: { marginTop: 6, fontSize: 11.5, color: 'var(--text-muted)' } }, inverso ? 'No hay compras del mes siguiente dentro de la ventana del desfase; es solo informativo.' : 'No hay compras de la app dentro de la ventana del desfase; es solo informativo.')
             );
           }
           return e('div', { key: i, style: { border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px', marginBottom: 8, background: 'var(--bg-input)' } },

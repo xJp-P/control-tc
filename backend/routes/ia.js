@@ -186,7 +186,25 @@ module.exports = function(db, ctx) {
       // monto + fecha (+/-1) + descripcion, con pool. Alimenta el prompt y filtra falsos positivos.
       // Compras agrupadas por moneda: COP (mv.compras) y USD (mv.compras_usd, tarjetas duales). Para
       // tarjetas no duales el grupo USD va vacio y el cruce queda mono-moneda (comportamiento intacto).
-      const cruce = cruzar(texto_redactado, { COP: (mv && mv.compras) || [], USD: (mv && mv.compras_usd) || [] }, estrategia);
+      // Normaliza las CUOTAS del ciclo (diferidas y avances) al contrato del motor para que tambien
+      // se crucen contra el extracto. Se emparejan por su CAPITAL (campo_monto='capital'): el banco
+      // imprime el capital de la cuota en la linea y unifica los intereses en un bloque aparte, asi
+      // que su `total` (capital+interes) nunca cuadraria con la linea. `tipo` marca el origen para que
+      // la cascada de corte_desfasado (exclusiva de compras de 1 cuota) las ignore. Son montos en COP.
+      const cuotasDif = ((mv && mv.diferidas) || []).map((d, i) => ({
+        id: (d.compra_id != null ? d.compra_id : ('dif_' + i)),
+        descripcion: d.etiqueta, fecha: d.fecha, capital: d.capital,
+        campo_monto: 'capital', tipo: 'diferida'
+      }));
+      const cuotasAv = ((mv && mv.avances) || []).map((a, i) => ({
+        id: 'av_' + i,
+        descripcion: a.etiqueta, fecha: a.fecha, capital: a.capital,
+        campo_monto: 'capital', tipo: 'avance'
+      }));
+      const cruce = cruzar(texto_redactado, {
+        COP: [...((mv && mv.compras) || []), ...cuotasDif, ...cuotasAv],
+        USD: (mv && mv.compras_usd) || []
+      }, estrategia);
       const { system, user } = construirPrompt(mv, texto_redactado, bancoDoc, contexto_usuario, cruce, estrategia);
 
       console.log('[IA] Iniciando analisis. Proveedor: ' + prov + ', Modelo: ' + (model || '(default del proveedor)'));
@@ -338,7 +356,7 @@ module.exports = function(db, ctx) {
         if (fcExt && fcApp) {
           const d = difDias(fcExt, fcApp);
           if (d != null && d !== 0 && Math.abs(d) <= 5) {
-            const cicloDestino = cicloMasUno(mv.ciclo);
+            const cicloSig = cicloMasUno(mv.ciclo);
             // Dedupe: compra_ids que la IA YA marco con mover_ciclo (regla 4), para no duplicar.
             const yaMover = new Set();
             resu.discrepancias.forEach(dd => {
@@ -346,18 +364,52 @@ module.exports = function(db, ctx) {
               const cid = dd.compra_id != null ? dd.compra_id : (dd.accion_sugerida && dd.accion_sugerida.parametros && dd.accion_sugerida.parametros.compra_id);
               if (op === 'mover_ciclo' && cid != null) yaMover.add(Number(cid));
             });
-            // Compras de la app que NO cruzaron y cayeron en la ventana (corte_real, corte_app].
-            const afectadas = (cruce.comprasSinMatch || []).filter(c => {
-              if (!c.fecha || c.compra_id == null || yaMover.has(Number(c.compra_id))) return false;
-              const dReal = difDias(c.fecha, fcExt), dApp = difDias(c.fecha, fcApp);
-              return dReal != null && dApp != null && dReal > 0 && dApp <= 0;
-            });
+
+            // Dos sentidos del desfase, segun el signo de d:
+            //   d<0 (banco corto ANTES): compras de la app que cayeron fuera (cruce.comprasSinMatch,
+            //        ventana (corte_real, corte_app]) -> mover al ciclo SIGUIENTE.
+            //   d>0 (banco corto DESPUES, INVERSO): el banco facturo en ESTE ciclo compras que la app
+            //        puso en el SIGUIENTE. Se detectan cruzando las lineas del PDF sin contraparte
+            //        (cruce.lineasSinMatch) contra las compras del ciclo+1 (ventana (corte_app, corte_real])
+            //        reutilizando el motor via una estrategia envoltorio -> traerlas al ciclo ACTUAL.
+            const inverso = d > 0;
+            const cicloDestino = inverso ? mv.ciclo : cicloSig;
+            let afectadas = [];
+            if (!inverso) {
+              afectadas = (cruce.comprasSinMatch || []).filter(c => {
+                // Solo compras de 1 cuota se "mueven de ciclo": las cuotas de diferida/avance (tipo !=
+                // 'compra') tienen su propia amortizacion y no se reubican por desfase de corte.
+                if (c.tipo && c.tipo !== 'compra') return false;
+                if (!c.fecha || c.compra_id == null || yaMover.has(Number(c.compra_id))) return false;
+                const dReal = difDias(c.fecha, fcExt), dApp = difDias(c.fecha, fcApp);
+                return dReal != null && dApp != null && dReal > 0 && dApp <= 0;
+              }).map(c => ({ compra_id: c.compra_id, descripcion: c.descripcion, fecha: c.fecha, total: c.total }));
+            } else {
+              try {
+                const mvSig = construirMovimientos(db, mv.tarjeta.id, cicloSig);
+                if (mvSig && !mvSig.error) {
+                  // Estrategia envoltorio: el motor cruza las lineas sobrantes (ya parseadas) contra las
+                  // compras de 1 cuota del ciclo+1, con su mismo algoritmo (monto + fecha +-1 + Dice), multi-moneda.
+                  const cruceSig = cruzar('', { COP: (mvSig.compras || []), USD: (mvSig.compras_usd || []) }, { parsearLineas: () => (cruce.lineasSinMatch || []) });
+                  afectadas = (cruceSig.matches || []).filter(m => {
+                    if (m.compra_id == null || yaMover.has(Number(m.compra_id)) || !m.fecha_app) return false;
+                    const dReal = difDias(m.fecha_app, fcExt), dApp = difDias(m.fecha_app, fcApp);
+                    return dReal != null && dApp != null && dApp > 0 && dReal <= 0; // ventana (corte_app, corte_real]
+                  }).map(m => ({ compra_id: m.compra_id, descripcion: m.descripcion_app, fecha: m.fecha_app, total: m.monto }));
+                }
+              } catch (e2) { console.log('[ia/analizar] cruce inverso de corte:', e2 && e2.message); }
+            }
+
             resu.discrepancias.push({
               tipo: 'corte_desfasado',
-              descripcion: 'El banco cerro el ciclo el ' + fcExt + ', no el ' + fcApp + ' que calculo la app. Las compras hechas despues del ' + fcExt + ' entran al extracto de ' + cicloDestino + '.',
+              sentido: inverso ? 'inverso' : 'atras',
+              descripcion: inverso
+                ? ('El banco cerro el ciclo el ' + fcExt + ', despues del ' + fcApp + ' que calculo la app. Compras que la app puso en ' + cicloSig + ' el banco las facturo en este ciclo (' + mv.ciclo + ').')
+                : ('El banco cerro el ciclo el ' + fcExt + ', no el ' + fcApp + ' que calculo la app. Las compras hechas despues del ' + fcExt + ' entran al extracto de ' + cicloSig + '.'),
               severidad: 'media',
               fecha_app: fcApp,
               fecha_extracto: fcExt,
+              ciclo_origen: inverso ? cicloSig : null,
               compra_id: null,
               accion_sugerida: { operacion: 'ninguna', parametros: {} },
               compras_afectadas: afectadas.map(c => ({ compra_id: c.compra_id, descripcion: c.descripcion, fecha: c.fecha, ciclo_destino: cicloDestino }))
@@ -367,7 +419,9 @@ module.exports = function(db, ctx) {
               yaMover.add(Number(c.compra_id));
               resu.discrepancias.push({
                 tipo: 'mover_ciclo',
-                descripcion: 'Compra "' + (c.descripcion || ('#' + c.compra_id)) + '" del ' + c.fecha + ': quedo despues del corte real (' + fcExt + '), el banco la factura en ' + cicloDestino + '. Muevela a ese ciclo.',
+                descripcion: inverso
+                  ? ('Compra "' + (c.descripcion || ('#' + c.compra_id)) + '" del ' + c.fecha + ': el banco la facturo en este ciclo (' + cicloDestino + '), no en ' + cicloSig + ' donde la puso la app. Traela a este ciclo.')
+                  : ('Compra "' + (c.descripcion || ('#' + c.compra_id)) + '" del ' + c.fecha + ': quedo despues del corte real (' + fcExt + '), el banco la factura en ' + cicloDestino + '. Muevela a ese ciclo.'),
                 severidad: 'media',
                 valor_app: c.total,
                 compra_id: c.compra_id,

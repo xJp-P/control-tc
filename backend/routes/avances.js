@@ -71,14 +71,19 @@ module.exports = function(db, { logAction, tjNombre }) {
     return null;
   }
 
+  // EDICION RESTRINGIDA: solo se actualizan el nombre (etiqueta) y la nota. El resto (monto, tasa,
+  // plazo, fecha, comision) es INMUTABLE: cambiarlo reescribiria la tabla de amortizacion de un avance
+  // en curso. Cualquier otro campo del payload se IGNORA. Renombrar/anotar es seguro SIEMPRE (no afecta
+  // ningun calculo), por eso NO pasa por validateAvanceMutable: permite ajustar el nombre al texto del
+  // extracto aunque el avance sea de un ciclo viejo o pagado (necesario para el cruce del Asistente IA).
   router.put('/:id', (req, res) => {
-    const { tarjeta_id, etiqueta, monto, tasa_mv, plazo, fecha_desembolso, dia_corte, estado, notas, comision } = req.body;
-    const current = db.prepare('SELECT tarjeta_id, fecha_desembolso, dia_corte FROM avances WHERE id=?').get(req.params.id);
-    const err = validateAvanceMutable(current);
-    if (err) return res.status(403).json({ error: err });
-    db.prepare(`UPDATE avances SET tarjeta_id=?, etiqueta=?, monto=?, tasa_mv=?, plazo=?, fecha_desembolso=?, dia_corte=?, estado=?, notas=?, comision=? WHERE id=?`)
-      .run(tarjeta_id, etiqueta, monto, tasa_mv, plazo, fecha_desembolso, dia_corte, estado, notas, comision || 0, req.params.id);
-    logAction('editar', tjNombre(tarjeta_id) + 'Avance editado: ' + etiqueta);
+    const av = db.prepare('SELECT tarjeta_id FROM avances WHERE id=?').get(req.params.id);
+    if (!av) return res.status(404).json({ error: 'Avance no encontrado' });
+    const etiqueta = (req.body && req.body.etiqueta != null) ? String(req.body.etiqueta).trim() : '';
+    if (!etiqueta) return res.status(400).json({ error: 'La etiqueta no puede estar vacia.' });
+    const notas = (req.body && req.body.notas != null) ? String(req.body.notas) : null;
+    db.prepare('UPDATE avances SET etiqueta=?, notas=? WHERE id=?').run(etiqueta, notas, req.params.id);
+    logAction('editar', tjNombre(av.tarjeta_id) + 'Avance renombrado: ' + etiqueta);
     res.json({ ok: true });
   });
 

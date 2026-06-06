@@ -25,7 +25,7 @@ module.exports = function(db, { logAction, tjNombre }) {
         LEFT JOIN personas p ON c.persona_id = p.id
         WHERE c.diferida_id = ? AND c.persona_id IS NOT NULL LIMIT 1`).get(d.id);
       // Compra vinculada a esta diferida (para gestionar bolsillo). Toma la primera/principal.
-      const compraVinc = db.prepare(`SELECT id, monto_bolsillo, valor_cop FROM compras WHERE diferida_id = ? ORDER BY id LIMIT 1`).get(d.id);
+      const compraVinc = db.prepare(`SELECT id, monto_bolsillo, valor_cop, grupo_id FROM compras WHERE diferida_id = ? ORDER BY id LIMIT 1`).get(d.id);
       // Per-cuota bolsillo: mapa {cuota_num: monto} para la compra vinculada
       const bolPorCuota = {};
       if (compraVinc) {
@@ -42,6 +42,7 @@ module.exports = function(db, { logAction, tjNombre }) {
         persona_nombre: compraPersona ? compraPersona.nombre : null,
         persona_color: compraPersona ? compraPersona.color : null,
         compra_id: compraVinc ? compraVinc.id : null,
+        grupo_id: compraVinc ? compraVinc.grupo_id : null,
         // Bolsillo total (cache) y per-cuota
         monto_bolsillo: compraVinc ? (compraVinc.monto_bolsillo || 0) : (d.monto_bolsillo || 0),
         bolsillo_por_cuota: bolPorCuota
@@ -81,14 +82,37 @@ module.exports = function(db, { logAction, tjNombre }) {
     return null;
   }
 
+  // EDICION RESTRINGIDA: solo se actualizan el nombre (etiqueta) y la nota. El resto (monto, tasa,
+  // num_cuotas, fechas, estado) es INMUTABLE: cambiarlo reescribiria la tabla de amortizacion. Cualquier
+  // otro campo del payload se IGNORA. Renombrar/anotar es seguro SIEMPRE (no afecta ningun calculo), por
+  // eso NO pasa por validateDiferidaMutable: permite ajustar el nombre al texto del extracto aunque la
+  // diferida sea de un ciclo pagado (necesario para el cruce del Asistente IA).
   router.put('/:id', (req, res) => {
-    const { tarjeta_id, etiqueta, monto, tasa_mv, num_cuotas, fecha_compra, fecha_primer_corte, estado, notas } = req.body;
-    const current = db.prepare('SELECT tarjeta_id, fecha_compra FROM diferidas WHERE id=?').get(req.params.id);
-    const err = validateDiferidaMutable(current);
-    if (err) return res.status(403).json({ error: err });
-    db.prepare(`UPDATE diferidas SET tarjeta_id=?, etiqueta=?, monto=?, tasa_mv=?, num_cuotas=?, fecha_compra=?, fecha_primer_corte=?, estado=?, notas=? WHERE id=?`)
-      .run(tarjeta_id, etiqueta, monto, tasa_mv, num_cuotas, fecha_compra, fecha_primer_corte, estado, notas, req.params.id);
-    logAction('editar', tjNombre(tarjeta_id) + 'Diferida editada: ' + etiqueta);
+    const current = db.prepare('SELECT tarjeta_id FROM diferidas WHERE id=?').get(req.params.id);
+    if (!current) return res.status(404).json({ error: 'Diferida no encontrada' });
+    const etiqueta = (req.body && req.body.etiqueta != null) ? String(req.body.etiqueta).trim() : '';
+    if (!etiqueta) return res.status(400).json({ error: 'La etiqueta no puede estar vacia.' });
+    const notas = (req.body && req.body.notas != null) ? String(req.body.notas) : null;
+    // Cascada del NOMBRE a `compras` (la diferida se vincula via compras.diferida_id). Sin esto, vistas
+    // como Terceros —que leen compras.descripcion— mostrarian el nombre viejo. Si la compra es parte de
+    // una compra dividida (grupo_id), el nombre se aplica a TODO el grupo: todas las compras del grupo y
+    // todas sus diferidas hermanas, para que la BD quede 100% sincronizada. Si no hay compra vinculada
+    // (ej. diferida directa de RappiCard), no hay cascada. Solo se propaga la descripcion; las notas son
+    // privadas de cada registro. Transaccional para que nombre y cascada queden atomicos.
+    const aplicar = db.transaction(() => {
+      db.prepare('UPDATE diferidas SET etiqueta=?, notas=? WHERE id=?').run(etiqueta, notas, req.params.id);
+      const compraVinc = db.prepare('SELECT id, grupo_id FROM compras WHERE diferida_id=? LIMIT 1').get(req.params.id);
+      if (compraVinc) {
+        if (compraVinc.grupo_id) {
+          db.prepare('UPDATE compras SET descripcion=? WHERE grupo_id=?').run(etiqueta, compraVinc.grupo_id);
+          db.prepare('UPDATE diferidas SET etiqueta=? WHERE id IN (SELECT diferida_id FROM compras WHERE grupo_id=? AND diferida_id IS NOT NULL)').run(etiqueta, compraVinc.grupo_id);
+        } else {
+          db.prepare('UPDATE compras SET descripcion=? WHERE id=?').run(etiqueta, compraVinc.id);
+        }
+      }
+    });
+    aplicar();
+    logAction('editar', tjNombre(current.tarjeta_id) + 'Diferida renombrada: ' + etiqueta);
     res.json({ ok: true });
   });
 

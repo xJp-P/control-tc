@@ -116,7 +116,11 @@ function parsearTabular(texto, opts) {
   return out;
 }
 
-// Campo de monto en la compra de la app, según la moneda de la línea.
+// Campo de monto en la compra de la app, según la moneda de la línea. Es el DEFECTO: un objeto puede
+// declarar su propio `campo_monto` (ver montoDe) cuando lo que el banco imprime en la línea NO es su
+// `total`. Caso real: las cuotas de diferida/avance se cruzan por su CAPITAL (lo que el banco factura
+// en la línea), porque el banco unifica los intereses en un bloque aparte; su `total` (capital+interés)
+// nunca coincidiría con la línea.
 const CAMPO_MONTO = { COP: 'total', USD: 'total_usd' };
 
 /**
@@ -139,7 +143,9 @@ function cruzar(texto, comprasInput, estrategia, opts) {
   // Un array suelto se interpreta como compras en COP (mantiene el contrato mono-moneda de Visa/Rappi/Nu).
   const grupos = Array.isArray(comprasInput) ? { COP: comprasInput } : (comprasInput || {});
   const comprasDe = (moneda) => (grupos[moneda] || []).filter(c => c && c.id != null);
-  const montoDe = (c, moneda) => Number(c[CAMPO_MONTO[moneda]]) || 0;
+  // Lee el monto facturable del objeto. Por defecto, el campo de la moneda (COP->total, USD->total_usd);
+  // pero si el objeto DECLARA `campo_monto` (ej. cuotas de diferida/avance -> 'capital'), se respeta.
+  const montoDe = (c, moneda) => Number(c[c.campo_monto || CAMPO_MONTO[moneda]]) || 0;
 
   const lineas = (estrategia && typeof estrategia.parsearLineas === 'function')
     ? (estrategia.parsearLineas(texto) || [])
@@ -172,6 +178,7 @@ function cruzar(texto, comprasInput, estrategia, opts) {
     const m = montoDe(C, p.moneda);
     matches.push({
       compra_id: C.id,
+      tipo: C.tipo || 'compra',
       moneda: p.moneda,
       descripcion_app: C.descripcion,
       descripcion_extracto: L.descripcion,
@@ -188,7 +195,7 @@ function cruzar(texto, comprasInput, estrategia, opts) {
     comprasDe(moneda).forEach(c => {
       if (usadosC[moneda + ':' + c.id]) return;
       const m = montoDe(c, moneda);
-      comprasSinMatch.push({ compra_id: c.id, moneda, descripcion: c.descripcion, total: moneda === 'USD' ? Math.round(m * 100) / 100 : Math.round(m), fecha: c.fecha });
+      comprasSinMatch.push({ compra_id: c.id, tipo: c.tipo || 'compra', moneda, descripcion: c.descripcion, total: moneda === 'USD' ? Math.round(m * 100) / 100 : Math.round(m), fecha: c.fecha });
     });
   });
   const lineasSinMatch = lineas.filter((_, i) => !usadosL[i]).map(L => ({ descripcion: L.descripcion, monto: L.monto, dia: L.dia, mes: L.mes, moneda: L.moneda || 'COP' }));
