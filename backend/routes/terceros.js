@@ -71,14 +71,21 @@ module.exports = function(db, { logAction, tjNombre }) {
       if (!dif) return c;
       const amort = calcularAmortizacionDiferida(c.valor_cop, dif.tasa_mv, dif.num_cuotas, dif.fecha_compra, dif.fecha_primer_corte, null, nuOpts(db, c.tarjeta_id));
       const bolsillo = Math.round(c.monto_bolsillo || 0);
-      const cuotasBase = amort.tabla.map(r => ({
-        num: r.numCuota,
-        fecha_corte: r.fechaCorte,
-        capital: Math.round(r.cuotaCapital),
-        interes: Math.round(r.interesTotal),
-        total: Math.round(r.totalPagar),
-        pagada: r.fechaCorte < hoy
-      }));
+      const cuotasBase = amort.tabla.map(r => {
+        // ciclo_pagado: el extracto del ciclo de ESTA cuota ya se pagó al banco (estado real "con el
+        // banco" por cuota). NO confundir con `pagada` (solo corte vencido): entre el corte y la fecha
+        // límite de pago el corte ya venció pero el extracto aún no está pagado.
+        const extCuota = db.prepare("SELECT estado FROM extractos WHERE tarjeta_id=? AND ciclo=?").get(c.tarjeta_id, r.fechaCorte.slice(0, 7));
+        return {
+          num: r.numCuota,
+          fecha_corte: r.fechaCorte,
+          capital: Math.round(r.cuotaCapital),
+          interes: Math.round(r.interesTotal),
+          total: Math.round(r.totalPagar),
+          pagada: r.fechaCorte < hoy,
+          ciclo_pagado: !!(extCuota && extCuota.estado === 'pagado')
+        };
+      });
       // Per-cuota bolsillo: cada cuota tiene su propio monto apartado
       const bolCuotasRows = db.prepare('SELECT cuota_num, monto FROM bolsillo_cuotas WHERE compra_id=?').all(c.id);
       const bolMap = {};

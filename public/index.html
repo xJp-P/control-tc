@@ -256,6 +256,10 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '4.4.2': [
+    'La pestaña Terceros se ve más clara en las compras a cuotas: el contador de cada cuota (ej. "Cuota 1/3") ahora es una etiqueta visual sutil en vez de texto suelto, para separarlo mejor del nombre del comercio.',
+    'Además, en esas cuotas la columna de estado ahora muestra el estado real frente al banco de cada una —"Pagado" si ya pagaste el extracto de ese mes, o "Pendiente" si no— en lugar del genérico "Diferida" que no aportaba información. Así distingues de un vistazo lo que ya pagaste al banco de lo que el tercero aún te debe (que sigue en su propia columna).'
+  ],
   '4.4.1': [
     'Corregido: en la pestaña de Diferidas, las cuotas que pertenecen a un tercero (alguien que te debe) dejaban apartar dinero en tu bolsillo, cuando ese dinero solo debe gestionarse desde la pestaña Terceros. Ahora esa cuota se ve en gris y bloqueada (se sigue gestionando desde Terceros, como debe ser), mientras que tu parte personal de una compra dividida se maneja con normalidad.',
     'Detalle visual: en las compras divididas, tu parte "Personal" ahora muestra el mismo punto de color (en gris) que las partes de las demás personas, para que la lista quede pareja y alineada.'
@@ -6101,7 +6105,8 @@ function Terceros({ tarjeta }) {
                             e('td', null, fmtDate(q.fecha_corte)),
                             e('td', { style: { fontWeight: 600 } },
                               c.descripcion,
-                              e('span', { style: { fontSize: 10, color: 'var(--accent)', marginLeft: 6 } }, 'Cuota ' + q.num + '/' + c.cuotas.length)
+                              // Contador de cuota como mini "pastilla" sutil (tema oscuro), no texto plano.
+                              e('span', { className: 'badge', style: { marginLeft: 8, fontSize: 10, fontWeight: 600, background: 'var(--bg-tertiary)', color: 'var(--text-muted)', padding: '2px 6px', borderRadius: 4 } }, 'Cuota ' + q.num + '/' + c.cuotas.length)
                             ),
                             e('td', { className: 'text-right text-mono', style: { fontWeight: 600, color: hecha ? 'var(--success)' : undefined } },
                               (c.valor_usd && c.valor_usd > 0 && !q.total)
@@ -6116,7 +6121,10 @@ function Terceros({ tarjeta }) {
                             aplicaIntl && e('td', { className: 'text-right text-mono', style: { fontSize: 12 } }, e('span', { style: { color: 'var(--text-muted)' } }, '—')),
                             aplicaIntl && e('td', { className: 'text-right text-mono', style: { fontSize: 12 } }, e('span', { style: { color: 'var(--text-muted)' } }, '—')),
                             aplicaIntl && e('td', { className: 'text-right text-mono', style: { fontSize: 12 } }, e('span', { style: { color: 'var(--text-muted)' } }, '—')),
-                            e('td', null, e('span', { className: 'badge badge-' + c.estado }, c.estado.replace(/_/g, ' '))),
+                            // ESTADO TC = estado REAL con el banco de ESTA cuota (no el redundante "diferida").
+                            // Pagado si el extracto de su ciclo ya se pagó; si no, Pendiente. Mismo criterio
+                            // (y mismas clases de color) que la fila simple de abajo.
+                            e('td', null, e('span', { className: 'badge badge-' + (q.ciclo_pagado ? 'pagado' : 'pendiente') }, q.ciclo_pagado ? 'Pagado' : 'Pendiente')),
                             e('td', null,
                               c.tercero_pagado
                                 ? e('span', { className: 'badge badge-pagado' }, 'Recibido')
