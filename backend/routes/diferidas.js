@@ -39,6 +39,7 @@ module.exports = function(db, { logAction, tjNombre }) {
         cuotasRestantes: amort.tabla.filter(r => r.fechaCorte >= hoyDif).length,
         ciclos: amort.tabla.map(r => r.fechaCorte.slice(0, 7)),
         es_de_tercero: !!compraPersona,
+        persona_id: compraPersona ? compraPersona.persona_id : null,
         persona_nombre: compraPersona ? compraPersona.nombre : null,
         persona_color: compraPersona ? compraPersona.color : null,
         compra_id: compraVinc ? compraVinc.id : null,

@@ -251,6 +251,12 @@ module.exports = function(db, { logAction, tjNombre }) {
     const { monto_bolsillo, cuota_num, moneda } = req.body;
     const c = db.prepare('SELECT * FROM compras WHERE id=?').get(req.params.id);
     if (!c) return res.status(404).json({ error: 'Compra no encontrada' });
+    // Candado de Terceros: el bolsillo de una compra de tercero ES su reembolso y SOLO se gestiona
+    // desde la pestaña Terceros (que envía desde_terceros=true). Desde las vistas generales
+    // (Movimientos/Diferidas) no se permite tocarlo, para no corromper la contabilidad del deudor.
+    if (c.persona_id && !(req.body && req.body.desde_terceros)) {
+      return res.status(403).json({ error: 'El bolsillo de una compra de tercero se gestiona desde la pestaña Terceros.' });
+    }
     // Inferir moneda: explícita > heurística (compra USD pura).
     const compraEsUsd = (c.valor_usd && c.valor_usd > 0) && !c.valor_cop;
     const monedaPago = moneda === 'USD' ? 'USD' : (moneda === 'COP' ? 'COP' : (compraEsUsd ? 'USD' : 'COP'));

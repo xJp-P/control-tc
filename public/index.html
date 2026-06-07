@@ -256,6 +256,10 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '4.4.1': [
+    'Corregido: en la pestaña de Diferidas, las cuotas que pertenecen a un tercero (alguien que te debe) dejaban apartar dinero en tu bolsillo, cuando ese dinero solo debe gestionarse desde la pestaña Terceros. Ahora esa cuota se ve en gris y bloqueada (se sigue gestionando desde Terceros, como debe ser), mientras que tu parte personal de una compra dividida se maneja con normalidad.',
+    'Detalle visual: en las compras divididas, tu parte "Personal" ahora muestra el mismo punto de color (en gris) que las partes de las demás personas, para que la lista quede pareja y alineada.'
+  ],
   '4.4.0': [
     'Si tu fecha de corte cae a mitad de mes, tu extracto abarca días de dos meses distintos; y como la tasa de interés que regula el banco cambia el 1° de cada mes, una misma factura puede traer dos tasas diferentes. Ahora el Asistente de Conciliación lee la tasa exacta de cada compra internacional directamente de su línea en el extracto y le asigna a cada una la que le corresponde según su mes, en lugar de usar una sola tasa para todo el ciclo. Cuando detecta dos tasas, te muestra las compras agrupadas por su tasa y las sincronizas con un solo clic. Si tu ciclo cae dentro de un mismo mes, todo funciona igual que antes.'
   ],
@@ -1869,6 +1873,11 @@ function CardResumen({ tarjeta, onDataChange }) {
     setShowBolsilloModal(true);
   }
   function openBolsilloDiferidaModal(d) {
+    // Defensa: una diferida de tercero gestiona su bolsillo (reembolso) en la pestaña Terceros.
+    if (d && (d.es_de_tercero || d.persona_id)) {
+      infoDialog('El monto apartado en una compra de un tercero representa lo que te ha reembolsado. Gestiónalo desde la pestaña Terceros.', 'Gestionar abono desde la pestaña Terceros');
+      return;
+    }
     const mb = d.monto_bolsillo || 0;
     const target = d.cuotaCorte || 0;
     const isPartial = mb > 0 && mb < target;
@@ -2710,15 +2719,18 @@ function CardResumen({ tarjeta, onDataChange }) {
                         : d.estado === 'liquidado'
                           ? e('span', { className: 'badge badge-liquidado' }, 'liquidado')
                           : e('span', {
-                              className: 'badge badge-' + badge + ' badge-clickable',
+                              // Tercero: badge gris/no-clickable (su bolsillo = reembolso, se gestiona en
+                              // Terceros). Igual se pasa persona_id a openBolsilloModal para que el
+                              // interceptor corte la accion y muestre el dialogo. Personal: badge normal.
+                              className: d.es_de_tercero ? 'badge' : ('badge badge-' + badge + ' badge-clickable'),
                               onClick: (ev) => {
                                 ev.stopPropagation();
                                 if (d.compra_id) {
-                                  openBolsilloModal({ id: d.compra_id, descripcion: d.etiqueta + (d.es_de_tercero ? ' (' + d.persona_nombre + ')' : ''), estado: 'diferida', valor_cop: target, cuotaCorte: target, monto_bolsillo: bol, _bolsilloTarget: target, cuota_num: cn, cuotas_total: d.num_cuotas });
+                                  openBolsilloModal({ id: d.compra_id, persona_id: d.persona_id || null, descripcion: d.etiqueta + (d.es_de_tercero ? ' (' + d.persona_nombre + ')' : ''), estado: 'diferida', valor_cop: target, cuotaCorte: target, monto_bolsillo: bol, _bolsilloTarget: target, cuota_num: cn, cuotas_total: d.num_cuotas });
                                 } else { openBolsilloDiferidaModal(d); }
                               },
-                              title: 'Clic para gestionar bolsillo (cuota del corte)',
-                              style: { fontSize: 10 }
+                              title: d.es_de_tercero ? 'Gestionar abono desde la pestaña Terceros' : 'Clic para gestionar bolsillo (cuota del corte)',
+                              style: d.es_de_tercero ? { fontSize: 10, background: 'var(--bg-input)', color: 'var(--text-muted)', cursor: 'not-allowed', border: '1px solid ' + estadoColor(badge) } : { fontSize: 10 }
                             }, badge.replace(/_/g, ' ')),
                       !cicloPagadoDif && d.estado !== 'liquidado' && falta > 0 && e('div', { style: { fontSize: 10, color: 'var(--warning)', marginTop: 2 } }, 'Falta: ' + fmtCOP(falta))
                     );
@@ -2778,9 +2790,10 @@ function CardResumen({ tarjeta, onDataChange }) {
                       e('td', null),
                       e('td', { style: { paddingLeft: 24, fontSize: 12, color: 'var(--text-muted)' } }, '↳ parte', e('span', { style: { fontSize: 10, marginLeft: 6 } }, 'Cuota ' + (d.ciclos ? d.ciclos.indexOf(ciclo) + 1 : 1) + '/' + d.num_cuotas)),
                       e('td', { style: { fontSize: 12 } },
-                        d.es_de_tercero
-                          ? e('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 6 } }, e('span', { style: { background: d.persona_color || 'var(--accent)', width: 8, height: 8, display: 'inline-block', borderRadius: '50%' } }), e('span', { style: { color: 'var(--text-primary)' } }, d.persona_nombre))
-                          : e('span', { style: { color: 'var(--text-primary)' } }, 'Personal')
+                        // Simetría: tercero y Personal SIEMPRE con punto (Personal en gris --text-muted).
+                        e('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 6 } },
+                          e('span', { style: { background: d.es_de_tercero ? (d.persona_color || 'var(--accent)') : 'var(--text-muted)', width: 8, height: 8, display: 'inline-block', borderRadius: '50%' } }),
+                          e('span', { style: { color: 'var(--text-primary)' } }, d.es_de_tercero ? d.persona_nombre : 'Personal'))
                       ),
                       e('td', { className: 'text-right text-mono', style: { fontSize: 13, fontWeight: 600, color: cicloPagadoDif ? 'var(--success)' : 'var(--danger)' } }, fmtCOP(d.cuotaCorte)),
                       e('td', null, (d.ciclos ? d.ciclos.indexOf(ciclo) + 1 : 1) + '/' + d.num_cuotas),
@@ -5922,7 +5935,7 @@ function Terceros({ tarjeta }) {
       monto = parseFloat(bolsilloModal.monto) || 0;
     }
     if (monto < 0) return;
-    const bodyT = { monto_bolsillo: monto };
+    const bodyT = { monto_bolsillo: monto, desde_terceros: true };
     if (compra._cuota_num != null) bodyT.cuota_num = compra._cuota_num;
     const resp = await api('/compras/' + compra.id + '/bolsillo', { method: 'PUT', body: bodyT });
     setBolsilloModal(null);
@@ -6205,7 +6218,7 @@ function Terceros({ tarjeta }) {
             ),
             bState === 'pendiente' && e('div', null,
               e('button', { type: 'button', className: 'btn btn-success', style: { width: '100%', marginBottom: 12, marginTop: 12 }, onClick: () => {
-                var bodyApartar = { monto_bolsillo: target };
+                var bodyApartar = { monto_bolsillo: target, desde_terceros: true };
                 if (compra._cuota_num != null) bodyApartar.cuota_num = compra._cuota_num;
                 api('/compras/' + compra.id + '/bolsillo', { method: 'PUT', body: bodyApartar })
                   .then(() => { setBolsilloModal(null); loadData(); toast('Apartado en bolsillo'); });
@@ -6216,7 +6229,7 @@ function Terceros({ tarjeta }) {
               'Ingresa el nuevo monto apartado (menor al total para parcial, 0 para quitar):'
             ),
             bState === 'bolsillo_parcial' && e('button', { type: 'button', className: 'btn btn-success', style: { width: '100%', marginBottom: 12, marginTop: 12 }, onClick: () => {
-                var bodyRest = { monto_bolsillo: target };
+                var bodyRest = { monto_bolsillo: target, desde_terceros: true };
                 if (compra._cuota_num != null) bodyRest.cuota_num = compra._cuota_num;
                 api('/compras/' + compra.id + '/bolsillo', { method: 'PUT', body: bodyRest })
                   .then(() => { setBolsilloModal(null); loadData(); toast('Apartado en bolsillo'); });
@@ -6240,7 +6253,7 @@ function Terceros({ tarjeta }) {
             ),
             e('div', { className: 'modal-actions', style: { marginTop: 16 } },
               bState !== 'pendiente' && e('button', { type: 'button', className: 'btn btn-danger', onClick: () => {
-                var bodyQuitar = { monto_bolsillo: 0 };
+                var bodyQuitar = { monto_bolsillo: 0, desde_terceros: true };
                 if (compra._cuota_num != null) bodyQuitar.cuota_num = compra._cuota_num;
                 api('/compras/' + compra.id + '/bolsillo', { method: 'PUT', body: bodyQuitar })
                   .then(() => { setBolsilloModal(null); loadData(); toast('Bolsillo quitado'); });
