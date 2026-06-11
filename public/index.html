@@ -256,6 +256,10 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '4.5.0': [
+    'Libertad total de cuotas: mientras el ciclo esté en curso, ya puedes cambiar el número de cuotas de una compra directamente desde su edición, sin borrarla ni recrearla. Puedes pasar una compra de contado a cuotas, cambiar de un número de cuotas a otro, o devolverla a una sola cuota — las veces que necesites. La compra conserva siempre su fecha original, y el dinero que tuvieras apartado en el bolsillo se reparte entre las cuotas (o se vuelve a juntar al revertir), sin perder un peso.',
+    'Protección de ciclos ya cerrados: una vez que un ciclo cierra (el banco genera su extracto), aunque todavía no lo hayas pagado, su estructura queda sellada. Por eso el número de cuotas de las compras de meses anteriores ya no se puede cambiar a mano, para no descuadrar el extracto del banco. Lo que sí puedes seguir haciendo en esas compras es corregir su nombre o su nota. (El Asistente de Conciliación mantiene su propia vía para ajustar cuotas del pasado cuando el banco las reprogramó).'
+  ],
   '4.4.2': [
     'La pestaña Terceros se ve más clara en las compras a cuotas: el contador de cada cuota (ej. "Cuota 1/3") ahora es una etiqueta visual sutil en vez de texto suelto, para separarlo mejor del nombre del comercio.',
     'Además, en esas cuotas la columna de estado ahora muestra el estado real frente al banco de cada una —"Pagado" si ya pagaste el extracto de ese mes, o "Pendiente" si no— en lugar del genérico "Diferida" que no aportaba información. Así distingues de un vistazo lo que ya pagaste al banco de lo que el tercero aún te debe (que sigue en su propia columna).'
@@ -1740,11 +1744,34 @@ function CardResumen({ tarjeta, onDataChange }) {
       return;
     }
     compraData.tarjeta_id = tarjeta.id;
+    // Libertad total de cuotas: la señal estructural viaja en _convertirCuotas / _reprogramarCuotas /
+    // _revertirCuotas. Primero el PUT guarda los campos editados; luego el endpoint dedicado hace la
+    // transición (transaccional), conservando la fila original — fecha y orden cronológico intactos
+    // (prelación de pagos).
+    const conv = compraData._convertirCuotas;
+    const repro = compraData._reprogramarCuotas;
+    const rever = compraData._revertirCuotas;
+    delete compraData._convertirCuotas; delete compraData._reprogramarCuotas; delete compraData._revertirCuotas;
     const method = editCompra ? 'PUT' : 'POST';
     const url = editCompra ? '/compras/' + editCompra.id : '/compras';
     api(url, { method, body: compraData }).then((resp) => {
       // El backend bloquea (403) crear/editar en ciclos pagados; mostramos el motivo y no cerramos en falso.
       if (resp && resp.error) { toastErr(resp.error); return; }
+      if (editCompra && (conv || repro || rever)) {
+        const accion = conv
+          ? api('/compras/' + editCompra.id + '/convertir-a-diferida', { method: 'POST', body: conv })
+          : repro
+            ? api('/diferidas/' + repro.diferida_id + '/reprogramar', { method: 'POST', body: { num_cuotas: repro.num_cuotas } })
+            : api('/compras/' + editCompra.id + '/revertir-diferida', { method: 'POST', body: {} });
+        accion.then((rc) => {
+          if (rc && rc.error) { toastErr(rc.error); refreshAll(); return; }
+          setShowCompraModal(false); setShowMovModal(false); refreshAll();
+          toast(conv ? 'Compra convertida a ' + conv.num_cuotas + ' cuotas'
+            : repro ? 'Cuotas reprogramadas a ' + repro.num_cuotas
+            : 'Compra revertida a 1 cuota');
+        });
+        return;
+      }
       setShowCompraModal(false); setShowMovModal(false); refreshAll(); toast('Compra guardada');
     });
   }
@@ -3257,6 +3284,18 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
   });
   const lastUsdField = useRef(null); // tracks which field was edited last: 'usd', 'tasa', 'cop'
 
+  // "Libertad total" de cuotas: en edición el campo Cuotas queda libre para compras individuales
+  // COP sin abonos — 1→N convierte, N→M reprograma y N→1 revierte; cada acción la ejecuta su
+  // endpoint transaccional DESPUÉS del PUT, conservando SIEMPRE la fila original de la compra
+  // (fecha/registro intactos: la prelación de pagos del banco depende del orden cronológico real).
+  // SOLO en el ciclo VIGENTE: un ciclo anterior ya CERRÓ (el banco generó su extracto, esté pagado
+  // o no) y su estructura queda sellada — la conciliación IA tiene su propia vía para el pasado.
+  // Grupos, USD, abonos parciales y terceros con reembolso quedan fuera (cada endpoint los rechaza).
+  const cuotasEditables = !!item && !item._isGrupo && !(item.valor_usd > 0) && !((item.monto_abonado || 0) > 0)
+    && (!tarjeta || ((item.ciclo || ciclo) >= cicloVigente(tarjeta.dia_corte)));
+  // Cuotas con las que la compra está HOY en la BD (diferida → su total real; si no, 1).
+  const cuotasOriginales = item ? ((item.estado === 'diferida' || item.diferida_id) ? (parseInt(item.cuotas_total || item.num_cuotas, 10) || 1) : 1) : 1;
+
   // Asistente INTL: cargamos al montar el form la lista de descripciones que ya tienen
   // alguna compra marcada como es_internacional=1 en la DB (real-time, auto-aprende/desaprende).
   const [intlDescripciones, setIntlDescripciones] = useState([]);
@@ -3441,7 +3480,14 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
     //    cuotas_total), por eso numCuotas cae a 1 — de ahí el chequeo de item.estado/diferida_id.
     //  - 1 cuota: se DERIVA del bolsillo ya apartado vs el total. Evita el bug de resetear
     //    'bolsillo'/'bolsillo_parcial' a 'pendiente' al editar cualquier detalle de la compra.
-    const esDiferidaFinal = numCuotas > 1 || (item && (item.estado === 'diferida' || item.diferida_id));
+    // Libertad total de cuotas: la transición estructural NO la hace el PUT (solo guarda campos)
+    // sino el endpoint dedicado que corresponda, después y de forma transaccional:
+    //   1→N convertir-a-diferida · N→M reprogramar · N→1 revertir-diferida.
+    const nuevasCuotas = parseInt(numCuotas, 10) || 1;
+    const esConversion = !!(item && cuotasEditables && cuotasOriginales === 1 && nuevasCuotas > 1);
+    const esReprogramacion = !!(item && cuotasEditables && cuotasOriginales > 1 && nuevasCuotas > 1 && nuevasCuotas !== cuotasOriginales && item.diferida_id);
+    const esReversion = !!(item && cuotasEditables && cuotasOriginales > 1 && nuevasCuotas === 1);
+    const esDiferidaFinal = (!esConversion && numCuotas > 1) || (item && (item.estado === 'diferida' || item.diferida_id));
     let estadoCalculado;
     if (esDiferidaFinal) {
       estadoCalculado = 'diferida';
@@ -3463,12 +3509,17 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
       estado: estadoCalculado,
       ciclo: cicloManualVal || ciclo,
       ciclo_manual: cicloManualVal ? 1 : 0,
-      notas: numCuotas > 1 ? (notas ? notas + ' | ' : '') + 'Diferida a ' + numCuotas + ' cuotas' : notas,
+      // El sufijo "Diferida a N cuotas" solo se añade al CREAR: en conversión lo pone su endpoint,
+      // en reprogramación se sincroniza y en una edición normal de diferida no debe re-añadirse.
+      notas: (!item && numCuotas > 1) ? (notas ? notas + ' | ' : '') + 'Diferida a ' + numCuotas + ' cuotas' : notas,
       diferida_id,
       es_internacional: esInternacional ? 1 : 0,
       nota_personal: notaPersonal || null,
       tasa_intl: tasaIntlNum
     };
+    if (esConversion) compraData._convertirCuotas = { num_cuotas: nuevasCuotas, cobrar_intereses: !!cobrarIntereses };
+    else if (esReprogramacion) compraData._reprogramarCuotas = { diferida_id: item.diferida_id, num_cuotas: nuevasCuotas };
+    else if (esReversion) compraData._revertirCuotas = true;
     onSave(compraData);
   }
 
@@ -3663,14 +3714,20 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
     e('div', { className: 'form-row' },
       !(item && item._isGrupo) && e('div', { className: 'form-group' },
         e('label', { className: 'form-label' }, 'Cuotas'),
-        // En modo edición el campo se BLOQUEA: cambiar la naturaleza de la deuda
-        // (1 cuota ↔ diferida) durante una edición no construye/destruye los registros
-        // hijos en la BD y deja datos inconsistentes. Las cuotas solo se definen al crear.
-        e('input', { type: 'number', className: 'form-input', value: numCuotas, onChange: ev => setNumCuotas(ev.target.value), min: 1, max: 60, disabled: !!item, style: item ? { opacity: 0.6, cursor: 'not-allowed' } : undefined }),
-        item && e('div', { className: 'form-hint', style: { color: 'var(--text-muted)' } },
-          'El número de cuotas no se puede cambiar al editar. Para cambiarlo, elimina la compra y créala de nuevo.'
+        // Libertad total: 1→N convierte, N→M reprograma, N→1 revierte (endpoints dedicados tras el
+        // PUT; la fila original queda intacta). Bloqueado solo para grupos, USD o con abono parcial.
+        e('input', { type: 'number', className: 'form-input', value: numCuotas, onChange: ev => setNumCuotas(ev.target.value), min: 1, max: 60, disabled: !!item && !cuotasEditables, style: (item && !cuotasEditables) ? { opacity: 0.6, cursor: 'not-allowed' } : undefined }),
+        item && !cuotasEditables && e('div', { className: 'form-hint', style: { color: 'var(--text-muted)' } },
+          'Las cuotas no se pueden cambiar aquí: la compra es de un ciclo ya cerrado, es dividida, tiene valor en dólares o tiene abonos.'
         ),
-        !item && numCuotas > 1 && e('div', null,
+        item && cuotasEditables && (parseInt(numCuotas, 10) || 1) !== cuotasOriginales && e('div', { className: 'form-hint', style: { color: 'var(--warning)' } },
+          cuotasOriginales === 1
+            ? 'Esta compra se convertirá en diferida a ' + numCuotas + ' cuotas conservando su fecha original.'
+            : (parseInt(numCuotas, 10) || 1) === 1
+              ? 'Esta compra volverá a ser de 1 cuota: se elimina su plan de cuotas y el dinero apartado por cuota se consolida en el bolsillo de la compra.'
+              : 'El plan de cuotas se reprogramará de ' + cuotasOriginales + ' a ' + numCuotas + ' cuotas (la proyección se regenera con la misma tasa).'
+        ),
+        ((!item && numCuotas > 1) || (item && cuotasEditables && cuotasOriginales === 1 && numCuotas > 1)) && e('div', null,
           e('div', { style: { marginTop: 6, marginBottom: 4 } },
             e('label', { style: { cursor: 'pointer', fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 } },
               e('input', { type: 'checkbox', checked: cobrarIntereses, onChange: ev => setCobrarIntereses(ev.target.checked) }),
@@ -5419,7 +5476,9 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
           const a = Array.isArray(lista) ? lista.find(x => String(x.id) === String(cid)) : null;
           if (!a) throw new Error('No se encontro la compra #' + cid + ' en la tarjeta.');
           if (!a.diferida_id) throw new Error('La compra #' + cid + ' no es una compra a cuotas (diferida).');
-          const r = await api('/diferidas/' + a.diferida_id + '/reprogramar', { method: 'POST', body: { num_cuotas: Number(p.num_cuotas) } });
+          // desde_conciliacion: exime del candado de "ciclo cerrado" (la IA corrige planes que el
+          // banco YA reprogramó en extractos pasados); el candado de ciclos PAGADOS sigue aplicando.
+          const r = await api('/diferidas/' + a.diferida_id + '/reprogramar', { method: 'POST', body: { num_cuotas: Number(p.num_cuotas), desde_conciliacion: true } });
           if (r && r.error) throw new Error(r.error);
         }
       } else if (op === 'actualizar_tasa_intl') {

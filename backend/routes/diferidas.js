@@ -137,6 +137,21 @@ module.exports = function(db, { logAction, tjNombre }) {
       return res.status(403).json({ error: 'No se puede reprogramar: esta compra es de un tercero y ya tiene reembolsos registrados. Gestiona o retira esos abonos desde la pestaña Terceros antes de reprogramar.' });
     }
 
+    // Inmutabilidad estructural (edición MANUAL): la reprogramación solo aplica si la compra pertenece
+    // al ciclo VIGENTE — un ciclo anterior ya cerró (extracto generado) aunque no esté pagado. La
+    // CONCILIACIÓN IA queda exenta (desde_conciliacion=true): corrige planes que el BANCO ya reprogramó
+    // en extractos pasados; su candado de ciclos PAGADOS (abajo) sigue aplicando igual.
+    if (!(req.body && req.body.desde_conciliacion)) {
+      const tjRep = db.prepare('SELECT dia_corte FROM tarjetas WHERE id=?').get(d.tarjeta_id);
+      const diaCorteRep = (tjRep && tjRep.dia_corte) || 30;
+      const compraVincRep = db.prepare('SELECT ciclo FROM compras WHERE diferida_id=? LIMIT 1').get(req.params.id);
+      const cicloOrigenRep = (compraVincRep && compraVincRep.ciclo) || calcCicloLocal(d.fecha_compra, diaCorteRep);
+      const cicloVigRep = calcCicloLocal(hoyLocal(), diaCorteRep);
+      if (cicloOrigenRep < cicloVigRep) {
+        return res.status(403).json({ error: 'No se puede reprogramar: la compra pertenece al ciclo ' + cicloOrigenRep + ', que ya cerró (el vigente es ' + cicloVigRep + '). El banco ya facturó ese extracto.' });
+      }
+    }
+
     const amortPrev = calcularAmortizacionDiferida(d.monto, d.tasa_mv, d.num_cuotas, d.fecha_compra, d.fecha_primer_corte, null, nuOpts(db, d.tarjeta_id));
     const ciclosPagados = [...new Set(amortPrev.tabla.map(c => c.fechaCorte.slice(0, 7)))].filter(ci => {
       const ext = db.prepare("SELECT estado FROM extractos WHERE tarjeta_id=? AND ciclo=?").get(d.tarjeta_id, ci);
@@ -150,12 +165,17 @@ module.exports = function(db, { logAction, tjNombre }) {
     db.prepare('UPDATE diferidas SET num_cuotas=?, fecha_primer_corte=? WHERE id=?').run(nuevoN, nuevaFPC, req.params.id);
 
     // Limpiar bolsillo per-cuota huérfano (cuota_num > nuevoN) de las compras vinculadas y recachear.
-    const comprasVinc = db.prepare('SELECT id FROM compras WHERE diferida_id=?').all(req.params.id);
+    const comprasVinc = db.prepare('SELECT id, notas FROM compras WHERE diferida_id=?').all(req.params.id);
     comprasVinc.forEach(c => {
       db.prepare('DELETE FROM bolsillo_cuotas WHERE compra_id=? AND cuota_num > ?').run(c.id, nuevoN);
       const sumCop = db.prepare("SELECT COALESCE(SUM(monto),0) as t FROM bolsillo_cuotas WHERE compra_id=? AND COALESCE(moneda,'COP')='COP'").get(c.id);
       const sumUsd = db.prepare("SELECT COALESCE(SUM(monto),0) as t FROM bolsillo_cuotas WHERE compra_id=? AND moneda='USD'").get(c.id);
       db.prepare('UPDATE compras SET monto_bolsillo=?, monto_bolsillo_usd=? WHERE id=?').run(sumCop.t, sumUsd.t, c.id);
+      // Sincronizar el sufijo informativo de notas ("Diferida a X cuotas") con el nuevo total —
+      // necesario ahora que la reprogramación también se dispara desde la edición manual (N→M).
+      if (c.notas && /Diferida a \d+ cuotas/.test(c.notas)) {
+        db.prepare('UPDATE compras SET notas=? WHERE id=?').run(c.notas.replace(/Diferida a \d+ cuotas/g, 'Diferida a ' + nuevoN + ' cuotas'), c.id);
+      }
     });
 
     const nuevaAmort = calcularAmortizacionDiferida(d.monto, d.tasa_mv, nuevoN, d.fecha_compra, nuevaFPC, null, nuOpts(db, d.tarjeta_id));

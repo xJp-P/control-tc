@@ -1,6 +1,6 @@
 // backend/routes/compras.js — CRUD /api/compras + bolsillo
 const { Router } = require('express');
-const { hoyLocal, daysBetween, primerCorteAvance } = require('../helpers/dates');
+const { hoyLocal, daysBetween, primerCorteAvance, calcCicloLocal } = require('../helpers/dates');
 const { calcularAmortizacionDiferida } = require('../engine/amortizacion');
 const { nuOpts, aplicaIntInternacional } = require('../helpers/banco');
 const { compraTerceroConReembolso } = require('../helpers/bolsillo');
@@ -504,6 +504,148 @@ module.exports = function(db, { logAction, tjNombre }) {
     }
     logAction('eliminar', tjNombre(c ? c.tarjeta_id : null) + 'Compra eliminada: ' + (c ? c.descripcion : 'ID ' + req.params.id));
     res.json({ ok: true });
+  });
+
+  // ── Convertir compra de 1 cuota → diferida a N cuotas (in-place) ──────────
+  // POST /:id/convertir-a-diferida  Body: { num_cuotas, cobrar_intereses }
+  // La fila de `compras` NUNCA se borra ni recrea: conserva id, fecha y created_at originales
+  // (la prelación de abonos del banco depende del orden cronológico real de las transacciones).
+  // La conversión crea la diferida vinculada (mismos campos que el flujo de creación), traslada el
+  // bolsillo ya apartado al per-cuota (secuencial desde la cuota 1, sin perder un peso) y muta
+  // estado/diferida_id/notas. Transaccional: o todo o nada.
+  // Alcance v1: solo compras COP individuales de 1 cuota; quedan fuera (bloqueadas) las partes de
+  // grupo, USD, con abono parcial y terceros con reembolsos (mismo guard que reprogramar/dividir).
+  router.post('/:id/convertir-a-diferida', (req, res) => {
+    const { num_cuotas, cobrar_intereses } = req.body || {};
+    const n = parseInt(num_cuotas, 10);
+    if (!n || n < 2 || n > 60) return res.status(400).json({ error: 'El número de cuotas debe ser un entero entre 2 y 60.' });
+    const c = db.prepare('SELECT * FROM compras WHERE id=?').get(req.params.id);
+    if (!c) return res.status(404).json({ error: 'Compra no encontrada' });
+    if (c.estado === 'diferida' || c.diferida_id) return res.status(400).json({ error: 'La compra ya es diferida; su número de cuotas se cambia con la reprogramación.' });
+    if (c.grupo_id) return res.status(403).json({ error: 'Esta compra es parte de una compra dividida; conviértela editando el grupo completo.' });
+    if (c.valor_usd && c.valor_usd > 0) return res.status(400).json({ error: 'Diferir compras con valor en dólares no está soportado.' });
+    if ((c.monto_abonado || 0) > 0) return res.status(400).json({ error: 'La compra tiene un abono parcial registrado; no se puede convertir a cuotas.' });
+    if (!c.valor_cop || c.valor_cop <= 0) return res.status(400).json({ error: 'La compra no tiene valor en pesos para amortizar.' });
+    if (compraTerceroConReembolso(db, c.id)) {
+      return res.status(403).json({ error: 'No se puede convertir: esta compra es de un tercero y ya tiene reembolsos registrados. Gestiona o retira esos abonos desde la pestaña Terceros antes de convertir.' });
+    }
+    const tj = db.prepare('SELECT dia_corte, tasa_mv_diferidas FROM tarjetas WHERE id=?').get(c.tarjeta_id);
+    const diaCorte = (tj && tj.dia_corte) || 30;
+    // Inmutabilidad estructural: la compra debe pertenecer al ciclo VIGENTE (el que corre). Un ciclo
+    // anterior ya CERRÓ (el banco generó ese extracto) aunque no esté pagado: su estructura de cuotas
+    // queda sellada. Las ediciones estéticas (PUT regular) no pasan por aquí y siguen permitidas.
+    const cicloVig = calcCicloLocal(hoyLocal(), diaCorte);
+    if (c.ciclo < cicloVig) {
+      return res.status(403).json({ error: 'No se puede convertir: la compra pertenece al ciclo ' + c.ciclo + ', que ya cerró (el vigente es ' + cicloVig + '). El banco ya facturó ese extracto.' });
+    }
+    // Y dentro del vigente, tampoco si su extracto ya se pagó (pago anticipado).
+    const extConv = db.prepare("SELECT estado FROM extractos WHERE tarjeta_id=? AND ciclo=?").get(c.tarjeta_id, c.ciclo);
+    if (extConv && extConv.estado === 'pagado') {
+      return res.status(403).json({ error: 'No se puede convertir: el extracto del ciclo ' + c.ciclo + ' ya está pagado.' });
+    }
+    // Primer corte = la fecha de corte del CICLO EFECTIVO de la compra (c.ciclo respeta ciclo_manual):
+    // la cuota 1 cae exactamente en el ciclo donde hoy cuenta la compra. String directo (sin Date →
+    // sin sorpresas de zona horaria). Para el caso normal coincide con primerCorteAvance(c.fecha).
+    const [cy, cm] = String(c.ciclo).split('-').map(Number);
+    const lastDayConv = new Date(cy, cm, 0).getDate();
+    const fechaPrimerCorte = cy + '-' + String(cm).padStart(2, '0') + '-' + String(Math.min(diaCorte, lastDayConv)).padStart(2, '0');
+    const tasaMv = cobrar_intereses ? ((tj && tj.tasa_mv_diferidas) || 0) : 0;
+
+    let difId = null, trasladado = 0;
+    const convertir = db.transaction(() => {
+      const rDif = db.prepare(`INSERT INTO diferidas (tarjeta_id, etiqueta, monto, tasa_mv, num_cuotas, fecha_compra, fecha_primer_corte, estado, notas)
+                               VALUES (?,?,?,?,?,?,?,?,?)`)
+        .run(c.tarjeta_id, c.descripcion, c.valor_cop, tasaMv, n, c.fecha, fechaPrimerCorte, 'activo', 'Convertida desde compra a 1 cuota');
+      difId = rDif.lastInsertRowid;
+      // Traslado del bolsillo apartado (personal; un tercero con bolsillo no llega aquí por el guard):
+      // se reparte secuencialmente desde la cuota 1, cap-eado al total de cada cuota. El cache
+      // compras.monto_bolsillo queda igual (= SUM per-cuota): el usuario no pierde lo apartado.
+      const mb = Math.round(c.monto_bolsillo || 0);
+      db.prepare('DELETE FROM bolsillo_cuotas WHERE compra_id=?').run(c.id); // defensa: sin restos previos
+      if (mb > 0) {
+        const amort = calcularAmortizacionDiferida(c.valor_cop, tasaMv, n, c.fecha, fechaPrimerCorte, null, nuOpts(db, c.tarjeta_id));
+        let restante = mb;
+        for (const q of amort.tabla) {
+          if (restante <= 0) break;
+          const cap = Math.round(q.totalPagar);
+          const monto = Math.min(restante, cap);
+          if (monto <= 0) continue;
+          db.prepare("INSERT INTO bolsillo_cuotas (compra_id, cuota_num, monto, moneda) VALUES (?,?,?,'COP') ON CONFLICT(compra_id, cuota_num) DO UPDATE SET monto=excluded.monto")
+            .run(c.id, q.numCuota, monto);
+          restante -= monto; trasladado += monto;
+        }
+        // Residuo de redondeo (raro): a la última cuota — no se pierde un peso de lo apartado.
+        if (restante > 0 && amort.tabla.length) {
+          const ult = amort.tabla[amort.tabla.length - 1].numCuota;
+          db.prepare('UPDATE bolsillo_cuotas SET monto = monto + ? WHERE compra_id=? AND cuota_num=?').run(restante, c.id, ult);
+          trasladado += restante;
+        }
+        const sum = db.prepare("SELECT COALESCE(SUM(monto),0) t FROM bolsillo_cuotas WHERE compra_id=? AND COALESCE(moneda,'COP')='COP'").get(c.id);
+        db.prepare('UPDATE compras SET monto_bolsillo=? WHERE id=?').run(sum.t, c.id);
+      }
+      const nuevasNotas = (c.notas ? c.notas + ' | ' : '') + 'Diferida a ' + n + ' cuotas';
+      db.prepare("UPDATE compras SET estado='diferida', diferida_id=?, notas=? WHERE id=?").run(difId, nuevasNotas, c.id);
+    });
+    convertir();
+    logAction('editar', tjNombre(c.tarjeta_id) + 'Compra convertida a diferida: ' + c.descripcion + ' (1 -> ' + n + ' cuotas)');
+    res.json({ ok: true, diferida_id: difId, num_cuotas: n, bolsillo_trasladado: trasladado });
+  });
+
+  // ── Revertir diferida → compra de 1 cuota (camino inverso de la conversión) ──
+  // POST /:id/revertir-diferida  (sin body)
+  // Destruye el plan de cuotas (fila en `diferidas`) y consolida el bolsillo per-cuota de vuelta en
+  // compras.monto_bolsillo (no se pierde un peso; cap al costo real de la compra). La fila de
+  // `compras` conserva id/fecha/created_at (prelación de pagos). Mismos candados universales que
+  // convertir/reprogramar: grupo, USD, terceros con reembolso y ciclos pagados.
+  router.post('/:id/revertir-diferida', (req, res) => {
+    const c = db.prepare('SELECT * FROM compras WHERE id=?').get(req.params.id);
+    if (!c) return res.status(404).json({ error: 'Compra no encontrada' });
+    if (!(c.estado === 'diferida' || c.diferida_id)) return res.status(400).json({ error: 'La compra no es diferida; no hay plan de cuotas que revertir.' });
+    if (!c.diferida_id) return res.status(400).json({ error: 'La compra no tiene un plan de cuotas vinculado.' });
+    if (c.grupo_id) return res.status(403).json({ error: 'Esta compra es parte de una compra dividida; gestiónala editando el grupo completo.' });
+    if (c.valor_usd && c.valor_usd > 0) return res.status(400).json({ error: 'Revertir compras con valor en dólares no está soportado.' });
+    if (compraTerceroConReembolso(db, c.id)) {
+      return res.status(403).json({ error: 'No se puede revertir: esta compra es de un tercero y ya tiene reembolsos registrados. Gestiona o retira esos abonos desde la pestaña Terceros antes de revertir.' });
+    }
+    const d = db.prepare('SELECT * FROM diferidas WHERE id=?').get(c.diferida_id);
+    if (!d) return res.status(404).json({ error: 'No se encontró el plan de cuotas vinculado.' });
+    const abonosDif = db.prepare('SELECT COUNT(*) n FROM abonos_diferida WHERE diferida_id=?').get(d.id);
+    if (abonosDif && abonosDif.n > 0) return res.status(400).json({ error: 'El plan de cuotas tiene abonos registrados; no se puede revertir.' });
+    // Inmutabilidad estructural: solo se revierte en el ciclo VIGENTE — un ciclo anterior ya cerró
+    // (extracto generado) aunque no esté pagado.
+    const tjRev = db.prepare('SELECT dia_corte FROM tarjetas WHERE id=?').get(c.tarjeta_id);
+    const cicloVigRev = calcCicloLocal(hoyLocal(), (tjRev && tjRev.dia_corte) || 30);
+    if (c.ciclo < cicloVigRev) {
+      return res.status(403).json({ error: 'No se puede revertir: la compra pertenece al ciclo ' + c.ciclo + ', que ya cerró (el vigente es ' + cicloVigRev + '). El banco ya facturó ese extracto.' });
+    }
+    // Inmutabilidad: ninguna cuota puede haber caído ya en un ciclo con extracto pagado (revertir
+    // reescribiría un cierre real) — mismo criterio que la reprogramación. Incluye el ciclo de la compra.
+    const amortRev = calcularAmortizacionDiferida(d.monto, d.tasa_mv, d.num_cuotas, d.fecha_compra, d.fecha_primer_corte, null, nuOpts(db, d.tarjeta_id));
+    const ciclosRev = [...new Set(amortRev.tabla.map(q => q.fechaCorte.slice(0, 7)).concat([c.ciclo]))];
+    const cicloPagadoRev = ciclosRev.find(ci => { const e2 = db.prepare("SELECT estado FROM extractos WHERE tarjeta_id=? AND ciclo=?").get(c.tarjeta_id, ci); return e2 && e2.estado === 'pagado'; });
+    if (cicloPagadoRev) return res.status(403).json({ error: 'No se puede revertir: la diferida ya tiene cuotas facturadas en el ciclo pagado ' + cicloPagadoRev + '.' });
+
+    // Consolidar el bolsillo per-cuota → bolsillo global de 1 cuota, cap-eado al costo real
+    // (valor [+ interés intl]), igual que el resto de la app.
+    const sumBc = db.prepare("SELECT COALESCE(SUM(monto),0) t FROM bolsillo_cuotas WHERE compra_id=? AND COALESCE(moneda,'COP')='COP'").get(c.id);
+    const tope = targetBolsillo({ ...c, estado: 'pendiente' }, 'COP', null);
+    let mb = Math.round(sumBc.t || 0);
+    const capped = (tope != null && mb > tope);
+    if (capped) mb = tope;
+    const nuevoEstado = (tope != null && tope > 0 && mb >= tope) ? 'bolsillo' : (mb > 0 ? 'bolsillo_parcial' : 'pendiente');
+    // Notas: retirar el sufijo informativo de cuotas ("... | Diferida a N cuotas").
+    const notasLimpias = String(c.notas || '').replace(/\s*\|\s*Diferida a \d+ cuotas/g, '').replace(/^\s*Diferida a \d+ cuotas\s*(\|\s*)?/, '').trim() || null;
+
+    const revertir = db.transaction(() => {
+      db.prepare('DELETE FROM bolsillo_cuotas WHERE compra_id=?').run(c.id);
+      // Orden importa: primero DESVINCULAR la compra (diferida_id=NULL) y luego borrar el plan —
+      // compras.diferida_id es FOREIGN KEY a diferidas(id) y la BD corre con foreign_keys=ON.
+      db.prepare('UPDATE compras SET estado=?, diferida_id=NULL, monto_bolsillo=?, notas=? WHERE id=?').run(nuevoEstado, mb, notasLimpias, c.id);
+      db.prepare('DELETE FROM diferidas WHERE id=?').run(d.id);
+    });
+    revertir();
+    logAction('editar', tjNombre(c.tarjeta_id) + 'Diferida revertida a 1 cuota: ' + c.descripcion + ' (' + d.num_cuotas + ' -> 1)');
+    res.json({ ok: true, estado: nuevoEstado, bolsillo_consolidado: mb, capped, tope });
   });
 
   // POST /api/compras/aplicar-tasa-intl — acción 1-clic del Asistente de Conciliación IA.
