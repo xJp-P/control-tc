@@ -256,6 +256,10 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '4.5.1': [
+    'Los meses que ya cerraron quedan ahora protegidos por completo, también en el servidor: no se puede crear una compra nueva en un mes ya facturado, ni eliminarla, ni dividirla en cuotas, ni fusionar una compra dividida, ni mover una compra de un mes abierto hacia uno cerrado. La app lo bloquea con un mensaje claro: lo que el banco ya facturó no se cambia.',
+    'Al editar una compra de un mes cerrado solo quedan activos el nombre y las notas; el resto de campos se ve en gris y bloqueado, con un aviso que explica el motivo. El Asistente de Conciliación conserva su permiso especial para corregir el pasado (siempre con tu confirmación), porque su trabajo es justamente cuadrar la app contra el extracto real del banco.'
+  ],
   '4.5.0': [
     'Libertad total de cuotas: mientras el ciclo esté en curso, ya puedes cambiar el número de cuotas de una compra directamente desde su edición, sin borrarla ni recrearla. Puedes pasar una compra de contado a cuotas, cambiar de un número de cuotas a otro, o devolverla a una sola cuota — las veces que necesites. La compra conserva siempre su fecha original, y el dinero que tuvieras apartado en el bolsillo se reparte entre las cuotas (o se vuelve a juntar al revertir), sin perder un peso.',
     'Protección de ciclos ya cerrados: una vez que un ciclo cierra (el banco genera su extracto), aunque todavía no lo hayas pagado, su estructura queda sellada. Por eso el número de cuotas de las compras de meses anteriores ya no se puede cambiar a mano, para no descuadrar el extracto del banco. Lo que sí puedes seguir haciendo en esas compras es corregir su nombre o su nota. (El Asistente de Conciliación mantiene su propia vía para ajustar cuotas del pasado cuando el banco las reprogramó).'
@@ -843,7 +847,7 @@ function fmtNumInput(val) {
 }
 // Parse formatted string back to raw number string
 // MoneyInput component - shows formatted number with thousand separators, supports decimals
-function MoneyInput({ value, onChange, className, required, placeholder }) {
+function MoneyInput({ value, onChange, className, required, placeholder, disabled, style }) {
   const [display, setDisplay] = useState(fmtNumInput(value));
   const ref = useRef(null);
   useEffect(() => {
@@ -872,7 +876,7 @@ function MoneyInput({ value, onChange, className, required, placeholder }) {
     const raw = decPart !== null ? (intPart || '0') + '.' + decPart : intPart;
     onChange(raw || '');
   }
-  return e('input', { ref, type: 'text', inputMode: 'decimal', className: className || 'form-input', value: display, onChange: handleChange, required, placeholder });
+  return e('input', { ref, type: 'text', inputMode: 'decimal', className: className || 'form-input', value: display, onChange: handleChange, required, placeholder, disabled, style });
 }
 
 // ── SVG Icon component (same style as Proyecto_PTM) ──
@@ -3284,6 +3288,14 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
   });
   const lastUsdField = useRef(null); // tracks which field was edited last: 'usd', 'tasa', 'cop'
 
+  // Candado estructural de ciclo CERRADO (≠ pagado): la compra pertenece a un ciclo anterior al
+  // vigente de su tarjeta — el banco YA generó ese extracto, esté pagado o no. Todos los campos
+  // estructurales (fecha, valores, persona, intl, dividir, ciclo, cuotas) van bloqueados y opacos;
+  // solo quedan editables el Nombre en el Extracto y las notas (el backend ignora el resto de
+  // todas formas: PUT endurecido, espejo del form de Avances). Los grupos sin .ciclo propio usan
+  // el ciclo de la vista desde la que se abrieron.
+  const isCicloCerrado = !!item && !!tarjeta && ((item.ciclo || ciclo) < cicloVigente(tarjeta.dia_corte));
+  const lockStyle = isCicloCerrado ? { opacity: 0.6, cursor: 'not-allowed' } : undefined;
   // "Libertad total" de cuotas: en edición el campo Cuotas queda libre para compras individuales
   // COP sin abonos — 1→N convierte, N→M reprograma y N→1 revierte; cada acción la ejecuta su
   // endpoint transaccional DESPUÉS del PUT, conservando SIEMPRE la fila original de la compra
@@ -3292,7 +3304,7 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
   // o no) y su estructura queda sellada — la conciliación IA tiene su propia vía para el pasado.
   // Grupos, USD, abonos parciales y terceros con reembolso quedan fuera (cada endpoint los rechaza).
   const cuotasEditables = !!item && !item._isGrupo && !(item.valor_usd > 0) && !((item.monto_abonado || 0) > 0)
-    && (!tarjeta || ((item.ciclo || ciclo) >= cicloVigente(tarjeta.dia_corte)));
+    && !isCicloCerrado;
   // Cuotas con las que la compra está HOY en la BD (diferida → su total real; si no, 1).
   const cuotasOriginales = item ? ((item.estado === 'diferida' || item.diferida_id) ? (parseInt(item.cuotas_total || item.num_cuotas, 10) || 1) : 1) : 1;
 
@@ -3354,6 +3366,17 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
     // Tasa de interés intl congelada (snapshot): el usuario la escribe como % (ej. 2.0849) y se guarda
     // como decimal (0.020849). Solo si la compra es internacional y el usuario la proveyó.
     const tasaIntlNum = (esInternacional && tasaIntl !== '' && !isNaN(parseFloat(tasaIntl))) ? (parseFloat(tasaIntl) / 100) : null;
+
+    // Candado de ciclo cerrado al CREAR: si la fecha cae en un ciclo anterior al vigente, el banco
+    // ya facturó ese extracto (el backend rechaza el POST con 403). Validar ANTES de crear nada
+    // evita dejar una diferida huérfana (en el flujo de cuotas la diferida se crea primero).
+    if (!item && tarjeta) {
+      const cicloDeFecha = calcCicloLocal(fecha, tarjeta.dia_corte);
+      if (cicloDeFecha < cicloVigente(tarjeta.dia_corte)) {
+        toastErr('No se puede registrar: la fecha cae en el ciclo ' + cicloDeFecha + ', que ya cerró (el banco ya generó ese extracto). Si el extracto real incluye esta compra, usa el Asistente IA de conciliación.');
+        return;
+      }
+    }
 
     // Conversión: grupo dividido con "Dividir" DESMARCADO → fusionar en compra personal.
     // El backend hace el merge transaccional (suma valores + bolsillo, maneja diferidas).
@@ -3544,14 +3567,22 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
   const showIntlHint = aplicaIntlForm && intlHistMatch && !esInternacional;
 
   return e('form', { onSubmit: submit },
+    // Aviso de ciclo cerrado: explica por qué casi todo el form está bloqueado (mismo estilo de
+    // aviso informativo punteado/azul que usa la conciliación IA).
+    isCicloCerrado && e('div', {
+      style: { fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.45, padding: '8px 10px', background: 'rgba(79,140,255,0.06)', border: '1px dashed rgba(79,140,255,0.5)', borderRadius: 8, marginBottom: 12, display: 'flex', gap: 8, alignItems: 'flex-start' }
+    },
+      e('span', { style: { flexShrink: 0, display: 'inline-flex', marginTop: 1 } }, e(Ico, { name: 'bulb', size: 14, color: 'var(--accent)' })),
+      e('span', null, 'Esta compra pertenece al ciclo ' + (item.ciclo || ciclo) + ', que ya cerró: el banco ya generó ese extracto. Solo puedes editar el nombre y las notas; los demás datos quedan sellados para no descuadrar lo facturado.')
+    ),
     e('div', { className: 'form-row' },
       e('div', { className: 'form-group' },
         e('label', { className: 'form-label' }, 'Fecha'),
-        e('input', { type: 'date', className: 'form-input', value: fecha, onChange: ev => setFecha(ev.target.value), required: true })
+        e('input', { type: 'date', className: 'form-input', value: fecha, onChange: ev => setFecha(ev.target.value), required: true, disabled: isCicloCerrado, style: lockStyle })
       ),
       !dividir && !(item && item._isGrupo) && e('div', { className: 'form-group' },
         e('label', { className: 'form-label' }, 'Persona'),
-        e('select', { className: 'form-select', value: personaId, onChange: ev => setPersonaId(ev.target.value) },
+        e('select', { className: 'form-select', value: personaId, onChange: ev => setPersonaId(ev.target.value), disabled: isCicloCerrado, style: lockStyle },
           e('option', { value: '' }, 'Personal'),
           personas.map(p => e('option', { key: p.id, value: p.id }, p.nombre))
         )
@@ -3572,8 +3603,8 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
       )
     ),
     e('div', { style: { marginBottom: 12 } },
-      e('label', { style: { cursor: 'pointer', fontSize: 13 } },
-        e('input', { type: 'checkbox', checked: esInternacional, onChange: ev => setEsInternacional(ev.target.checked), style: { marginRight: 6 } }),
+      e('label', { style: { cursor: isCicloCerrado ? 'not-allowed' : 'pointer', fontSize: 13, opacity: isCicloCerrado ? 0.6 : 1 } },
+        e('input', { type: 'checkbox', checked: esInternacional, onChange: ev => setEsInternacional(ev.target.checked), style: { marginRight: 6, cursor: isCicloCerrado ? 'not-allowed' : 'pointer' }, disabled: isCicloCerrado }),
         intlCheckboxLabel
       ),
       esInternacional && e('div', { style: { fontSize: 11, color: 'var(--text-muted)', marginTop: 2, marginLeft: 20 } },
@@ -3583,7 +3614,7 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
       ),
       esInternacional && aplicaIntlForm && e('div', { style: { marginTop: 8, marginLeft: 20 } },
         e('label', { className: 'form-label', style: { fontSize: 12 } }, 'Tasa de interés del extracto (% mensual)'),
-        e('input', { type: 'number', step: '0.0001', className: 'form-input', value: tasaIntl, onChange: ev => setTasaIntl(ev.target.value),
+        e('input', { type: 'number', step: '0.0001', className: 'form-input', value: tasaIntl, onChange: ev => setTasaIntl(ev.target.value), disabled: isCicloCerrado, style: lockStyle,
           placeholder: tarjeta && tarjeta.tasa_mv_avances ? (tarjeta.tasa_mv_avances * 100).toFixed(4) + '  (tasa actual de la tarjeta)' : 'Ej: 2.0849' }),
         e('div', { className: 'form-hint', style: { color: 'var(--text-muted)' } },
           'Congela la tasa que el banco aplicó a ESTA compra (la imprime el extracto, ej. 2,0849). Así su interés no cambia si la tasa de la tarjeta fluctúa después. Vacío = usa la tasa actual.')
@@ -3605,13 +3636,13 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
               e('label', { className: 'form-label' }, 'Valor USD ',
                 e('span', { style: { color: '#4FC3F7', fontWeight: 700, fontSize: 10, letterSpacing: 0.5 } }, '(obligatorio)')
               ),
-              e('input', { type: 'number', step: '0.01', className: 'form-input', value: valorUsd, onChange: ev => onUsdChange(ev.target.value), placeholder: 'Ej: 9.99', required: true, style: { borderColor: '#4FC3F7' } })
+              e('input', { type: 'number', step: '0.01', className: 'form-input', value: valorUsd, onChange: ev => onUsdChange(ev.target.value), placeholder: 'Ej: 9.99', required: true, disabled: isCicloCerrado, style: isCicloCerrado ? { borderColor: '#4FC3F7', opacity: 0.6, cursor: 'not-allowed' } : { borderColor: '#4FC3F7' } })
             ),
             e('div', { className: 'form-group' },
               e('label', { className: 'form-label' }, 'Tasa USD ',
                 e('span', { style: { color: 'var(--text-muted)', fontWeight: 400 } }, '(recomendado)')
               ),
-              e(MoneyInput, { value: tasaUsd, onChange: val => onTasaChange(val), placeholder: trmInfo && trmInfo.trm ? 'TRM día: ' + new Intl.NumberFormat('es-CO').format(Math.round(trmInfo.trm)) : 'Ej: 4.150' }),
+              e(MoneyInput, { value: tasaUsd, onChange: val => onTasaChange(val), disabled: isCicloCerrado, style: lockStyle, placeholder: trmInfo && trmInfo.trm ? 'TRM día: ' + new Intl.NumberFormat('es-CO').format(Math.round(trmInfo.trm)) : 'Ej: 4.150' }),
               !tasaUsd && trmInfo && trmInfo.trm && e('div', { className: 'form-hint', style: { color: '#4FC3F7' } },
                 'Si lo dejas vacío, se usará la TRM del día: $' + new Intl.NumberFormat('es-CO').format(Math.round(trmInfo.trm)) +
                 (trmInfo.fecha ? ' (' + trmInfo.fecha + ')' : '') +
@@ -3623,7 +3654,7 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
             e('label', { className: 'form-label' }, 'Valor COP ',
               e('span', { style: { color: 'var(--text-muted)', fontWeight: 400 } }, '(opcional — el banco facturará en USD)')
             ),
-            e(MoneyInput, { value: valorCop, onChange: val => setValorCop(val), placeholder: '0' })
+            e(MoneyInput, { value: valorCop, onChange: val => setValorCop(val), placeholder: '0', disabled: isCicloCerrado, style: lockStyle })
           )
         ];
       }
@@ -3631,7 +3662,7 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
       return [
         e('div', { key: 'cop-row', className: 'form-group' },
           e('label', { className: 'form-label' }, 'Valor COP'),
-          e(MoneyInput, { value: valorCop, onChange: val => esInternacional ? onCopUsdChange(val) : setValorCop(val), required: true }),
+          e(MoneyInput, { value: valorCop, onChange: val => esInternacional ? onCopUsdChange(val) : setValorCop(val), required: true, disabled: isCicloCerrado, style: lockStyle }),
           esInternacional && lastUsdField.current === 'cop' && tasaUsd && e('div', { className: 'form-hint' }, 'Tasa calculada: ' + fmtCOP(tasaUsd) + ' por USD')
         ),
         esInternacional && e('div', { key: 'usd-row', className: 'form-row' },
@@ -3639,20 +3670,20 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
             e('label', { className: 'form-label' }, 'Valor USD ',
               e('span', { style: { color: 'var(--text-muted)', fontWeight: 400 } }, '(opcional)')
             ),
-            e('input', { type: 'number', step: '0.01', className: 'form-input', value: valorUsd, onChange: ev => onUsdChange(ev.target.value), placeholder: 'Ej: 9.99' })
+            e('input', { type: 'number', step: '0.01', className: 'form-input', value: valorUsd, onChange: ev => onUsdChange(ev.target.value), placeholder: 'Ej: 9.99', disabled: isCicloCerrado, style: lockStyle })
           ),
           e('div', { className: 'form-group' },
             e('label', { className: 'form-label' }, 'Tasa USD ',
               e('span', { style: { color: 'var(--text-muted)', fontWeight: 400 } }, '(opcional)')
             ),
-            e(MoneyInput, { value: tasaUsd, onChange: val => onTasaChange(val), placeholder: 'Ej: 4.150' })
+            e(MoneyInput, { value: tasaUsd, onChange: val => onTasaChange(val), placeholder: 'Ej: 4.150', disabled: isCicloCerrado, style: lockStyle })
           )
         )
       ];
     })(),
     e('div', { style: { marginBottom: dividir ? 6 : 12 } },
-      e('label', { style: { cursor: 'pointer', fontSize: 13 } },
-        e('input', { type: 'checkbox', checked: dividir, onChange: ev => setDividir(ev.target.checked), style: { marginRight: 6 } }),
+      e('label', { style: { cursor: isCicloCerrado ? 'not-allowed' : 'pointer', fontSize: 13, opacity: isCicloCerrado ? 0.6 : 1 } },
+        e('input', { type: 'checkbox', checked: dividir, onChange: ev => setDividir(ev.target.checked), style: { marginRight: 6, cursor: isCicloCerrado ? 'not-allowed' : 'pointer' }, disabled: isCicloCerrado }),
         'Dividir entre personas'
       ),
       dividir && e('div', { style: { fontSize: 11, color: 'var(--text-muted)', marginTop: 4, marginLeft: 20 } },
@@ -3668,20 +3699,20 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
     dividir && e('div', { style: { background: 'var(--bg-tertiary)', borderRadius: 8, padding: '12px', marginBottom: 12 } },
       splits.map((sp, i) => e('div', { key: i, style: { display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 } },
         e('div', { style: { flex: 2 } },
-          e('select', { className: 'form-select', value: sp.persona_id,
+          e('select', { className: 'form-select', value: sp.persona_id, disabled: isCicloCerrado, style: lockStyle,
             onChange: ev => setSplits(prev => prev.map((s, j) => j === i ? { ...s, persona_id: ev.target.value } : s)) },
             e('option', { value: '' }, 'Seleccionar persona'),
             personas.map(p => e('option', { key: p.id, value: p.id }, p.nombre))
           )
         ),
         e('div', { style: { flex: 1 } },
-          e(MoneyInput, { value: sp.monto, placeholder: '0',
+          e(MoneyInput, { value: sp.monto, placeholder: '0', disabled: isCicloCerrado, style: lockStyle,
             onChange: val => setSplits(prev => prev.map((s, j) => j === i ? { ...s, monto: val } : s)) })
         ),
-        splits.length > 1 && e('button', { type: 'button', className: 'btn btn-sm btn-danger',
+        splits.length > 1 && !isCicloCerrado && e('button', { type: 'button', className: 'btn btn-sm btn-danger',
           onClick: () => setSplits(prev => prev.filter((_, j) => j !== i)) }, '\u00D7')
       )),
-      e('div', { style: { display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' } },
+      !isCicloCerrado && e('div', { style: { display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' } },
         e('button', { type: 'button', className: 'btn btn-sm',
           onClick: () => setSplits(prev => [...prev, { persona_id: '', monto: '' }]) }, '+ Agregar persona'),
         totalCopNum > 0 && splits.length > 0 && e('button', { type: 'button', className: 'btn btn-sm',
@@ -3747,14 +3778,17 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
         e('div', { className: 'form-hint', style: { color: 'var(--text-muted)' } }, 'Campo automático del sistema (ej. marca de diferida). Para tus descripciones usa "Nota personal" arriba.')
       )
     ),
-    // Ciclo manual (avanzado): solo al editar una compra individual de 1 cuota.
+    // Ciclo manual (avanzado): solo al editar una compra individual de 1 cuota. En ciclo cerrado va
+    // bloqueado: mover la compra de ciclo descuadraría el extracto que el banco ya facturó.
     item && !item._isGrupo && numCuotas <= 1 && e('div', { className: 'form-group', style: { marginTop: 4 } },
       e('label', { className: 'form-label' }, 'Ciclo (avanzado)'),
-      e('input', { type: 'month', className: 'form-input', value: cicloManualVal, onChange: ev => setCicloManualVal(ev.target.value) }),
+      e('input', { type: 'month', className: 'form-input', value: cicloManualVal, onChange: ev => setCicloManualVal(ev.target.value), disabled: isCicloCerrado, style: lockStyle }),
       e('div', { className: 'form-hint', style: { color: cicloManualVal ? 'var(--warning)' : 'var(--text-muted)' } },
-        cicloManualVal
-          ? 'Ciclo fijado a mano: esta compra contará en ' + cicloManualVal + ' sin importar su fecha. Útil para cuotas que el banco reprogramó a otro mes.'
-          : 'Vacío = el ciclo se calcula solo según la fecha. Llénalo solo si el banco factura esta compra en un mes distinto al de su fecha.'
+        isCicloCerrado
+          ? 'El ciclo no se puede cambiar: la compra pertenece a un extracto que el banco ya generó.'
+          : cicloManualVal
+            ? 'Ciclo fijado a mano: esta compra contará en ' + cicloManualVal + ' sin importar su fecha. Útil para cuotas que el banco reprogramó a otro mes.'
+            : 'Vacío = el ciclo se calcula solo según la fecha. Llénalo solo si el banco factura esta compra en un mes distinto al de su fecha.'
       )
     ),
     e('div', { className: 'modal-actions' },
@@ -5447,7 +5481,9 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
     try {
       if (!tarjetaId) throw new Error('No hay tarjeta seleccionada.');
       if (op === 'crear_compra') {
-        const body = { tarjeta_id: Number(tarjetaId), ciclo: ciclo, ciclo_manual: 1, fecha: p.fecha || (ciclo + '-15'), descripcion: p.descripcion || d.descripcion || 'Compra (conciliacion)', valor_cop: Number(p.valor_cop != null ? p.valor_cop : d.valor_extracto) || 0, es_internacional: p.es_internacional ? 1 : 0 };
+        // desde_conciliacion: exime del candado de "ciclo cerrado" del POST (la IA registra compras
+        // que el extracto YA facturado trae y la app no tiene); el de ciclos PAGADOS sigue aplicando.
+        const body = { tarjeta_id: Number(tarjetaId), ciclo: ciclo, ciclo_manual: 1, fecha: p.fecha || (ciclo + '-15'), descripcion: p.descripcion || d.descripcion || 'Compra (conciliacion)', valor_cop: Number(p.valor_cop != null ? p.valor_cop : d.valor_extracto) || 0, es_internacional: p.es_internacional ? 1 : 0, desde_conciliacion: true };
         const r = await api('/compras', { method: 'POST', body });
         if (r && r.error) throw new Error(r.error);
       } else if (op === 'editar_valor' || op === 'mover_ciclo') {
@@ -5457,7 +5493,9 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
         const lista = await api('/compras?tarjeta_id=' + Number(tarjetaId));
         const a = Array.isArray(lista) ? lista.find(x => String(x.id) === String(cid)) : null;
         if (!a) throw new Error('No se encontro la compra #' + cid + ' en la tarjeta.');
-        const body = { tarjeta_id: a.tarjeta_id, fecha: a.fecha, descripcion: a.descripcion, valor_cop: a.valor_cop, valor_usd: a.valor_usd, tasa_usd: a.tasa_usd, persona_id: a.persona_id, estado: a.estado, notas: a.notas, monto_bolsillo: a.monto_bolsillo, es_internacional: a.es_internacional, ciclo: a.ciclo, ciclo_manual: a.ciclo_manual };
+        // desde_conciliacion: exime del candado de "ciclo cerrado" del PUT (la IA corrige valores y
+        // ciclos de extractos YA facturados); el candado de ciclos PAGADOS sigue aplicando.
+        const body = { tarjeta_id: a.tarjeta_id, fecha: a.fecha, descripcion: a.descripcion, valor_cop: a.valor_cop, valor_usd: a.valor_usd, tasa_usd: a.tasa_usd, persona_id: a.persona_id, estado: a.estado, notas: a.notas, monto_bolsillo: a.monto_bolsillo, es_internacional: a.es_internacional, ciclo: a.ciclo, ciclo_manual: a.ciclo_manual, desde_conciliacion: true };
         if (op === 'editar_valor') body.valor_cop = Number(p.valor_cop != null ? p.valor_cop : d.valor_extracto) || a.valor_cop;
         else { body.ciclo = p.ciclo || ciclo; body.ciclo_manual = 1; }
         const r = await api('/compras/' + cid, { method: 'PUT', body });
@@ -5466,8 +5504,9 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
         const cid = p.compra_id != null ? p.compra_id : d.compra_id;
         if (!cid) throw new Error('No se identifico la compra a reprogramar.');
         if (Array.isArray(p.cuotas) && p.cuotas.length > 0) {
-          // Ruta C: cuotas irregulares → dividir en compras de 1 cuota.
-          const r = await api('/compras/' + cid + '/dividir-cuotas', { method: 'POST', body: { cuotas: p.cuotas } });
+          // Ruta C: cuotas irregulares → dividir en compras de 1 cuota. desde_conciliacion exime
+          // del candado de "ciclo cerrado" (reprogramaciones que el banco hizo en extractos pasados).
+          const r = await api('/compras/' + cid + '/dividir-cuotas', { method: 'POST', body: { cuotas: p.cuotas, desde_conciliacion: true } });
           if (r && r.error) throw new Error(r.error);
         } else {
           // Ruta A: reprogramacion uniforme → cambiar num_cuotas de la diferida vinculada.
@@ -5585,7 +5624,7 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
               e('span', { style: { fontSize: 11.5, color: 'var(--text-muted)' } }, 'Accion sugerida: ', e('strong', { style: { color: 'var(--accent)' } }, op)),
               e('button', { className: 'btn btn-sm btn-primary', onClick: () => { setErrAplicar(''); setAccionSel({ d: d, idx: i }); } }, 'Aplicar')
             ),
-            !aplicada && op === 'convertir_a_diferida' && e('div', { style: { marginTop: 6, fontSize: 11.5, color: 'var(--text-muted)' } }, 'Convertir a diferida: hazlo manualmente desde la tarjeta (el numero de cuotas se define al crear).')
+            !aplicada && op === 'convertir_a_diferida' && e('div', { style: { marginTop: 6, fontSize: 11.5, color: 'var(--text-muted)' } }, 'Convertir a diferida: hazlo editando las cuotas de la compra desde la tarjeta (solo posible mientras su ciclo siga vigente).')
           );
         }),
     // Re-análisis iterativo: el usuario aclara/corrige y la IA vuelve a analizar (mismo PDF y

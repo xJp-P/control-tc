@@ -21,6 +21,18 @@ module.exports = function(db, { logAction, tjNombre }) {
     return year + '-' + String(month + 1).padStart(2, '0');
   }
 
+  // ¿El ciclo ya CERRÓ para la tarjeta? (cerrado ≠ pagado: el banco ya generó ese extracto,
+  // esté pagado o no — su contenido queda sellado.) Punto único de la política de inmutabilidad
+  // estructural de ciclos cerrados: crear/editar/borrar/mover/fusionar/dividir compras de un
+  // ciclo cerrado descuadra lo facturado. La conciliación IA queda exenta caso por caso vía
+  // desde_conciliacion=true (corrige el pasado con confirmación del usuario); el guard de
+  // ciclos PAGADOS de cada endpoint es independiente y aplica siempre.
+  function esCicloCerrado(tarjetaId, ciclo) {
+    if (!ciclo) return false;
+    const tj = db.prepare('SELECT dia_corte FROM tarjetas WHERE id=?').get(tarjetaId);
+    return ciclo < calcCicloLocal(hoyLocal(), (tj && tj.dia_corte) || 30);
+  }
+
   router.get('/', (req, res) => {
     const { ciclo, tarjeta_id } = req.query;
     let sql = `SELECT c.*, p.nombre as persona_nombre, p.color as persona_color,
@@ -143,6 +155,12 @@ module.exports = function(db, { logAction, tjNombre }) {
     if (extCiclo && extCiclo.estado === 'pagado') {
       return res.status(403).json({ error: 'No se puede agregar la compra: el extracto del ciclo ' + ciclo + ' ya está pagado. Los ciclos cerrados no admiten nuevos movimientos.' });
     }
+    // Inmutabilidad estructural (cerrado ≠ pagado): tampoco se crean compras en un ciclo anterior
+    // al vigente — ese extracto el banco ya lo generó. La conciliación IA (crear_compra de una
+    // compra que el extracto trae y la app no tiene) queda exenta vía desde_conciliacion.
+    if (!(req.body && req.body.desde_conciliacion) && esCicloCerrado(tarjeta_id, ciclo)) {
+      return res.status(403).json({ error: 'No se puede agregar la compra: el ciclo ' + ciclo + ' ya cerró (el banco ya generó ese extracto). Si el extracto real la incluye, usa el Asistente IA de conciliación.' });
+    }
     // "Snapshot al nacer": si no se especifica tasa_intl y la tarjeta cobra interés sobre compras
     // internacionales (Bancolombia Visa), congela la tasa ACTUAL de la tarjeta en la compra → nace
     // inmune a cambios futuros de la tasa global. El fallback (?? tasa_global) queda SOLO para las
@@ -164,7 +182,7 @@ module.exports = function(db, { logAction, tjNombre }) {
 
   router.put('/:id', (req, res) => {
     const { tarjeta_id, fecha, descripcion, valor_cop, valor_usd, tasa_usd, persona_id, estado, notas, nota_personal, monto_bolsillo, es_internacional, ciclo: cicloBody, ciclo_manual, tasa_intl } = req.body;
-    const current = db.prepare('SELECT estado, monto_bolsillo, es_internacional, ciclo, tarjeta_id, diferida_id, fecha, ciclo_manual, nota_personal, tasa_intl FROM compras WHERE id=?').get(req.params.id);
+    const current = db.prepare('SELECT * FROM compras WHERE id=?').get(req.params.id);
     // ciclo_manual: si viene en el body lo usamos; si no, conservamos el de la compra. Con
     // ciclo_manual=1 y un ciclo explícito se respeta ese ciclo; si no, se deriva de la fecha.
     const cicloManual = ciclo_manual !== undefined ? (ciclo_manual ? 1 : 0) : (current ? (current.ciclo_manual || 0) : 0);
@@ -174,6 +192,30 @@ module.exports = function(db, { logAction, tjNombre }) {
       const ext = db.prepare("SELECT estado FROM extractos WHERE tarjeta_id=? AND ciclo=?").get(current.tarjeta_id, current.ciclo);
       if (ext && ext.estado === 'pagado') {
         return res.status(403).json({ error: 'No se puede editar: el extracto del ciclo ' + current.ciclo + ' ya está pagado.' });
+      }
+    }
+    // Inmutabilidad estructural (ciclo CERRADO ≠ pagado): si la compra pertenece a un ciclo anterior
+    // al vigente de su tarjeta, el banco YA generó ese extracto (esté pagado o no) — fecha, valores,
+    // persona, flag intl, ciclo, etc. quedan sellados. Solo pasan los campos COSMÉTICOS (descripcion,
+    // nota_personal, notas): renombrar es seguro siempre y mejora el cruce de la conciliación IA
+    // (espejo del PUT restringido de avances/diferidas). La CONCILIACIÓN IA queda exenta
+    // (desde_conciliacion=true): corrige valores/ciclos de extractos pasados con confirmación del
+    // usuario; su candado de ciclos PAGADOS (arriba) sigue aplicando igual.
+    if (current && !(req.body && req.body.desde_conciliacion)) {
+      if (esCicloCerrado(current.tarjeta_id, current.ciclo)) {
+        const descCerr = descripcion !== undefined ? descripcion : current.descripcion;
+        const notaCerr = nota_personal !== undefined ? (nota_personal || null) : (current.nota_personal || null);
+        const notasCerr = notas !== undefined ? (notas || null) : (current.notas || null);
+        db.prepare('UPDATE compras SET descripcion=?, nota_personal=?, notas=? WHERE id=?')
+          .run(descCerr, notaCerr, notasCerr, req.params.id);
+        logAction('editar', tjNombre(current.tarjeta_id) + 'Compra editada (solo nombre/nota — ciclo ' + current.ciclo + ' cerrado): ' + descCerr);
+        return res.json({ ok: true, solo_cosmetico: true });
+      }
+      // Fuga inversa: la compra está en un ciclo abierto pero el DESTINO (derivado de la nueva
+      // fecha/tarjeta o del ciclo manual) ya cerró — moverla ahí inyectaría un movimiento a un
+      // extracto ya facturado, igual que crearla allá. Mismo candado, misma exención.
+      if (esCicloCerrado(tarjeta_id, ciclo)) {
+        return res.status(403).json({ error: 'No se puede mover la compra al ciclo ' + ciclo + ': ese ciclo ya cerró (el banco ya generó ese extracto). Si el extracto real la incluye, usa el Asistente IA de conciliación.' });
       }
     }
     let finalEstado = estado || (current ? current.estado : 'pendiente');
@@ -329,6 +371,12 @@ module.exports = function(db, { logAction, tjNombre }) {
         return res.status(403).json({ error: 'No se puede convertir: el extracto del ciclo ' + p.ciclo + ' ya está pagado.' });
       }
     }
+    // Inmutabilidad estructural (cerrado ≠ pagado): fundir el grupo borra las partes de terceros
+    // de un extracto que el banco ya facturó. Sin exención: la conciliación IA no fusiona grupos.
+    const parteCerrada = partes.find(p => esCicloCerrado(p.tarjeta_id, p.ciclo));
+    if (parteCerrada) {
+      return res.status(403).json({ error: 'No se puede convertir: la compra pertenece al ciclo ' + parteCerrada.ciclo + ', que ya cerró (el banco ya generó ese extracto).' });
+    }
 
     // Bloqueo crítico: reembolsos reales de terceros (no confundir con bolsillo, que es mi plata).
     const conAbono = partes.filter(p => p.persona_id && (p.tercero_pagado || (p.tercero_monto_abonado || 0) > 0));
@@ -453,6 +501,15 @@ module.exports = function(db, { logAction, tjNombre }) {
         return res.status(403).json({ error: 'No se puede dividir: el extracto del ciclo ' + ci + ' ya está pagado.' });
       }
     }
+    // Inmutabilidad estructural (cerrado ≠ pagado): ni el ciclo actual ni los destinos pueden ser
+    // ciclos ya cerrados. La conciliación IA (ruta C de reprogramar_cuotas: el banco reprogramó en
+    // extractos pasados) queda exenta vía desde_conciliacion; el guard de pagados (arriba) le aplica.
+    if (!(req.body && req.body.desde_conciliacion)) {
+      const cicloCerr = ciclosCheck.find(ci => esCicloCerrado(c.tarjeta_id, ci));
+      if (cicloCerr) {
+        return res.status(403).json({ error: 'No se puede dividir: el ciclo ' + cicloCerr + ' ya cerró (el banco ya generó ese extracto). Las reprogramaciones del pasado se corrigen con el Asistente IA de conciliación.' });
+      }
+    }
 
     const n = cuotas.length;
     const ids = db.transaction(() => {
@@ -491,6 +548,12 @@ module.exports = function(db, { logAction, tjNombre }) {
       const ext = db.prepare("SELECT estado FROM extractos WHERE tarjeta_id=? AND ciclo=?").get(c.tarjeta_id, c.ciclo);
       if (ext && ext.estado === 'pagado') {
         return res.status(403).json({ error: 'No se puede eliminar: el extracto del ciclo ' + c.ciclo + ' ya está pagado.' });
+      }
+      // Inmutabilidad estructural (cerrado ≠ pagado): borrar una compra de un ciclo que ya cerró
+      // descuadra el extracto que el banco ya facturó. Exención desde_conciliacion reservada para
+      // la conciliación IA (hoy ninguna acción IA elimina compras; queda latente por consistencia).
+      if (!(req.body && req.body.desde_conciliacion) && esCicloCerrado(c.tarjeta_id, c.ciclo)) {
+        return res.status(403).json({ error: 'No se puede eliminar: la compra pertenece al ciclo ' + c.ciclo + ', que ya cerró (el banco ya generó ese extracto).' });
       }
     }
     db.prepare('DELETE FROM compras WHERE id=?').run(req.params.id);
