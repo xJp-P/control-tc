@@ -258,7 +258,9 @@ const API = 'http://127.0.0.1:3500/api';
 const CHANGELOG = {
   '4.5.1': [
     'Los meses que ya cerraron quedan ahora protegidos por completo, también en el servidor: no se puede crear una compra nueva en un mes ya facturado, ni eliminarla, ni dividirla en cuotas, ni fusionar una compra dividida, ni mover una compra de un mes abierto hacia uno cerrado. La app lo bloquea con un mensaje claro: lo que el banco ya facturó no se cambia.',
-    'Al editar una compra de un mes cerrado solo quedan activos el nombre y las notas; el resto de campos se ve en gris y bloqueado, con un aviso que explica el motivo. El Asistente de Conciliación conserva su permiso especial para corregir el pasado (siempre con tu confirmación), porque su trabajo es justamente cuadrar la app contra el extracto real del banco.'
+    'Al editar una compra de un mes cerrado solo quedan activos el nombre y las notas; el resto de campos se ve en gris y bloqueado, con un aviso que explica el motivo. El Asistente de Conciliación conserva su permiso especial para corregir el pasado (siempre con tu confirmación), porque su trabajo es justamente cuadrar la app contra el extracto real del banco.',
+    'La división de compras entre personas se rediseñó por completo: tu propia porción ("Mi parte (Yo)") ahora es una fila más de la lista, igual que las de los demás. Puedes escribir exactamente cuánto asumes tú, borrar tu fila si no pagas nada, y repartir el total en partes iguales con un solo botón. Las partes siempre deben sumar el valor exacto de la compra: si falta o sobra dinero, la app lo muestra en rojo y no deja guardar (lo que falte nunca se te asigna solo).',
+    'En la tabla de compras, las compras a cuotas ya no muestran la etiqueta genérica "Diferida" en la columna de estado: ahora ves su estado real (Pendiente, Bolsillo o Pagado) con su color, igual que cualquier otra compra. El contador "Cuota X/Y" sigue indicando que es una compra a cuotas.'
   ],
   '4.5.0': [
     'Libertad total de cuotas: mientras el ciclo esté en curso, ya puedes cambiar el número de cuotas de una compra directamente desde su edición, sin borrarla ni recrearla. Puedes pasar una compra de contado a cuotas, cambiar de un número de cuotas a otro, o devolverla a una sola cuota — las veces que necesites. La compra conserva siempre su fecha original, y el dinero que tuvieras apartado en el bolsillo se reparte entre las cuotas (o se vuelve a juntar al revertir), sin perder un peso.',
@@ -2444,10 +2446,13 @@ function CardResumen({ tarjeta, onDataChange }) {
           const isPaidLikePast = cicloPagadoC && isDif; // diferida en ciclo pagado
           const interesIntl = calcInteresIntl(c);
           const bolsilloTarget = isDif ? (c.cuotaCorte || c.valor_cop) : (c.valor_cop + (c.es_internacional && interesIntl > 0 ? interesIntl : 0));
+          // Diferidas: el badge muestra el estado REAL (pendiente/bolsillo/pagado) igual que las
+          // compras de 1 cuota — la etiqueta "Cuota X/Y" ya deja claro que es diferida (v4.4.2
+          // hizo lo mismo en Terceros; el literal 'diferida' era redundante y sin color de estado).
           const badgeEstado = isPaidLikePast
             ? 'pagado'
             : isDif
-              ? (esFuturoCiclo ? 'diferida' : (Math.round(bolsillo) >= Math.round(bolsilloTarget) ? 'bolsillo' : bolsillo > 0 ? 'bolsillo_parcial' : 'diferida'))
+              ? (esFuturoCiclo ? 'pendiente' : (Math.round(bolsillo) >= Math.round(bolsilloTarget) ? 'bolsillo' : bolsillo > 0 ? 'bolsillo_parcial' : 'pendiente'))
               : c.estado;
           const faltaBolsillo = (!esFuturoCiclo && badgeEstado === 'bolsillo_parcial') ? Math.round(bolsilloTarget - bolsillo) : 0;
           const showAsPaid = c.estado === 'pagado' || isPaidLikePast;
@@ -2553,9 +2558,10 @@ function CardResumen({ tarjeta, onDataChange }) {
                   if (item.esDiferida) {
                     var grpBolTotal = item.partes.reduce(function(s, c) { return s + (c.monto_bolsillo || 0); }, 0);
                     var grpTarget = item.partes.reduce(function(s, c) { return s + (c.cuotaCorte || c.valor_cop); }, 0);
+                    // Estado real (pendiente, no 'diferida'): el contador "Cuota X/Y" ya marca la diferida.
                     grupoBadge = grupoPaidPast
                       ? 'pagado'
-                      : (Math.round(grpBolTotal) >= Math.round(grpTarget) ? 'bolsillo' : grpBolTotal > 0 ? 'bolsillo_parcial' : 'diferida');
+                      : (Math.round(grpBolTotal) >= Math.round(grpTarget) ? 'bolsillo' : grpBolTotal > 0 ? 'bolsillo_parcial' : 'pendiente');
                   } else {
                     // Grupo 1-cuota: sumar bolsillo de todas las partes y comparar contra suma de valores.
                     // Antes leíamos items[0].estado, lo que producía "bolsillo" falso si solo una parte estaba apartada.
@@ -2619,9 +2625,10 @@ function CardResumen({ tarjeta, onDataChange }) {
                     var childPaidPast = cicloPagadoC || c.estado === 'pagado';
                     var childBadge;
                     if (item.esDiferida) {
+                      // Estado real (pendiente, no 'diferida'): el contador "Cuota X/Y" ya marca la diferida.
                       childBadge = childPaidPast
                         ? 'pagado'
-                        : (esFuturoCiclo ? 'diferida' : (Math.round(childBol) >= Math.round(childTarget) ? 'bolsillo' : childBol > 0 ? 'bolsillo_parcial' : 'diferida'));
+                        : (esFuturoCiclo ? 'pendiente' : (Math.round(childBol) >= Math.round(childTarget) ? 'bolsillo' : childBol > 0 ? 'bolsillo_parcial' : 'pendiente'));
                     } else {
                       // Compra dividida a 1 cuota: cualquier parte (Personal o Tercero) puede ir a bolsillo.
                       // Mismo monto_bolsillo que usa la sección Terceros — los botones quedan conectados.
@@ -3279,9 +3286,14 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
   const [numCuotas, setNumCuotas] = useState(item ? (item.num_cuotas || item.cuotas_total || 1) : 1);
   const [cobrarIntereses, setCobrarIntereses] = useState(true);
   const [dividir, setDividir] = useState(item && item._isGrupo ? true : false);
+  // División "first-class": UN solo arreglo de filas donde el titular es una fila más con el
+  // valor especial persona_id='personal' (los terceros usan su id real). Cada fila se elige en
+  // el mismo dropdown, se borra con el mismo "×" y entra en la misma matemática: la suma de
+  // TODAS las filas debe ser exactamente el Valor COP. Si no hay fila "Mi parte", el titular no
+  // asume nada (un faltante se muestra en rojo y bloquea el guardado — no se le asigna solo).
   const [splits, setSplits] = useState(() => {
     if (item && item._isGrupo) {
-      const sp = item._partes.filter(p => p.persona_id).map(p => ({ persona_id: String(p.persona_id), monto: String(p.valor_cop) }));
+      const sp = item._partes.map(p => ({ persona_id: p.persona_id ? String(p.persona_id) : 'personal', monto: String(p.valor_cop) }));
       return sp.length > 0 ? sp : [{ persona_id: '', monto: '' }];
     }
     return [{ persona_id: '', monto: '' }];
@@ -3388,25 +3400,44 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
     // ── Validaciones estrictas del modo dividido (blindan la BD contra registros corruptos) ──
     // Aplican tanto al crear como al editar un grupo. NO aplican al merge-personal (dividir=false).
     if (dividir) {
-      // 1) Toda fila debe tener una persona asignada (evita "registros fantasma" sin nombre).
+      // 1) Toda fila debe tener un responsable elegido (evita "registros fantasma" sin nombre).
       if (splits.length === 0 || splits.some(sp => !sp.persona_id)) {
-        toastErr('Debes asignar una persona a cada división, elimina las divisiones sobrantes o desmarca la casilla de dividir.');
+        toastErr('Cada fila debe tener un responsable (una persona o "Mi parte (Yo)"); elimina las filas sobrantes o desmarca la casilla de dividir.');
         return;
       }
-      // 2) No se puede repetir la misma persona en varias filas.
+      // 2) Sin repetidos: ni la misma persona ni "Mi parte" pueden ir en dos filas
+      //    (el dropdown ya los excluye; esto es la defensa al guardar).
       const idsSeleccionados = splits.map(sp => String(sp.persona_id));
       if (new Set(idsSeleccionados).size !== idsSeleccionados.length) {
-        toastErr('No puedes asignar a la misma persona varias veces en una compra dividida. Por favor, suma sus montos en una sola fila.');
+        toastErr('No puedes asignar al mismo responsable varias veces en una compra dividida. Por favor, suma sus montos en una sola fila.');
         return;
       }
     }
 
-    // Edicion de grupo existente: diff splits vs originales, sin crear nuevas diferidas
+    // ── Cuadre del modo dividido (first-class) ──
+    // La suma de TODAS las filas (terceros + "Mi parte" si existe) debe ser EXACTAMENTE el
+    // Valor COP. Redondeo POR PARTE: cada monto se valida con el valor que realmente se guardará
+    // (el payload hace Math.round por parte) — el cuadre nunca falla por decimales. Si no hay
+    // fila "Mi parte", el titular no asume nada: el faltante bloquea aquí con error.
+    let miParteFinal = 0;
+    if (dividir) {
+      const hayFilaPersonal = splits.some(sp => sp.persona_id === 'personal');
+      miParteFinal = Math.round(parseFloat((splits.find(sp => sp.persona_id === 'personal') || {}).monto) || 0);
+      const sumTerceros = splits.reduce((s, sp) => s + (sp.persona_id !== 'personal' ? Math.round(parseFloat(sp.monto) || 0) : 0), 0);
+      const diff = Math.round(totalCop) - sumTerceros - miParteFinal;
+      if (diff !== 0) {
+        toastErr((diff > 0 ? 'Falta asignar ' + fmtCOP(diff) : 'Las partes exceden el total en ' + fmtCOP(Math.abs(diff)))
+          + ': las filas suman ' + fmtCOP(sumTerceros + miParteFinal) + ' y el Valor COP es ' + fmtCOP(Math.round(totalCop)) + '. '
+          + ((diff > 0 && !hayFilaPersonal) ? 'Ajusta los montos o agrega una fila "Mi parte (Yo)" si vas a asumir lo que falta.' : 'Ajusta los montos de las filas.'));
+        return;
+      }
+    }
+
+    // Edicion de grupo existente: diff splits vs originales, sin crear nuevas diferidas.
+    // Desglose first-class → contrato del backend: la fila "Mi parte" viaja como remainder
+    // (parte personal) y las demás como splits de terceros.
     if (dividir && splits.length > 0 && item && item._isGrupo) {
-      const totalSplits = splits.reduce((s, sp) => s + (parseFloat(sp.monto) || 0), 0);
-      const remainder = Math.round(totalCop - totalSplits);
-      if (totalSplits > totalCop) { toastErr('La suma de los montos supera el total'); return; }
-      if (remainder < 0) { toastErr('La suma de los montos supera el total'); return; }
+      const remainder = miParteFinal;
       onSave({
         _editGrupo: true,
         _grupoId: item._grupoId,
@@ -3415,17 +3446,15 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
         valor_usd: usdNum,
         tasa_usd: tasaNum,
         es_internacional: esInternacional ? 1 : 0,
-        splits: splits.filter(sp => sp.persona_id && parseFloat(sp.monto) > 0),
+        splits: splits.filter(sp => sp.persona_id && sp.persona_id !== 'personal' && parseFloat(sp.monto) > 0),
         remainder
       });
       return;
     }
 
-    // Split purchase: create one compra per persona + personal remainder
+    // Split purchase: create one compra per persona + personal remainder ("Mi parte")
     if (dividir && splits.length > 0) {
-      const totalSplits = splits.reduce((s, sp) => s + (parseFloat(sp.monto) || 0), 0);
-      const remainder = Math.round(totalCop - totalSplits);
-      if (totalSplits > totalCop) { toastErr('La suma de los montos supera el total'); return; }
+      const remainder = miParteFinal;
       const grupoId = (crypto.randomUUID ? crypto.randomUUID() : 'g' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10));
       const isDiferida = numCuotas > 1;
 
@@ -3440,7 +3469,7 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
         const day = Math.min(diaCorte, lastDay);
         const fechaPrimerCorte = new Date(year, month, day).toISOString().slice(0, 10);
 
-        const allParts = splits.filter(sp => sp.persona_id && parseFloat(sp.monto) > 0)
+        const allParts = splits.filter(sp => sp.persona_id && sp.persona_id !== 'personal' && parseFloat(sp.monto) > 0)
           .map(sp => ({ key: sp.persona_id, monto: Math.round(parseFloat(sp.monto)) }));
         if (remainder > 0) allParts.push({ key: 'personal', monto: remainder });
 
@@ -3458,7 +3487,7 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
 
       const base = { fecha, descripcion, valor_usd: usdNum, tasa_usd: tasaNum, estado: isDiferida ? 'diferida' : 'pendiente', ciclo, notas, nota_personal: notaPersonal || null, tasa_intl: tasaIntlNum, grupo_id: grupoId, es_internacional: esInternacional ? 1 : 0 };
       const compras = splits
-        .filter(sp => sp.persona_id && parseFloat(sp.monto) > 0)
+        .filter(sp => sp.persona_id && sp.persona_id !== 'personal' && parseFloat(sp.monto) > 0)
         .map(sp => ({ ...base, persona_id: parseInt(sp.persona_id), valor_cop: Math.round(parseFloat(sp.monto)), diferida_id: diferidaIds[sp.persona_id] || null }));
       if (remainder > 0) compras.push({ ...base, persona_id: null, valor_cop: remainder, diferida_id: diferidaIds['personal'] || null });
       if (compras.length === 0) { toastErr('Agrega al menos una persona con monto'); return; }
@@ -3547,8 +3576,11 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
   }
 
   const totalCopNum = parseFloat(valorCop) || 0;
-  const totalSplits = splits.reduce((s, sp) => s + (parseFloat(sp.monto) || 0), 0);
-  const remainder = Math.round(totalCopNum - totalSplits);
+  // Suma de TODAS las filas (incluida "Mi parte" si existe) con redondeo POR PARTE (= lo que
+  // se guardará), igual que el submit. cuadreDiff: falta (>0) o sobra (<0) para el Valor COP.
+  const totalSplits = splits.reduce((s, sp) => s + Math.round(parseFloat(sp.monto) || 0), 0);
+  const miParteNum = Math.round(parseFloat((splits.find(sp => sp.persona_id === 'personal') || {}).monto) || 0);
+  const cuadreDiff = Math.round(totalCopNum) - totalSplits;
 
   // ¿La tarjeta de la compra acumula intereses sobre compras intl en COP?
   // Por ahora solo Bancolombia Visa (validado contra extracto real).
@@ -3688,8 +3720,8 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
       ),
       dividir && e('div', { style: { fontSize: 11, color: 'var(--text-muted)', marginTop: 4, marginLeft: 20 } },
         item && item._isGrupo
-          ? 'Edita los montos por persona o agrega/quita personas. Cuotas no se modifican.'
-          : 'Se crean entradas separadas por cada parte. Si los montos suman el total exacto, tu parte queda en $0 y toda la compra le corresponde a los terceros.'
+          ? 'Edita los montos o agrega/quita filas; tu porción es la fila "Mi parte (Yo)" de la lista. Las filas deben sumar el total exacto. Cuotas no se modifican.'
+          : 'Agrega una fila por cada parte y elige quién la asume — tu porción es la opción "Mi parte (Yo)". Las filas deben sumar el Valor COP exacto; si no asumes nada, simplemente no agregues tu fila.'
       ),
       // Aviso de conversión: grupo dividido con el check desmarcado.
       item && item._isGrupo && !dividir && e('div', {
@@ -3697,48 +3729,52 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
       }, 'Al guardar, esta compra dividida se fusionará en una sola compra 100% personal. Las partes de terceros desaparecerán.')
     ),
     dividir && e('div', { style: { background: 'var(--bg-tertiary)', borderRadius: 8, padding: '12px', marginBottom: 12 } },
-      splits.map((sp, i) => e('div', { key: i, style: { display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 } },
-        e('div', { style: { flex: 2 } },
-          e('select', { className: 'form-select', value: sp.persona_id, disabled: isCicloCerrado, style: lockStyle,
-            onChange: ev => setSplits(prev => prev.map((s, j) => j === i ? { ...s, persona_id: ev.target.value } : s)) },
-            e('option', { value: '' }, 'Seleccionar persona'),
-            personas.map(p => e('option', { key: p.id, value: p.id }, p.nombre))
-          )
-        ),
-        e('div', { style: { flex: 1 } },
-          e(MoneyInput, { value: sp.monto, placeholder: '0', disabled: isCicloCerrado, style: lockStyle,
-            onChange: val => setSplits(prev => prev.map((s, j) => j === i ? { ...s, monto: val } : s)) })
-        ),
-        splits.length > 1 && !isCicloCerrado && e('button', { type: 'button', className: 'btn btn-sm btn-danger',
-          onClick: () => setSplits(prev => prev.filter((_, j) => j !== i)) }, '\u00D7')
-      )),
+      // División "first-class": una fila por parte. El titular es una fila más ("Mi parte (Yo)",
+      // valor 'personal' en el mismo dropdown); las opciones ya usadas en OTRAS filas se excluyen
+      // de los demás selects. Todas las filas se borran con el mismo botón — si el titular no
+      // asume nada, simplemente borra su fila (el faltante bloquea el guardado, no se le asigna).
+      splits.map((sp, i) => {
+        // Responsables ya elegidos en OTRAS filas: se excluyen de este dropdown (la selecci\u00F3n
+        // propia de la fila siempre queda visible para no romper el select controlado).
+        const usadas = new Set(splits.filter((s, j) => j !== i).map(s => String(s.persona_id)));
+        return e('div', { key: i, style: { display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 } },
+          e('div', { style: { flex: 2 } },
+            e('select', { className: 'form-select', value: sp.persona_id, disabled: isCicloCerrado, style: lockStyle,
+              onChange: ev => setSplits(prev => prev.map((s, j) => j === i ? { ...s, persona_id: ev.target.value } : s)) },
+              e('option', { value: '' }, 'Seleccionar'),
+              !usadas.has('personal') && e('option', { value: 'personal' }, 'Mi parte (Yo)'),
+              personas.filter(p => !usadas.has(String(p.id))).map(p => e('option', { key: p.id, value: p.id }, p.nombre))
+            )
+          ),
+          e('div', { style: { flex: 1 } },
+            e(MoneyInput, { value: sp.monto, placeholder: '0', disabled: isCicloCerrado, style: lockStyle,
+              onChange: val => setSplits(prev => prev.map((s, j) => j === i ? { ...s, monto: val } : s)) })
+          ),
+          splits.length > 1 && !isCicloCerrado && e('button', { type: 'button', className: 'btn btn-sm btn-danger',
+            onClick: () => setSplits(prev => prev.filter((_, j) => j !== i)) }, '\u00D7')
+        );
+      }),
       !isCicloCerrado && e('div', { style: { display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' } },
         e('button', { type: 'button', className: 'btn btn-sm',
           onClick: () => setSplits(prev => [...prev, { persona_id: '', monto: '' }]) }, '+ Agregar persona'),
         totalCopNum > 0 && splits.length > 0 && e('button', { type: 'button', className: 'btn btn-sm',
           onClick: () => {
-            const numPartes = splits.length + 1; // personas + yo
-            const cuota = Math.floor(totalCopNum / numPartes);
-            const resto = totalCopNum - cuota * numPartes;
+            // Reparte el Valor COP en partes iguales entre las filas actuales; el residuo del
+            // redondeo lo absorbe la primera fila (el total queda cuadrado por construcci\u00F3n).
+            const n = splits.length;
+            const cuota = Math.floor(Math.round(totalCopNum) / n);
+            const resto = Math.round(totalCopNum) - cuota * n;
             setSplits(prev => prev.map((s, i) => ({ ...s, monto: String(i === 0 ? cuota + resto : cuota) })));
           },
-          title: 'Divide el total entre los terceros y t\u00FA (t\u00FA asumes una parte igual)'
-        }, '\u00F7 Incluy\u00E9ndome'),
-        totalCopNum > 0 && splits.length > 0 && e('button', { type: 'button', className: 'btn btn-sm',
-          onClick: () => {
-            const numPartes = splits.length; // solo terceros, sin titular
-            const cuota = Math.floor(totalCopNum / numPartes);
-            const resto = totalCopNum - cuota * numPartes;
-            setSplits(prev => prev.map((s, i) => ({ ...s, monto: String(i === 0 ? cuota + resto : cuota) })));
-          },
-          title: 'Divide el total 100% entre los terceros (tu parte queda en $0)'
-        }, '\u00F7 Solo terceros')
+          title: 'Divide el Valor COP en partes iguales entre las filas actuales (la primera absorbe el redondeo)'
+        }, '\u00F7 Repartir en partes iguales')
       ),
       totalCopNum > 0 && e('div', { style: { fontSize: 12, marginTop: 4 } },
-        e('span', { style: { color: remainder < 0 ? 'var(--danger)' : remainder === 0 ? 'var(--success)' : 'var(--text-secondary)' } },
-          remainder < 0 ? 'Excede el total en ' + fmtCOP(Math.abs(remainder))
-            : remainder === 0 ? 'Dividido 100% entre terceros \u2014 tu parte queda en $0'
-            : 'Tu parte: ' + fmtCOP(remainder)
+        e('span', { style: { color: cuadreDiff !== 0 ? 'var(--danger)' : miParteNum === 0 ? 'var(--success)' : 'var(--text-secondary)' } },
+          cuadreDiff < 0 ? 'Las partes exceden el total en ' + fmtCOP(Math.abs(cuadreDiff))
+            : cuadreDiff > 0 ? 'Falta asignar ' + fmtCOP(cuadreDiff) + ' entre las partes'
+            : miParteNum === 0 ? 'Dividido 100% entre terceros \u2014 tu parte queda en $0'
+            : 'Cuadra exacto \u2014 tu parte: ' + fmtCOP(miParteNum)
         )
       )
     ),
