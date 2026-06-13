@@ -256,6 +256,9 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '4.5.2': [
+    'Corregido un detalle visual de ordenamiento: cuando una compra dividida y una compra normal tenían la misma fecha, la dividida podía aparecer por debajo aunque se hubiera registrado después. Ahora, ante la misma fecha, manda el orden real de registro (la más reciente arriba en la tabla de compras, y el orden cronológico correcto en el desglose del extracto).'
+  ],
   '4.5.1': [
     'Los meses que ya cerraron quedan ahora protegidos por completo, también en el servidor: no se puede crear una compra nueva en un mes ya facturado, ni eliminarla, ni dividirla en cuotas, ni fusionar una compra dividida, ni mover una compra de un mes abierto hacia uno cerrado. La app lo bloquea con un mensaje claro: lo que el banco ya facturó no se cambia.',
     'Al editar una compra de un mes cerrado solo quedan activos el nombre y las notas; el resto de campos se ve en gris y bloqueado, con un aviso que explica el motivo. El Asistente de Conciliación conserva su permiso especial para corregir el pasado (siempre con tu confirmación), porque su trabajo es justamente cuadrar la app contra el extracto real del banco.',
@@ -2062,13 +2065,25 @@ function CardResumen({ tarjeta, onDataChange }) {
         cuota_num: esDiferida ? items[0].cuota_num : null,
         cuotas_total: esDiferida ? items[0].cuotas_total : null,
         total,
+        // id de orden del grupo = el menor id de sus partes (momento en que nació la compra
+        // dividida). Sirve de desempate cuando dos filas comparten fecha, igual que el id de
+        // un single. Estable ante ediciones (agregar una parte nueva no "sube" el grupo).
+        _ordenId: Math.min(...items.map(c => c.id)),
         partes: items.sort((a, b) => (a.persona_id ? 1 : 0) - (b.persona_id ? 1 : 0))
       });
     });
+    // Orden de la tabla: fecha DESC y, ante misma fecha, id DESC (la compra registrada más
+    // recientemente primero) — mismo criterio que el ORDER BY del backend. Sin el desempate,
+    // el sort (estable) dejaba TODOS los singles antes que TODOS los grupos: una compra
+    // dividida nueva caía debajo de un single más viejo de la misma fecha.
     result.sort((a, b) => {
       const fa = a.tipo === 'grupo' ? a.fecha : a.data.fecha;
       const fb = b.tipo === 'grupo' ? b.fecha : b.data.fecha;
-      return fb.localeCompare(fa);
+      const byFecha = fb.localeCompare(fa);
+      if (byFecha !== 0) return byFecha;
+      const ia = a.tipo === 'grupo' ? a._ordenId : a.data.id;
+      const ib = b.tipo === 'grupo' ? b._ordenId : b.data.id;
+      return ib - ia;
     });
     return result;
   })();
@@ -4198,7 +4213,7 @@ function Pagos({ tarjeta, onDataChange }) {
         });
         singlesCompras.forEach(function(c) {
           var intl = c.interes_intl || 0;
-          allItems.push({ tipo: 'compra', fecha: c.fecha || '', nombre: c.descripcion, capital: c.total, interes: intl, total: c.total + intl, valor_usd: c.valor_usd, tasa_usd: c.tasa_usd, es_internacional: c.es_internacional });
+          allItems.push({ tipo: 'compra', fecha: c.fecha || '', _ordenId: c.id, nombre: c.descripcion, capital: c.total, interes: intl, total: c.total + intl, valor_usd: c.valor_usd, tasa_usd: c.tasa_usd, es_internacional: c.es_internacional });
         });
         Object.keys(gruposCompras).forEach(function(gid) {
           var partes = gruposCompras[gid];
@@ -4208,13 +4223,16 @@ function Pagos({ tarjeta, onDataChange }) {
             var interesGrupo = partes.reduce(function(s, p) { return s + (p.interes_intl || 0); }, 0);
             allItems.push({
               tipo: 'compra_grupo', fecha: first.fecha || '', nombre: first.descripcion,
+              // _ordenId = menor id de las partes (nacimiento de la compra dividida), igual que
+              // purchaseRows en la tabla principal — desempate cronológico por fecha igual.
+              _ordenId: Math.min.apply(null, partes.map(function(p) { return p.id; })),
               capital: capitalGrupo, interes: interesGrupo, total: capitalGrupo + interesGrupo,
               valor_usd: first.valor_usd, tasa_usd: first.tasa_usd, partes: partes
             });
           } else {
             var c = partes[0];
             var intlSingle = c.interes_intl || 0;
-            allItems.push({ tipo: 'compra', fecha: c.fecha || '', nombre: c.descripcion, capital: c.total, interes: intlSingle, total: c.total + intlSingle, valor_usd: c.valor_usd, tasa_usd: c.tasa_usd, es_internacional: c.es_internacional });
+            allItems.push({ tipo: 'compra', fecha: c.fecha || '', _ordenId: c.id, nombre: c.descripcion, capital: c.total, interes: intlSingle, total: c.total + intlSingle, valor_usd: c.valor_usd, tasa_usd: c.tasa_usd, es_internacional: c.es_internacional });
           }
         });
       }
@@ -4253,7 +4271,15 @@ function Pagos({ tarjeta, onDataChange }) {
           }
         });
       }
-      allItems.sort(function(a, b) { return a.fecha.localeCompare(b.fecha); });
+      // Orden ASCENDENTE (cronológico, viejo→nuevo) con desempate por id: ante misma fecha, la
+      // compra registrada antes va primero — mismo criterio que la tabla principal pero en sentido
+      // inverso. Solo las compras exponen _ordenId; avances/diferidas (sin id comparable entre
+      // tablas) caen a 0 y conservan su orden estable.
+      allItems.sort(function(a, b) {
+        var byFecha = a.fecha.localeCompare(b.fecha);
+        if (byFecha !== 0) return byFecha;
+        return (a._ordenId || 0) - (b._ordenId || 0);
+      });
 
       var tipoLabel = { compra: 'Compra', avance: 'Avance', diferida: 'Diferida' };
       var tipoColor = { compra: 'var(--text-secondary)', avance: 'var(--danger)', diferida: 'var(--purple)' };
