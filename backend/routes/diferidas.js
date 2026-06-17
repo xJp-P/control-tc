@@ -24,8 +24,9 @@ module.exports = function(db, { logAction, tjNombre }) {
       const compraPersona = db.prepare(`SELECT c.persona_id, p.nombre, p.color FROM compras c
         LEFT JOIN personas p ON c.persona_id = p.id
         WHERE c.diferida_id = ? AND c.persona_id IS NOT NULL LIMIT 1`).get(d.id);
-      // Compra vinculada a esta diferida (para gestionar bolsillo). Toma la primera/principal.
-      const compraVinc = db.prepare(`SELECT id, monto_bolsillo, valor_cop, grupo_id FROM compras WHERE diferida_id = ? ORDER BY id LIMIT 1`).get(d.id);
+      // Compra vinculada a esta diferida (para gestionar bolsillo + mostrar su nota personal en la
+      // tabla). Toma la primera/principal.
+      const compraVinc = db.prepare(`SELECT id, monto_bolsillo, valor_cop, grupo_id, nota_personal FROM compras WHERE diferida_id = ? ORDER BY id LIMIT 1`).get(d.id);
       // Per-cuota bolsillo: mapa {cuota_num: monto} para la compra vinculada
       const bolPorCuota = {};
       if (compraVinc) {
@@ -44,6 +45,8 @@ module.exports = function(db, { logAction, tjNombre }) {
         persona_color: compraPersona ? compraPersona.color : null,
         compra_id: compraVinc ? compraVinc.id : null,
         grupo_id: compraVinc ? compraVinc.grupo_id : null,
+        // Nota personal de la compra vinculada (se muestra junto al nombre en la tabla, igual que en Compras).
+        nota_personal: compraVinc ? (compraVinc.nota_personal || null) : null,
         // Bolsillo total (cache) y per-cuota
         monto_bolsillo: compraVinc ? (compraVinc.monto_bolsillo || 0) : (d.monto_bolsillo || 0),
         bolsillo_por_cuota: bolPorCuota

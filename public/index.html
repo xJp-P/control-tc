@@ -256,6 +256,10 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '4.5.3': [
+    'Las tablas se ven más limpias: el nombre de la compra, su nota personal y la etiqueta de cuota (ej. "Cuota 2/12") ahora van juntos en una sola línea compacta, en vez de apilarse y estirar la fila al doble de alto.',
+    'La pestaña "Diferidas" ahora también muestra la nota personal de cada compra junto a su nombre, igual que la tabla principal — así tienes el mismo contexto en ambas vistas (ej. ver "MacBook" al lado de "APPLE.COM/US").'
+  ],
   '4.5.2': [
     'Corregido un detalle visual de ordenamiento: cuando una compra dividida y una compra normal tenían la misma fecha, la dividida podía aparecer por debajo aunque se hubiera registrado después. Ahora, ante la misma fecha, manda el orden real de registro (la más reciente arriba en la tabla de compras, y el orden cronológico correcto en el desglose del extracto).'
   ],
@@ -2058,6 +2062,7 @@ function CardResumen({ tarjeta, onDataChange }) {
         grupo_id: gid,
         fecha: items[0].fecha,
         descripcion: items[0].descripcion,
+        nota_personal: items[0].nota_personal || null,
         estado: items[0].estado,
         valor_usd: items[0].valor_usd,
         tasa_usd: items[0].tasa_usd,
@@ -2474,14 +2479,17 @@ function CardResumen({ tarjeta, onDataChange }) {
           const valorMostrar = isDif && c.cuotaCorte ? c.cuotaCorte : c.valor_cop;
           return e('tr', { key: c.id, style: showAsPaid ? { background: 'rgba(52,211,153,0.10)' } : tieneParcial ? { background: 'rgba(59,130,246,0.08)' } : null },
             e('td', null, fmtDate(c.fecha)),
+            // Descripción compacta en UNA línea: nombre + nota personal (muted) + badge de cuota +
+            // abono parcial, todos inline (flex, gap). Sin <div> en bloque para la nota → no infla
+            // la altura de la fila. flexWrap permite el salto natural solo si de verdad no cabe.
             e('td', null,
-              c.descripcion,
-              c.nota_personal && e('div', { style: { fontSize: 11, color: 'var(--text-muted)', marginTop: 1 } }, c.nota_personal),
-              // El valor USD ahora vive en su propia columna "Valor USD" — quitamos
-              // la concatenación redundante en la descripción.
-              isDif && c.cuota_num && e('span', { style: { fontSize: 10, color: 'var(--accent)', marginLeft: 8 } }, 'Cuota ' + c.cuota_num + '/' + c.cuotas_total),
-              // Nombre del responsable se movió a su propia columna.
-              tieneParcial && e('span', { className: 'badge badge-active', style: { marginLeft: 8, fontSize: 10 } }, 'abono parcial')
+              e('div', { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
+                e('span', null, c.descripcion),
+                c.nota_personal && e('span', { style: { fontSize: 11, color: 'var(--text-muted)' } }, c.nota_personal),
+                // El valor USD vive en su propia columna; el responsable también.
+                isDif && c.cuota_num && e('span', { style: { fontSize: 10, color: 'var(--accent)' } }, 'Cuota ' + c.cuota_num + '/' + c.cuotas_total),
+                tieneParcial && e('span', { className: 'badge badge-active', style: { fontSize: 10 } }, 'abono parcial')
+              )
             ),
             // Responsable: tercero con persona-dot o "—" si es Personal.
             e('td', { style: { fontSize: 12 } },
@@ -2590,10 +2598,13 @@ function CardResumen({ tarjeta, onDataChange }) {
                   const grpInteres = item.partes.reduce((s, p) => s + calcInteresIntl(p), 0);
                   const parentRow = e('tr', { key: 'grp-' + item.grupo_id, style: { background: grupoPaidPast ? 'rgba(52,211,153,0.10)' : 'var(--bg-tertiary)' } },
                     e('td', null, fmtDate(item.fecha)),
-                    e('td', { style: { fontWeight: 700 } },
-                      item.descripcion,
-                      // El valor USD vive en su propia columna; ya no se concatena aquí.
-                      item.esDiferida && e('span', { style: { fontSize: 10, color: 'var(--accent)', marginLeft: 8, fontWeight: 600 } }, 'Cuota ' + item.cuota_num + '/' + item.cuotas_total)
+                    // Descripción compacta inline (igual que la fila simple): nombre + nota + cuota.
+                    e('td', null,
+                      e('div', { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
+                        e('span', { style: { fontWeight: 700 } }, item.descripcion),
+                        item.nota_personal && e('span', { style: { fontSize: 11, color: 'var(--text-muted)', fontWeight: 400 } }, item.nota_personal),
+                        item.esDiferida && e('span', { style: { fontSize: 10, color: 'var(--accent)' } }, 'Cuota ' + item.cuota_num + '/' + item.cuotas_total)
+                      )
                     ),
                     // Responsable: badge "Dividida" en azul (reservamos verde para "pagado") + cantidad de partes.
                     e('td', { style: { fontSize: 12 } },
@@ -2799,7 +2810,13 @@ function CardResumen({ tarjeta, onDataChange }) {
                     if (cicloPagadoDif) rowStyleD.background = 'rgba(52,211,153,0.10)';
                     return e('tr', { key: d.id, onClick: () => loadDiferidaDetail(d.id), style: rowStyleD, className: selectedDiferida === d.id ? 'row-highlight' : '' },
                       e('td', null, fmtDate(d.fecha_compra)),
-                      e('td', { style: { fontWeight: 600 } }, d.etiqueta),
+                      // Descripción compacta inline (igual que la tabla de Compras): nombre + nota personal.
+                      e('td', null,
+                        e('div', { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
+                          e('span', { style: { fontWeight: 600 } }, d.etiqueta),
+                          d.nota_personal && e('span', { style: { fontSize: 11, color: 'var(--text-muted)', fontWeight: 400 } }, d.nota_personal)
+                        )
+                      ),
                       e('td', { style: { fontSize: 12 } },
                         d.es_de_tercero
                           ? e('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 6 } }, e('span', { style: { background: d.persona_color || 'var(--accent)', width: 8, height: 8, display: 'inline-block', borderRadius: '50%' } }), e('span', { style: { color: 'var(--text-primary)' } }, d.persona_nombre))
@@ -2828,7 +2845,13 @@ function CardResumen({ tarjeta, onDataChange }) {
                     var grupoBadge = cicloPagadoDif ? 'pagado' : esFuturoCicloDif ? 'pendiente' : (Math.round(totalBol) >= Math.round(totalCuota) && totalCuota > 0 ? 'bolsillo' : totalBol > 0 ? 'bolsillo_parcial' : 'pendiente');
                     var madre = e('tr', { key: 'dgrp-' + gid, style: { background: cicloPagadoDif ? 'rgba(52,211,153,0.10)' : 'var(--bg-tertiary)' } },
                       e('td', null, fmtDate(primera.fecha_compra)),
-                      e('td', { style: { fontWeight: 700 } }, primera.etiqueta),
+                      // Descripción compacta inline: nombre del grupo + nota personal (compartida por las partes).
+                      e('td', null,
+                        e('div', { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
+                          e('span', { style: { fontWeight: 700 } }, primera.etiqueta),
+                          primera.nota_personal && e('span', { style: { fontSize: 11, color: 'var(--text-muted)', fontWeight: 400 } }, primera.nota_personal)
+                        )
+                      ),
                       e('td', { style: { fontSize: 12 } },
                         e('span', { className: 'badge', style: { display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, padding: '3px 8px', background: 'rgba(56,189,248,0.15)', color: '#38bdf8' } }, e(Ico, { name: 'users', size: 10, color: 'currentColor' }), 'Dividida'),
                         e('span', { style: { fontSize: 10, color: 'var(--text-muted)', marginLeft: 6 } }, partes.length + ' partes')
