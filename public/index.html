@@ -261,6 +261,9 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '4.5.6': [
+    'El Asistente de IA ahora te deja conciliar también el mes en curso, no solo los meses ya cerrados. Es útil cuando el banco adelanta el corte (por ejemplo, si la fecha cae en fin de semana) y ya te envió el extracto antes de tiempo: en el menú "Periodo a conciliar" verás el mes actual marcado como "Ciclo en curso / Corte adelantado", listo para analizar tu PDF.'
+  ],
   '4.5.5': [
     'Corregido un error importante en el cálculo de la "Deuda Total" y el "Cupo Usado": las compras a cuotas internacionales facturadas en pesos (ej. de Visa) no estaban sumando su saldo completo, así que el cupo mostraba disponible de más. Ahora la deuda refleja el saldo real de todas tus cuotas.',
     'Cuando la deuda supera el cupo de la tarjeta, la app ahora lo avisa con claridad: muestra el estado de "Sobrecupo" con el valor disponible en negativo (ej. -$1.500.000) y la barra de cupo en rojo, sin desbordarse del recuadro.',
@@ -5879,20 +5882,24 @@ function IaAsistente({ iaConfig, onIaConfigChange, tarjetas, onGoConfig, demoMod
     setLoadingCiclos(true);
     setCiclosTarjeta([]);   // limpia ya: nunca quedan visibles los de otra tarjeta
     setCiclo('');
-    // Solo ciclos YA CERRADOS: se excluye el ciclo vigente (en curso), cuyo extracto el
-    // banco aun no ha emitido y por tanto no se puede conciliar.
+    // Ciclos cerrados (r.ciclo < vig) + SIEMPRE el ciclo vigente (en curso) como primera opción:
+    // el banco puede ADELANTAR el corte (fin de semana/festivo) y emitir el extracto antes de la
+    // fecha teórica, así que el usuario debe poder conciliar el mes en curso aunque "matemáticamente"
+    // no haya cerrado. El default sigue siendo el último cerrado (caso normal); el vigente queda
+    // disponible y rotulado aparte. La conciliación confía en las fechas REALES del PDF.
     api('/extractos?tarjeta_id=' + card.id).then(rows => {
       if (seq !== fetchSeq.current) return;   // respuesta de una tarjeta anterior → descartar
       const set = {};
       (Array.isArray(rows) ? rows : []).forEach(r => { if (r && r.ciclo && r.ciclo < vig) set[r.ciclo] = 1; });
-      const ciclos = Object.keys(set).sort().reverse();
+      const cerrados = Object.keys(set).sort().reverse();
+      const ciclos = [vig, ...cerrados];
       setCiclosTarjeta(ciclos);
-      setCiclo(ciclos[0] || '');
+      setCiclo(cerrados[0] || vig);   // default: último cerrado; si no hay ninguno, el vigente
       setLoadingCiclos(false);
     }).catch(() => {
       if (seq !== fetchSeq.current) return;
       const prev = cicloAnterior(vig);   // fallback offline: ultimo cerrado por calendario
-      setCiclosTarjeta([prev]); setCiclo(prev); setLoadingCiclos(false);
+      setCiclosTarjeta([vig, prev]); setCiclo(prev); setLoadingCiclos(false);
     });
   }, [tarjetaId]);
 
@@ -6064,8 +6071,16 @@ function IaAsistente({ iaConfig, onIaConfigChange, tarjetas, onGoConfig, demoMod
                 loadingCiclos
                   ? e('div', { className: 'form-input', style: { color: 'var(--text-muted)', display: 'flex', alignItems: 'center' } }, 'Cargando periodos...')
                   : ciclosTarjeta.length
-                    ? e('select', { className: 'form-input', value: ciclo, onChange: ev => setCiclo(ev.target.value) },
-                        ciclosTarjeta.map((c, i) => e('option', { key: c, value: c }, cicloLabel(c) + (i === 0 ? ' (Ultimo extracto cerrado)' : ''))))
+                    ? (function() {
+                        // Rótulos: el ciclo vigente (en curso) se marca "Corte adelantado"; el primer
+                        // ciclo realmente cerrado, "Ultimo extracto cerrado".
+                        const cardSel = activas.find(t => String(t.id) === String(tarjetaId));
+                        const vigSel = cardSel ? cicloVigente(cardSel.dia_corte) : null;
+                        const primerCerrado = ciclosTarjeta.find(c => c !== vigSel);
+                        return e('select', { className: 'form-input', value: ciclo, onChange: ev => setCiclo(ev.target.value) },
+                          ciclosTarjeta.map(c => e('option', { key: c, value: c },
+                            cicloLabel(c) + (c === vigSel ? ' (Ciclo en curso / Corte adelantado)' : (c === primerCerrado ? ' (Ultimo extracto cerrado)' : '')))));
+                      })()
                     : e('div', { className: 'form-input', style: { color: 'var(--text-muted)', display: 'flex', alignItems: 'center' } }, 'Sin periodos disponibles')
               )
             ),
