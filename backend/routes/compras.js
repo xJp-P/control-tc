@@ -586,8 +586,11 @@ module.exports = function(db, { logAction, tjNombre }) {
     if (!c) return res.status(404).json({ error: 'Compra no encontrada' });
     if (c.estado === 'diferida' || c.diferida_id) return res.status(400).json({ error: 'La compra ya es diferida; su número de cuotas se cambia con la reprogramación.' });
     if (c.grupo_id) return res.status(403).json({ error: 'Esta compra es parte de una compra dividida; conviértela editando el grupo completo.' });
-    if (c.valor_usd && c.valor_usd > 0) return res.status(400).json({ error: 'Diferir compras con valor en dólares no está soportado.' });
     if ((c.monto_abonado || 0) > 0) return res.status(400).json({ error: 'La compra tiene un abono parcial registrado; no se puede convertir a cuotas.' });
+    // Una compra internacional de Visa (valor_cop>0 + USD informativo) SÍ se difiere: la amortización
+    // corre sobre el COP. Solo se rechaza la compra USD PURA (sin valor en pesos, no amortizable en COP)
+    // — lo cubre este guard de valor_cop (antes había además un guard de valor_usd>0 que bloqueaba de
+    // más las compras internacionales con COP; se eliminó por redundante e incorrecto).
     if (!c.valor_cop || c.valor_cop <= 0) return res.status(400).json({ error: 'La compra no tiene valor en pesos para amortizar.' });
     if (compraTerceroConReembolso(db, c.id)) {
       return res.status(403).json({ error: 'No se puede convertir: esta compra es de un tercero y ya tiene reembolsos registrados. Gestiona o retira esos abonos desde la pestaña Terceros antes de convertir.' });
@@ -666,7 +669,9 @@ module.exports = function(db, { logAction, tjNombre }) {
     if (!(c.estado === 'diferida' || c.diferida_id)) return res.status(400).json({ error: 'La compra no es diferida; no hay plan de cuotas que revertir.' });
     if (!c.diferida_id) return res.status(400).json({ error: 'La compra no tiene un plan de cuotas vinculado.' });
     if (c.grupo_id) return res.status(403).json({ error: 'Esta compra es parte de una compra dividida; gestiónala editando el grupo completo.' });
-    if (c.valor_usd && c.valor_usd > 0) return res.status(400).json({ error: 'Revertir compras con valor en dólares no está soportado.' });
+    // Solo se rechaza la compra USD PURA (sin valor en pesos): su bolsillo es en USD y la consolidación
+    // de revertir opera en COP. Una internacional de Visa (valor_cop>0 + USD informativo) sí se revierte.
+    if (c.valor_usd && c.valor_usd > 0 && (!c.valor_cop || c.valor_cop <= 0)) return res.status(400).json({ error: 'Revertir compras solo en dólares (sin valor en pesos) no está soportado.' });
     if (compraTerceroConReembolso(db, c.id)) {
       return res.status(403).json({ error: 'No se puede revertir: esta compra es de un tercero y ya tiene reembolsos registrados. Gestiona o retira esos abonos desde la pestaña Terceros antes de revertir.' });
     }

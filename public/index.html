@@ -256,6 +256,10 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '4.5.4': [
+    'Ahora puedes cambiar el número de cuotas de una compra internacional (la que se factura en pesos, ej. de Visa) mientras el mes esté abierto, igual que cualquier otra compra. Antes el sistema lo impedía por error solo porque la compra tenía además un valor de referencia en dólares.',
+    'Al registrar una compra internacional, si escribes el valor en pesos y el valor en dólares, la app ahora calcula sola la tasa de cambio (pesos por dólar). Antes esto solo funcionaba al revés (escribiendo la tasa para obtener los pesos).'
+  ],
   '4.5.3': [
     'Las tablas se ven más limpias: el nombre de la compra, su nota personal y la etiqueta de cuota (ej. "Cuota 2/12") ahora van juntos en una sola línea compacta, en vez de apilarse y estirar la fila al doble de alto.',
     'La pestaña "Diferidas" ahora también muestra la nota personal de cada compra junto a su nombre, igual que la tabla principal — así tienes el mismo contexto en ambas vistas (ej. ver "MacBook" al lado de "APPLE.COM/US").'
@@ -3347,13 +3351,17 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
   const isCicloCerrado = !!item && !!tarjeta && ((item.ciclo || ciclo) < cicloVigente(tarjeta.dia_corte));
   const lockStyle = isCicloCerrado ? { opacity: 0.6, cursor: 'not-allowed' } : undefined;
   // "Libertad total" de cuotas: en edición el campo Cuotas queda libre para compras individuales
-  // COP sin abonos — 1→N convierte, N→M reprograma y N→1 revierte; cada acción la ejecuta su
+  // sin abonos — 1→N convierte, N→M reprograma y N→1 revierte; cada acción la ejecuta su
   // endpoint transaccional DESPUÉS del PUT, conservando SIEMPRE la fila original de la compra
   // (fecha/registro intactos: la prelación de pagos del banco depende del orden cronológico real).
   // SOLO en el ciclo VIGENTE: un ciclo anterior ya CERRÓ (el banco generó su extracto, esté pagado
   // o no) y su estructura queda sellada — la conciliación IA tiene su propia vía para el pasado.
-  // Grupos, USD, abonos parciales y terceros con reembolso quedan fuera (cada endpoint los rechaza).
-  const cuotasEditables = !!item && !item._isGrupo && !(item.valor_usd > 0) && !((item.monto_abonado || 0) > 0)
+  // Grupos, abonos parciales, terceros con reembolso y ciclos cerrados quedan fuera (cada endpoint
+  // los rechaza). USD: una compra internacional de Visa (valor_cop>0 + USD informativo) SÍ puede
+  // diferirse (la amortización corre sobre el COP); solo se excluye la compra USD PURA (sin valor
+  // en pesos, ej. MC/Amex dual), que no es amortizable en COP.
+  const esUsdPura = !!(item && item.valor_usd > 0 && !(item.valor_cop > 0));
+  const cuotasEditables = !!item && !item._isGrupo && !esUsdPura && !((item.monto_abonado || 0) > 0)
     && !isCicloCerrado;
   // Cuotas con las que la compra está HOY en la BD (diferida → su total real; si no, 1).
   const cuotasOriginales = item ? ((item.estado === 'diferida' || item.diferida_id) ? (parseInt(item.cuotas_total || item.num_cuotas, 10) || 1) : 1) : 1;
@@ -3393,9 +3401,23 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
     const tasa = parseFloat(tasaUsd);
     const cop = parseFloat(valorCop);
     if (field === 'cop' && usd > 0 && cop > 0) {
+      // Editó COP teniendo USD → deriva la tasa (COP/USD).
       const calc = Math.round(cop / usd);
       if (calc !== Math.round(tasa)) setTasaUsd(calc);
-    } else if ((field === 'tasa' || field === 'usd') && usd > 0 && tasa > 0) {
+    } else if (field === 'usd' && usd > 0) {
+      // Editó USD: si ya hay tasa, recalcula COP (USD×tasa). Si NO hay tasa pero sí COP, deriva la
+      // tasa (COP/USD) — el caso que faltaba. Tras derivarla marcamos 'cop' como último campo para
+      // que la siguiente pasada de este efecto NO vuelva a recalcular COP: evita pisar el valor que
+      // el usuario escribió (por el redondeo de ida y vuelta) y corta el posible loop.
+      if (tasa > 0) {
+        const calc = Math.round(usd * tasa);
+        if (calc !== Math.round(cop)) setValorCop(calc);
+      } else if (cop > 0) {
+        const calc = Math.round(cop / usd);
+        if (calc !== Math.round(tasa)) { setTasaUsd(calc); lastUsdField.current = 'cop'; }
+      }
+    } else if (field === 'tasa' && usd > 0 && tasa > 0) {
+      // Editó la tasa → recalcula COP (USD×tasa).
       const calc = Math.round(usd * tasa);
       if (calc !== Math.round(cop)) setValorCop(calc);
     }
@@ -3823,7 +3845,7 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
         // PUT; la fila original queda intacta). Bloqueado solo para grupos, USD o con abono parcial.
         e('input', { type: 'number', className: 'form-input', value: numCuotas, onChange: ev => setNumCuotas(ev.target.value), min: 1, max: 60, disabled: !!item && !cuotasEditables, style: (item && !cuotasEditables) ? { opacity: 0.6, cursor: 'not-allowed' } : undefined }),
         item && !cuotasEditables && e('div', { className: 'form-hint', style: { color: 'var(--text-muted)' } },
-          'Las cuotas no se pueden cambiar aquí: la compra es de un ciclo ya cerrado, es dividida, tiene valor en dólares o tiene abonos.'
+          'Las cuotas no se pueden cambiar aquí: la compra es de un ciclo ya cerrado, es dividida, tiene abonos o es una compra solo en dólares (sin valor en pesos).'
         ),
         item && cuotasEditables && (parseInt(numCuotas, 10) || 1) !== cuotasOriginales && e('div', { className: 'form-hint', style: { color: 'var(--warning)' } },
           cuotasOriginales === 1
