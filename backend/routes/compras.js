@@ -142,6 +142,19 @@ module.exports = function(db, { logAction, tjNombre }) {
     res.json(rows.map(r => r.descripcion));
   });
 
+  // Autocompletado del campo "Nombre en el Extracto": nombres distintos ya usados en compras
+  // (case original preservado, ej. "APPLE.COM/US"), ordenados alfabéticamente. Alimenta el
+  // <datalist> del CompraForm. Va aquí (con los GET de metadatos) antes de las rutas con :id.
+  router.get('/nombres-unicos', (req, res) => {
+    const rows = db.prepare(`
+      SELECT DISTINCT descripcion
+      FROM compras
+      WHERE descripcion IS NOT NULL AND TRIM(descripcion) != ''
+      ORDER BY descripcion ASC
+    `).all();
+    res.json(rows.map(r => r.descripcion));
+  });
+
   router.post('/', (req, res) => {
     const { tarjeta_id, fecha, descripcion, valor_cop, valor_usd, tasa_usd, persona_id, estado, notas, nota_personal, diferida_id, grupo_id, es_internacional, ciclo: cicloBody, ciclo_manual, tasa_intl } = req.body;
     // ciclo_manual=1 con un ciclo explícito → se respeta ese ciclo (ej. cuota reprogramada que

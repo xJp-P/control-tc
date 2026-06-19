@@ -161,9 +161,13 @@ module.exports = function(db) {
     diferidasActivas.forEach(d => {
       const abonosDif = db.prepare('SELECT * FROM abonos_diferida WHERE diferida_id=? ORDER BY fecha').all(d.id);
       const amort = calcularAmortizacionDiferida(d.monto, d.tasa_mv, d.num_cuotas, d.fecha_compra, d.fecha_primer_corte, abonosDif, nuOpts(db, d.tarjeta_id));
-      // Detección de moneda: si la compra vinculada tiene valor_usd > 0, es diferida USD.
-      const compraVinc = db.prepare('SELECT persona_id, valor_usd FROM compras WHERE diferida_id=? LIMIT 1').get(d.id);
-      const esDifUsd = !!(compraVinc && compraVinc.valor_usd > 0);
+      // Detección de moneda: una diferida es USD solo si es USD PURA (valor_cop=0). Una compra
+      // internacional de Visa tiene valor_cop>0 (deuda real en pesos) + valor_usd informativo: NO
+      // es USD. Antes se clasificaba por `valor_usd > 0` a secas, lo que mandaba el saldo COP de una
+      // diferida internacional de Visa a deudaDiferidasUsd; como Visa no es dual, ese saldo no
+      // sumaba a la deuda total → la deuda de esa diferida DESAPARECÍA del cupo (falso disponible).
+      const compraVinc = db.prepare('SELECT persona_id, valor_usd, valor_cop FROM compras WHERE diferida_id=? LIMIT 1').get(d.id);
+      const esDifUsd = !!(compraVinc && compraVinc.valor_usd > 0 && !(compraVinc.valor_cop > 0));
       if (esDifUsd) deudaDiferidasUsd += amort.resumen.saldoActual;
       else deudaDiferidas += amort.resumen.saldoActual;
       const cuotaActual = cicloParam
