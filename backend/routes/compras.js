@@ -4,21 +4,19 @@ const { hoyLocal, daysBetween, primerCorteAvance, calcCicloLocal } = require('..
 const { calcularAmortizacionDiferida } = require('../engine/amortizacion');
 const { nuOpts, aplicaIntInternacional } = require('../helpers/banco');
 const { compraTerceroConReembolso } = require('../helpers/bolsillo');
+const { getCortesCustomMap, cicloConCorte } = require('../helpers/cortes');
 
 module.exports = function(db, { logAction, tjNombre }) {
   const router = Router();
 
   function calcCiclo(fecha, tarjetaId) {
     const tj = db.prepare('SELECT dia_corte FROM tarjetas WHERE id=?').get(tarjetaId);
-    const diaCorte = tj ? tj.dia_corte : 30;
-    const d = new Date(fecha + 'T12:00:00');
-    // Aritmética año/mes directa: NO usar d.setMonth(+1), porque si el día no existe en el
-    // mes destino (ej. 31-may → "31-jun" inexistente) JS desborda al mes siguiente (1-jul) y
-    // el ciclo salta un mes de más. Solo nos importa el mes/año del ciclo, no el día.
-    let year = d.getFullYear();
-    let month = d.getMonth(); // 0-11
-    if (d.getDate() > diaCorte) { month += 1; if (month > 11) { month = 0; year += 1; } }
-    return year + '-' + String(month + 1).padStart(2, '0');
+    const diaCorte = (tj && tj.dia_corte) || 30;
+    // Ciclo = regla normal por dia_corte global + desvío por corte ADELANTADO (cortes_custom):
+    // si el banco cortó antes del dia_corte teórico, las compras hechas después de ese corte real
+    // saltan al ciclo siguiente. cicloConCorte cae al ciclo teórico normal si no hay override
+    // (la aritmética año/mes directa de calcCicloLocal evita el desborde de día 31→mes+2).
+    return cicloConCorte(fecha, diaCorte, getCortesCustomMap(db, tarjetaId));
   }
 
   // ¿El ciclo ya CERRÓ para la tarjeta? (cerrado ≠ pagado: el banco ya generó ese extracto,
@@ -778,6 +776,54 @@ module.exports = function(db, { logAction, tjNombre }) {
     aplicar();
     logAction('editar', tjNombre(tarjeta_id) + 'Tasa internacional del ciclo ' + ciclo + ' sincronizada (' + limpios.length + ' tasa(s)) para ' + total + ' compra(s)');
     res.json({ ok: true, actualizadas: total, grupos: limpios.length });
+  });
+
+  // ── Aplicar corte ADELANTADO de un ciclo (cortes_custom) ──────────────────────
+  // POST /aplicar-corte-ciclo  Body: { tarjeta_id, ciclo, fecha_corte }
+  // Persiste la fecha de corte REAL de un ciclo (el banco adelantó el corte) y re-evalúa las compras
+  // de la tarjeta para que las hechas DESPUÉS de ese corte salten al ciclo siguiente de inmediato; las
+  // futuras se auto-asignarán al crearse (calcCiclo ya consulta cortes_custom). Lo dispara la
+  // conciliación IA (discrepancia fecha_corte_movida); NO toca el dia_corte global de la tarjeta.
+  router.post('/aplicar-corte-ciclo', (req, res) => {
+    const { tarjeta_id, ciclo, fecha_corte } = req.body || {};
+    if (!tarjeta_id || !ciclo || !fecha_corte) {
+      return res.status(400).json({ error: 'Faltan datos: tarjeta_id, ciclo y fecha_corte son requeridos.' });
+    }
+    const fc = String(fecha_corte).slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fc)) return res.status(400).json({ error: 'fecha_corte debe tener formato YYYY-MM-DD.' });
+    // Sanity: el corte real debe caer dentro del mes del ciclo afectado.
+    if (fc.slice(0, 7) !== ciclo) return res.status(400).json({ error: 'La fecha de corte (' + fc + ') no pertenece al ciclo ' + ciclo + '.' });
+    // Inmutabilidad: un ciclo ya pagado no se reabre.
+    const extC = db.prepare("SELECT estado FROM extractos WHERE tarjeta_id=? AND ciclo=?").get(tarjeta_id, ciclo);
+    if (extC && extC.estado === 'pagado') {
+      return res.status(403).json({ error: 'No se puede fijar el corte: el extracto del ciclo ' + ciclo + ' ya está pagado.' });
+    }
+    let movidas = 0;
+    const aplicar = db.transaction(() => {
+      // 1. Persistir el corte real (upsert: un registro por tarjeta+ciclo).
+      db.prepare('INSERT INTO cortes_custom (tarjeta_id, ciclo, fecha_corte) VALUES (?,?,?) ON CONFLICT(tarjeta_id, ciclo) DO UPDATE SET fecha_corte=excluded.fecha_corte')
+        .run(tarjeta_id, ciclo, fc);
+      // 2. Re-evaluar las compras de la tarjeta (mismo núcleo que syncData paso 5): las de la ventana
+      //    saltan al ciclo siguiente; el resto queda igual. ciclo_manual prevalece (no se toca) y no se
+      //    mueve nada HACIA un ciclo ya pagado (protege cierres reales).
+      const tj = db.prepare('SELECT dia_corte FROM tarjetas WHERE id=?').get(tarjeta_id);
+      const diaCorte = (tj && tj.dia_corte) || 30;
+      const cortesMap = getCortesCustomMap(db, tarjeta_id);
+      const compras = db.prepare("SELECT id, fecha, ciclo, COALESCE(ciclo_manual,0) as ciclo_manual FROM compras WHERE tarjeta_id=?").all(tarjeta_id);
+      for (const c of compras) {
+        if (!c.fecha || c.ciclo_manual) continue;
+        const nuevo = cicloConCorte(c.fecha, diaCorte, cortesMap);
+        if (nuevo !== c.ciclo) {
+          const extDest = db.prepare("SELECT estado FROM extractos WHERE tarjeta_id=? AND ciclo=?").get(tarjeta_id, nuevo);
+          if (extDest && extDest.estado === 'pagado') continue;
+          db.prepare('UPDATE compras SET ciclo=? WHERE id=?').run(nuevo, c.id);
+          movidas++;
+        }
+      }
+    });
+    aplicar();
+    logAction('editar', tjNombre(tarjeta_id) + 'Corte adelantado fijado para ' + ciclo + ': ' + fc + ' (' + movidas + ' compra(s) reubicada(s))');
+    res.json({ ok: true, fecha_corte: fc, movidas });
   });
 
   return router;

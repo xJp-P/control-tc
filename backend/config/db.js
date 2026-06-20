@@ -7,6 +7,7 @@ const { calcularAmortizacionDiferida } = require('../engine/amortizacion');
 const { esNuBank, nuOpts, avanceOpts } = require('../helpers/banco');
 const { primerCorteAvance } = require('../helpers/dates');
 const { liberarBolsilloDiferida, liberarBolsilloAvance } = require('../helpers/bolsillo');
+const { getCortesCustomMap, cicloConCorte } = require('../helpers/cortes');
 
 const DEFAULT_DB_DIR = path.join(require('os').homedir(), 'AppData', 'Roaming', 'CreditCardManager');
 const DB_CONFIG_FILE = path.join(DEFAULT_DB_DIR, 'db_location.json');
@@ -84,22 +85,22 @@ function syncData(db) {
     }
   });
 
-  // 5. Compras: recalcular ciclo basado en fecha + dia_corte de la tarjeta
+  // 5. Compras: recalcular ciclo basado en fecha + dia_corte de la tarjeta (+ corte adelantado).
   const todasComprasSync = db.prepare("SELECT c.id, c.fecha, c.ciclo, c.tarjeta_id, COALESCE(c.ciclo_manual,0) as ciclo_manual, t.dia_corte FROM compras c JOIN tarjetas t ON c.tarjeta_id = t.id").all();
+  // Cache de cortes_custom por tarjeta: 1 query por tarjeta (NO por compra). Misma fuente de verdad
+  // que calcCiclo (helper compartido cicloConCorte) → syncData NUNCA pisa el desvío por corte.
+  const cortesPorTarjeta = {};
   todasComprasSync.forEach(c => {
     if (!c.fecha) return;
     // ciclo_manual=1: el ciclo fue asignado a mano (ej. cuota reprogramada por el banco que
-    // se paga en un ciclo distinto al de su fecha real). NO se recalcula desde la fecha.
+    // se paga en un ciclo distinto al de su fecha real). Prevalece SIEMPRE → NO se recalcula.
     if (c.ciclo_manual) return;
-    const d = new Date(c.fecha + 'T12:00:00');
     const diaCorte = c.dia_corte || 30;
-    // Aritmética año/mes directa (no d.setMonth(+1)): evita el desbordamiento de día (31-may →
-    // 1-jul en vez de junio) que asignaba ciclos un mes adelantados. Este auto-heal recalcula
-    // y corrige retroactivamente cualquier compra cuyo ciclo quedó mal por el bug previo.
-    let year = d.getFullYear();
-    let month = d.getMonth();
-    if (d.getDate() > diaCorte) { month += 1; if (month > 11) { month = 0; year += 1; } }
-    const cicloCorrect = year + '-' + String(month + 1).padStart(2, '0');
+    if (!cortesPorTarjeta[c.tarjeta_id]) cortesPorTarjeta[c.tarjeta_id] = getCortesCustomMap(db, c.tarjeta_id);
+    // Mismo núcleo que calcCiclo: regla normal por dia_corte (aritmética año/mes directa, evita el
+    // desborde 31-may→1-jul) + desvío por corte adelantado. Auto-heal: corrige retroactivamente
+    // cualquier compra cuyo ciclo quedó mal (bug previo) o que deba moverse por un corte registrado.
+    const cicloCorrect = cicloConCorte(c.fecha, diaCorte, cortesPorTarjeta[c.tarjeta_id]);
     if (c.ciclo !== cicloCorrect) {
       db.prepare("UPDATE compras SET ciclo=? WHERE id=?").run(cicloCorrect, c.id);
       fixes++;
@@ -734,6 +735,22 @@ function initDb(dbPathOverride) {
     tarjeta_id INTEGER NOT NULL REFERENCES tarjetas(id) ON DELETE CASCADE,
     ciclo TEXT NOT NULL,
     fecha_pago TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now','localtime')),
+    UNIQUE(tarjeta_id, ciclo)
+  )`);
+
+  // Corte real por ciclo cuando el banco ADELANTA (o atrasa) el corte respecto al `dia_corte`
+  // teórico de la tarjeta (ej. el corte teórico cae en fin de semana y el banco corta antes).
+  // A DIFERENCIA de fechas_pago_custom (solo display), esta SÍ afecta cálculos: el motor de
+  // ciclos (calcCiclo/syncData) la consultará para mandar las compras hechas DESPUÉS de la
+  // `fecha_corte` real al ciclo siguiente. `ciclo` = el ciclo TEÓRICO afectado (YYYY-MM);
+  // `fecha_corte` = la fecha real de corte (YYYY-MM-DD). Un registro por (tarjeta_id, ciclo).
+  // Es por-ciclo a propósito: NUNCA se toca el `dia_corte` global (reescribiría toda la historia).
+  db.exec(`CREATE TABLE IF NOT EXISTS cortes_custom (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tarjeta_id INTEGER NOT NULL REFERENCES tarjetas(id) ON DELETE CASCADE,
+    ciclo TEXT NOT NULL,
+    fecha_corte TEXT NOT NULL,
     created_at TEXT DEFAULT (datetime('now','localtime')),
     UNIQUE(tarjeta_id, ciclo)
   )`);

@@ -369,7 +369,12 @@ module.exports = function(db, ctx) {
         const fpApp = mv.fecha_pago;
         if (fpExt && fpApp) {
           const d = difDias(fpExt, fpApp);
-          if (d != null && d !== 0 && Math.abs(d) <= 5) {
+          // Si el usuario YA fijó manualmente la fecha de pago de este ciclo (fechas_pago_custom) y
+          // coincide con la del extracto, el override ya está aplicado → no sugerir nada (sería
+          // redundante: el dashboard ya muestra esa fecha como "MANUAL").
+          const ovPago = db.prepare('SELECT fecha_pago FROM fechas_pago_custom WHERE tarjeta_id=? AND ciclo=?').get(mv.tarjeta.id, mv.ciclo);
+          const pagoYaAplicado = !!(ovPago && ovPago.fecha_pago && String(ovPago.fecha_pago).slice(0, 10) === fpExt);
+          if (d != null && d !== 0 && Math.abs(d) <= 5 && !pagoYaAplicado) {
             resu.discrepancias.push({
               tipo: 'fecha_pago_movida',
               descripcion: 'La fecha limite de pago del extracto (' + fpExt + ') no coincide con la calculada por la app (' + fpApp + '). Suele moverse por festivos o fines de semana.',
@@ -432,9 +437,19 @@ module.exports = function(db, ctx) {
               } catch (e2) { console.log('[ia/analizar] cruce inverso de corte:', e2 && e2.message); }
             }
 
+            // ¿Hay compras de la tarjeta DENTRO de la ventana del desfase (corte_real, corte_teorico]?
+            // Se consulta la BD directamente (no `afectadas`, que depende del cruce y puede quedar
+            // vacío aunque sí existan compras) para que el aviso no se contradiga en su texto. Solo
+            // compras de 1 cuota sin ciclo manual (las que el corte realmente reubicaría).
+            let hayComprasVentana = false;
+            if (!inverso) {
+              const rv = db.prepare("SELECT COUNT(*) n FROM compras WHERE tarjeta_id=? AND estado NOT IN ('diferida','pagado') AND COALESCE(ciclo_manual,0)=0 AND fecha > ? AND fecha <= ?").get(mv.tarjeta.id, fcExt, fcApp);
+              hayComprasVentana = !!(rv && rv.n > 0);
+            }
             resu.discrepancias.push({
               tipo: 'corte_desfasado',
               sentido: inverso ? 'inverso' : 'atras',
+              hay_compras_ventana: hayComprasVentana,
               descripcion: inverso
                 ? ('El banco cerro el ciclo el ' + fcExt + ', despues del ' + fcApp + ' que calculo la app. Compras que la app puso en ' + cicloSig + ' el banco las facturo en este ciclo (' + mv.ciclo + ').')
                 : ('El banco cerro el ciclo el ' + fcExt + ', no el ' + fcApp + ' que calculo la app. Las compras hechas despues del ' + fcExt + ' entran al extracto de ' + cicloSig + '.'),
@@ -443,7 +458,13 @@ module.exports = function(db, ctx) {
               fecha_extracto: fcExt,
               ciclo_origen: inverso ? cicloSig : null,
               compra_id: null,
-              accion_sugerida: { operacion: 'ninguna', parametros: {} },
+              // Adelanto (sentido 'atras'): ACCIONABLE → persiste el corte real en cortes_custom
+              // (el motor reubica las compras de la ventana y auto-asigna las futuras). El caso
+              // INVERSO (banco cortó después) se sigue resolviendo con los mover_ciclo en cascada,
+              // así que ahí el aviso queda informativo (operacion 'ninguna').
+              accion_sugerida: inverso
+                ? { operacion: 'ninguna', parametros: {} }
+                : { operacion: 'fecha_corte_movida', parametros: { tarjeta_id: mv.tarjeta.id, ciclo: mv.ciclo, fecha_corte: fcExt } },
               compras_afectadas: afectadas.map(c => ({ compra_id: c.compra_id, descripcion: c.descripcion, fecha: c.fecha, ciclo_destino: cicloDestino }))
             });
             // Cascada: una accion mover_ciclo por compra afectada (dedup garantizado).
@@ -461,6 +482,26 @@ module.exports = function(db, ctx) {
                 accion_sugerida: { operacion: 'mover_ciclo', parametros: { compra_id: c.compra_id, ciclo: cicloDestino } }
               });
             });
+            // FILTRO DE REDUNDANCIA (solo ADELANTO): el botón "Aplicar corte adelantado" (accion
+            // fecha_corte_movida del aviso) YA reubica TODAS las compras de la ventana vía cortes_custom.
+            // Por eso quitamos los mover_ciclo individuales —vengan de la cascada de arriba o de la
+            // propia IA— cuya compra caiga ESTRICTAMENTE en la ventana (fecha > corte_real &&
+            // fecha <= corte_teorico_app): ofrecer dos acciones para el mismo hueco confunde al usuario.
+            if (!inverso) {
+              resu.discrepancias = resu.discrepancias.filter(dd => {
+                // Detectar por OPERACION además del tipo: la IA a veces clasifica el movimiento como
+                // tipo='otro' pero con accion_sugerida.operacion='mover_ciclo'. Lo que reubica es la
+                // operación, no la etiqueta, así que filtramos por ambas.
+                const esMover = dd.tipo === 'mover_ciclo' || (dd.accion_sugerida && dd.accion_sugerida.operacion === 'mover_ciclo');
+                if (!esMover) return true;
+                const cid = dd.compra_id != null ? dd.compra_id : (dd.accion_sugerida && dd.accion_sugerida.parametros && dd.accion_sugerida.parametros.compra_id);
+                if (cid == null) return true;
+                const row = db.prepare('SELECT fecha FROM compras WHERE id=?').get(cid);
+                if (!row || !row.fecha) return true;
+                const enVentana = row.fecha > fcExt && row.fecha <= fcApp;
+                return !enVentana; // fuera de la ventana se conserva; dentro la cubre el corte → se elimina
+              });
+            }
           }
         }
       } catch (e) { console.log('[ia/analizar] comparacion de fechas:', e && e.message); }

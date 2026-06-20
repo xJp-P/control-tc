@@ -261,6 +261,11 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '4.6.0': [
+    'Cuando el banco adelanta el corte de un mes (por ejemplo, porque la fecha caía en fin de semana), ahora puedes dejarlo registrado: la app aprende esa fecha de corte real y, a partir de ahí, las compras que hagas después de ese día entran automáticamente al mes siguiente, sin que tengas que moverlas a mano. Las compras que ya habías registrado en esa ventana también se reubican solas.',
+    'El Asistente de IA detecta el corte adelantado al leer tu extracto y te ofrece aplicarlo con un solo botón ("Aplicar corte adelantado").',
+    'La pantalla de conciliación quedó más limpia y profesional: ya no se duplican sugerencias para el mismo caso, se respeta la fecha de pago que hayas fijado a mano (no la vuelve a sugerir) y los títulos de las observaciones se muestran con un texto claro y legible.'
+  ],
   '4.5.6': [
     'El Asistente de IA ahora te deja conciliar también el mes en curso, no solo los meses ya cerrados. Es útil cuando el banco adelanta el corte (por ejemplo, si la fecha cae en fin de semana) y ya te envió el extracto antes de tiempo: en el menú "Periodo a conciliar" verás el mes actual marcado como "Ciclo en curso / Corte adelantado", listo para analizar tu PDF.'
   ],
@@ -5605,6 +5610,33 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
 
   // Formatea una tasa mensual decimal a porcentaje colombiano (0.020849 -> "2,0849%").
   const fmtPct = (x) => (x == null || x === '') ? '—' : (Number(x) * 100).toFixed(4).replace('.', ',') + '%';
+  // Título legible del tipo de discrepancia (no mostrar el slug crudo del JSON). Mapa para los
+  // tipos conocidos (con tildes/palabras de enlace) + fallback genérico: "_" → espacio y mayúscula inicial.
+  const fmtTipoDiscrepancia = (tipo) => {
+    if (!tipo) return 'Discrepancia';
+    const map = {
+      compra_omitida: 'Compra omitida', monto_erroneo: 'Monto erróneo',
+      clasificacion_incorrecta: 'Clasificación incorrecta', cuota_reprogramada: 'Cuota reprogramada',
+      tasa_intl_incorrecta: 'Tasa internacional incorrecta', fecha_pago_movida: 'Fecha de pago movida',
+      mover_ciclo: 'Mover de ciclo', otro: 'Otra discrepancia'
+    };
+    if (map[tipo]) return map[tipo];
+    const s = String(tipo).replace(/_/g, ' ').trim();
+    return s.charAt(0).toUpperCase() + s.slice(1);
+  };
+  // Título legible de la operación de la acción sugerida (mismo criterio que los tipos).
+  const fmtOperacion = (op) => {
+    if (!op) return '';
+    const map = {
+      crear_compra: 'Crear compra', editar_valor: 'Editar valor', mover_ciclo: 'Mover de ciclo',
+      reprogramar_cuotas: 'Reprogramar cuotas', actualizar_tasa_intl: 'Actualizar tasa internacional',
+      actualizar_fecha_pago: 'Actualizar fecha de pago', fecha_corte_movida: 'Aplicar corte adelantado',
+      convertir_a_diferida: 'Convertir a diferida', ninguna: 'Sin acción'
+    };
+    if (map[op]) return map[op];
+    const s = String(op).replace(/_/g, ' ').trim();
+    return s.charAt(0).toUpperCase() + s.slice(1);
+  };
   function paramsDe(d) { return (d.accion_sugerida && d.accion_sugerida.parametros) || {}; }
   function resumenAccion(d) {
     const op = d.accion_sugerida ? d.accion_sugerida.operacion : 'ninguna';
@@ -5629,6 +5661,11 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
       const fp = p.fecha_pago != null ? p.fecha_pago : d.fecha_extracto;
       return { titulo: 'Ajustar la fecha de pago de este ciclo', endpoint: 'PUT /api/extractos/fecha-pago-custom',
         filas: [['Fecha en la app', fmtDate(d.fecha_app)], ['Fecha del extracto', fmtDate(fp)], ['Ciclo', ciclo], ['Alcance', 'solo cambia lo que ves; no afecta intereses ni pago minimo']] };
+    }
+    if (op === 'fecha_corte_movida') {
+      const fc = p.fecha_corte != null ? p.fecha_corte : d.fecha_extracto;
+      return { titulo: 'Fijar el corte adelantado de este ciclo', endpoint: 'POST /api/compras/aplicar-corte-ciclo',
+        filas: [['Corte que calculo la app', fmtDate(d.fecha_app)], ['Corte real del extracto', fmtDate(fc)], ['Ciclo', p.ciclo || ciclo], ['Efecto', 'las compras posteriores al corte pasan al ciclo siguiente (ahora y a futuro)']] };
     }
     return { titulo: op, endpoint: '', filas: [] };
   }
@@ -5692,6 +5729,12 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
         if (!fp) throw new Error('No hay una fecha de pago para aplicar.');
         const r = await api('/extractos/fecha-pago-custom', { method: 'PUT', body: { tarjeta_id: Number(tarjetaId), ciclo: ciclo, fecha_pago: fp } });
         if (r && r.error) throw new Error(r.error);
+      } else if (op === 'fecha_corte_movida') {
+        // Persiste el corte adelantado (cortes_custom) y reubica las compras de la ventana.
+        const fc = p.fecha_corte != null ? p.fecha_corte : d.fecha_extracto;
+        if (!fc) throw new Error('No hay una fecha de corte para aplicar.');
+        const r = await api('/compras/aplicar-corte-ciclo', { method: 'POST', body: { tarjeta_id: Number(tarjetaId), ciclo: (p.ciclo || ciclo), fecha_corte: fc } });
+        if (r && r.error) throw new Error(r.error);
       } else {
         throw new Error('Operacion no aplicable automaticamente.');
       }
@@ -5752,15 +5795,25 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
                 ? e('div', { style: { marginTop: 6, fontSize: 11.5, color: 'var(--text-muted)', lineHeight: 1.4 } },
                     inverso
                       ? ('Estas ' + afc.length + ' compra(s) que la app puso en ' + (d.ciclo_origen || 'el próximo ciclo') + ' el banco las facturó en ESTE ciclo. Abajo aparecen como acciones para traerlas:')
-                      : ('Estas ' + afc.length + ' compra(s) quedaron después del corte real; el banco las factura en ' + (afc[0].ciclo_destino || 'el próximo ciclo') + '. Abajo aparecen como acciones para moverlas:'),
+                      : ('Estas ' + afc.length + ' compra(s) quedaron después del corte real; el banco las factura en ' + (afc[0].ciclo_destino || 'el próximo ciclo') + '. Al aplicar el corte adelantado se reubicarán automáticamente:'),
                     afc.map((cc, ci) => e('div', { key: ci, style: { color: 'var(--text-secondary)', marginTop: 2 } }, '· ' + (cc.descripcion || ('#' + cc.compra_id)) + '  (' + fmtDate(cc.fecha) + ')')))
-                : e('div', { style: { marginTop: 6, fontSize: 11.5, color: 'var(--text-muted)' } }, inverso ? 'No hay compras del mes siguiente dentro de la ventana del desfase; es solo informativo.' : 'No hay compras de la app dentro de la ventana del desfase; es solo informativo.')
+                : e('div', { style: { marginTop: 6, fontSize: 11.5, color: 'var(--text-muted)' } }, inverso
+                    ? 'No hay compras del mes siguiente dentro de la ventana del desfase; es solo informativo.'
+                    : (d.hay_compras_ventana
+                        ? 'Hay compras en esta ventana de desfase que se reubicarán automáticamente al siguiente ciclo al aplicar el corte.'
+                        : 'No hay compras en la ventana por ahora; aplica el corte para que las próximas (después del corte real) entren al ciclo correcto.')),
+              // Adelanto: botón para PERSISTIR el corte real (cortes_custom). Al aplicarlo se reubican
+              // las compras de la ventana y las futuras se auto-asignan. El inverso no es accionable.
+              op === 'fecha_corte_movida' && (aplicada
+                ? e('div', { key: 'ap', style: { marginTop: 8, fontSize: 11.5, color: 'var(--success)', fontWeight: 600 } }, 'Corte aplicado: las compras de la ventana se reubicaron en su ciclo correcto.')
+                : e('div', { key: 'btn', style: { marginTop: 8 } },
+                    e('button', { className: 'btn btn-sm btn-primary', onClick: () => { setErrAplicar(''); setAccionSel({ d: d, idx: i }); } }, 'Aplicar corte adelantado')))
             );
           }
           return e('div', { key: i, style: { border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px', marginBottom: 8, background: 'var(--bg-input)' } },
             e('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 } },
               e('span', { style: { fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: sevColor(d.severidad) } }, d.severidad || ''),
-              e('span', { style: { fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)' } }, d.tipo || ''),
+              e('span', { style: { fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)' } }, fmtTipoDiscrepancia(d.tipo)),
               d.motivo === 'corte_desfasado' && e('span', { style: { fontSize: 10, fontWeight: 600, color: 'var(--accent)', background: 'rgba(79,140,255,0.12)', borderRadius: 4, padding: '1px 6px' } }, 'por desfase de corte'),
               aplicada && e('span', { style: { marginLeft: 'auto', fontSize: 11, fontWeight: 600, color: 'var(--success)' } }, 'Aplicada')
             ),
@@ -5782,7 +5835,7 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
               (d.candidatas || []).map((cc, ci) => e('div', { key: ci, style: { color: 'var(--text-secondary)', marginTop: 2 } }, '· ' + (cc.descripcion || ('#' + cc.id)) + ' → ' + ((cc.es_internacional || cc.interes_intl > 0) ? 'internacional' : 'no internacional')))
             ),
             !aplicada && AUTO[op] && !d.posible_falso_positivo && e('div', { style: { marginTop: 6, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
-              e('span', { style: { fontSize: 11.5, color: 'var(--text-muted)' } }, 'Accion sugerida: ', e('strong', { style: { color: 'var(--accent)' } }, op)),
+              e('span', { style: { fontSize: 11.5, color: 'var(--text-muted)' } }, 'Accion sugerida: ', e('strong', { style: { color: 'var(--accent)' } }, fmtOperacion(op))),
               e('button', { className: 'btn btn-sm btn-primary', onClick: () => { setErrAplicar(''); setAccionSel({ d: d, idx: i }); } }, 'Aplicar')
             ),
             !aplicada && op === 'convertir_a_diferida' && e('div', { style: { marginTop: 6, fontSize: 11.5, color: 'var(--text-muted)' } }, 'Convertir a diferida: hazlo editando las cuotas de la compra desde la tarjeta (solo posible mientras su ciclo siga vigente).')
