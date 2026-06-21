@@ -46,9 +46,10 @@ module.exports = function(db, { logAction, tjNombre }) {
     });
 
     const result = db.prepare(`
-      SELECT ext.*, fpc.fecha_pago as fecha_pago_custom
+      SELECT ext.*, fpc.fecha_pago as fecha_pago_custom, cc.fecha_corte as fecha_corte_custom
       FROM extractos ext
       LEFT JOIN fechas_pago_custom fpc ON fpc.tarjeta_id = ext.tarjeta_id AND fpc.ciclo = ext.ciclo
+      LEFT JOIN cortes_custom cc ON cc.tarjeta_id = ext.tarjeta_id AND cc.ciclo = ext.ciclo
       WHERE ext.tarjeta_id = ? ORDER BY ext.ciclo DESC
     `).all(tarjeta_id);
     result.forEach(ext => {
@@ -60,6 +61,16 @@ module.exports = function(db, { logAction, tjNombre }) {
         ext.es_fecha_pago_manual = true;
       } else {
         ext.es_fecha_pago_manual = false;
+      }
+      // Corte adelantado (cortes_custom): mismo patrón que la fecha de pago manual — se aplica al
+      // campo display y se marca con un flag para que la UI muestre "(ADELANTADO)". El valor teórico
+      // original queda en fecha_corte_auto. Solo display: no recalcula intereses ni pago mínimo.
+      if (ext.fecha_corte_custom) {
+        ext.fecha_corte_auto = ext.fecha_corte;
+        ext.fecha_corte = ext.fecha_corte_custom;
+        ext.es_corte_adelantado = true;
+      } else {
+        ext.es_corte_adelantado = false;
       }
       const calc = calcExtracto(db, tarjeta_id, ext.ciclo, ext.estado === 'pagado');
       if (calc) {

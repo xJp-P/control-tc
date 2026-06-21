@@ -5,6 +5,7 @@ const { calcularAmortizacionDiferida } = require('../engine/amortizacion');
 const { hoyLocal, calcCicloLocal } = require('../helpers/dates');
 const { nuOpts, avanceOpts, clearBancoCache } = require('../helpers/banco');
 const { scrapeTasas } = require('../helpers/scraper');
+const { getCortesCustomMap, cicloConCorte } = require('../helpers/cortes');
 
 module.exports = function(db, { logAction }) {
   const router = Router();
@@ -61,7 +62,11 @@ module.exports = function(db, { logAction }) {
         deudaDiferidas: Math.round(deudaDiferidas),
         deudaTotal: Math.round(deudaTotal),
         numAvancesActivos: avancesActivos.length,
-        numDiferidasActivas: diferidasActivas.length
+        numDiferidasActivas: diferidasActivas.length,
+        // Ciclo vigente PURO consciente del corte adelantado (cicloConCorte): el mes en curso real
+        // (avanza si el banco ya cortó). Lo usan etiquetas/agrupaciones del frontend (vista Pagos,
+        // dropdown IA). NO es ciclo_sugerido (ese retrocede al ciclo impago para la navegación).
+        ciclo_vigente: cicloConCorte(hoy, t.dia_corte || 30, getCortesCustomMap(db, t.id))
       };
     });
 
@@ -87,7 +92,11 @@ module.exports = function(db, { logAction }) {
     // Se calcula en el backend y se entrega junto a la tarjeta para que la vista arranque en el
     // ciclo correcto sin un salto visual (CardView carga la tarjeta antes de montar las pestañas).
     const hoy = hoyLocal();
-    const cicloVig = calcCicloLocal(hoy, t.dia_corte || 30);
+    // Ciclo vigente CONSCIENTE del corte adelantado (cortes_custom): si el banco ya cortó este mes
+    // antes de la fecha teórica, el ciclo vigente avanza al siguiente. Alimenta el DEFAULT de
+    // navegación y, junto al mapa cortes_custom (abajo), los candados de inmutabilidad del frontend
+    // (isCicloCerrado y la validación de creación), que ahora respetan el corte real igual que el backend.
+    const cicloVig = cicloConCorte(hoy, t.dia_corte || 30, getCortesCustomMap(db, t.id));
     const [vy, vm] = cicloVig.split('-').map(Number);
     let py = vy, pm = vm - 1; if (pm < 1) { pm = 12; py -= 1; }
     const cicloPrev = py + '-' + String(pm).padStart(2, '0');
@@ -96,7 +105,9 @@ module.exports = function(db, { logAction }) {
     if (extPrev && extPrev.estado === 'pendiente' && extPrev.pago_minimo > 0 && extPrev.mp < extPrev.pago_minimo) {
       ciclo_sugerido = cicloPrev;
     }
-    res.json({ ...t, ciclo_sugerido });
+    // ciclo_vigente = el mes en curso PURO (consciente del corte, sin el retroceso por impago de
+    // ciclo_sugerido). Para etiquetas/agrupaciones visuales que quieren "el ciclo actual real".
+    res.json({ ...t, ciclo_sugerido, ciclo_vigente: cicloVig, cortes_custom: getCortesCustomMap(db, t.id) });
   });
 
   router.post('/', (req, res) => {

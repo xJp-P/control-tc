@@ -436,13 +436,16 @@ module.exports = function(db) {
       // en tarjetas cuyo pago cae poco después del corte (RappiCard).
       // El pago mínimo se RECALCULA en vivo (calcPagoMinimoCiclo), no se lee el persistido.
       // COALESCE: si hay override en fechas_pago_custom, esa fecha gana sobre extractos.fecha_pago.
+      // COALESCE cortes_custom: si el banco adelantó el corte de un ciclo, el pago aparece cuando
+      // venció el corte REAL (cc.fecha_corte), no el teórico → el widget revela el pago a tiempo.
       const rawExt = db.prepare(`
         SELECT ext.ciclo, COALESCE(ext.monto_pagado, 0) as monto_pagado,
           COALESCE(fpc.fecha_pago, ext.fecha_pago) as fecha_pago,
           CASE WHEN fpc.fecha_pago IS NOT NULL THEN 1 ELSE 0 END as es_manual
         FROM extractos ext
         LEFT JOIN fechas_pago_custom fpc ON fpc.tarjeta_id = ext.tarjeta_id AND fpc.ciclo = ext.ciclo
-        WHERE ext.tarjeta_id = ? AND ext.estado = 'pendiente' AND ext.fecha_corte < ?
+        LEFT JOIN cortes_custom cc ON cc.tarjeta_id = ext.tarjeta_id AND cc.ciclo = ext.ciclo
+        WHERE ext.tarjeta_id = ? AND ext.estado = 'pendiente' AND COALESCE(cc.fecha_corte, ext.fecha_corte) < ?
         ORDER BY COALESCE(fpc.fecha_pago, ext.fecha_pago) ASC
       `).all(tarjeta_id, hoy);
       extractosVencidos = rawExt

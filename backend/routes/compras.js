@@ -1,6 +1,6 @@
 // backend/routes/compras.js — CRUD /api/compras + bolsillo
 const { Router } = require('express');
-const { hoyLocal, daysBetween, primerCorteAvance, calcCicloLocal } = require('../helpers/dates');
+const { hoyLocal, daysBetween, primerCorteAvance } = require('../helpers/dates');
 const { calcularAmortizacionDiferida } = require('../engine/amortizacion');
 const { nuOpts, aplicaIntInternacional } = require('../helpers/banco');
 const { compraTerceroConReembolso } = require('../helpers/bolsillo');
@@ -28,7 +28,13 @@ module.exports = function(db, { logAction, tjNombre }) {
   function esCicloCerrado(tarjetaId, ciclo) {
     if (!ciclo) return false;
     const tj = db.prepare('SELECT dia_corte FROM tarjetas WHERE id=?').get(tarjetaId);
-    return ciclo < calcCicloLocal(hoyLocal(), (tj && tj.dia_corte) || 30);
+    const diaCorte = (tj && tj.dia_corte) || 30;
+    // Vigente CONSCIENTE del corte adelantado (cortes_custom): si el banco cortó antes del día
+    // teórico, el ciclo en curso avanza y el anterior queda CERRADO de inmediato (su extracto ya
+    // se generó). cicloConCorte sólo ADELANTA (nunca retrocede) → no sella de más; sin override en
+    // cortes_custom cae al ciclo teórico, idéntico al comportamiento previo. Las compras que el
+    // motor empujó al ciclo siguiente (ventana post-corte) quedan en el vigente → NO se sellan.
+    return ciclo < cicloConCorte(hoyLocal(), diaCorte, getCortesCustomMap(db, tarjetaId));
   }
 
   router.get('/', (req, res) => {
@@ -611,7 +617,7 @@ module.exports = function(db, { logAction, tjNombre }) {
     // Inmutabilidad estructural: la compra debe pertenecer al ciclo VIGENTE (el que corre). Un ciclo
     // anterior ya CERRÓ (el banco generó ese extracto) aunque no esté pagado: su estructura de cuotas
     // queda sellada. Las ediciones estéticas (PUT regular) no pasan por aquí y siguen permitidas.
-    const cicloVig = calcCicloLocal(hoyLocal(), diaCorte);
+    const cicloVig = cicloConCorte(hoyLocal(), diaCorte, getCortesCustomMap(db, c.tarjeta_id));
     if (c.ciclo < cicloVig) {
       return res.status(403).json({ error: 'No se puede convertir: la compra pertenece al ciclo ' + c.ciclo + ', que ya cerró (el vigente es ' + cicloVig + '). El banco ya facturó ese extracto.' });
     }
@@ -693,7 +699,7 @@ module.exports = function(db, { logAction, tjNombre }) {
     // Inmutabilidad estructural: solo se revierte en el ciclo VIGENTE — un ciclo anterior ya cerró
     // (extracto generado) aunque no esté pagado.
     const tjRev = db.prepare('SELECT dia_corte FROM tarjetas WHERE id=?').get(c.tarjeta_id);
-    const cicloVigRev = calcCicloLocal(hoyLocal(), (tjRev && tjRev.dia_corte) || 30);
+    const cicloVigRev = cicloConCorte(hoyLocal(), (tjRev && tjRev.dia_corte) || 30, getCortesCustomMap(db, c.tarjeta_id));
     if (c.ciclo < cicloVigRev) {
       return res.status(403).json({ error: 'No se puede revertir: la compra pertenece al ciclo ' + c.ciclo + ', que ya cerró (el vigente es ' + cicloVigRev + '). El banco ya facturó ese extracto.' });
     }

@@ -261,6 +261,11 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '4.7.0': [
+    'Los meses que el banco cierra antes de tiempo (corte adelantado) ahora quedan tan protegidos como cualquier mes ya facturado: las compras de ese mes quedan selladas y no se les puede cambiar el valor, la fecha o el responsable, ni dividirlas en cuotas, reprogramarlas o eliminarlas (solo se permite corregir el nombre o la nota). Antes esta protección se guiaba únicamente por la fecha de corte habitual de la tarjeta; ahora reconoce la fecha real en la que el banco cortó.',
+    'Las compras que caen en los días siguientes al corte adelantado —y que la app pasa automáticamente al mes siguiente— siguen siendo totalmente editables, como debe ser: el sellado se aplica solo a las que de verdad quedaron dentro del mes ya cerrado, sin bloquear por error las del mes nuevo.',
+    'Toda la app refleja ahora el mes en curso real cuando el banco adelanta el corte: el resumen, la lista de pagos (donde la fecha aparece marcada como "ADELANTADO") y el Asistente de Conciliación muestran el ciclo correcto y no se quedan en un mes anterior que aún tengas sin pagar.'
+  ],
   '4.6.0': [
     'Cuando el banco adelanta el corte de un mes (por ejemplo, porque la fecha caía en fin de semana), ahora puedes dejarlo registrado: la app aprende esa fecha de corte real y, a partir de ahí, las compras que hagas después de ese día entran automáticamente al mes siguiente, sin que tengas que moverlas a mano. Las compras que ya habías registrado en esa ventana también se reubican solas.',
     'El Asistente de IA detecta el corte adelantado al leer tu extracto y te ofrece aplicarlo con un solo botón ("Aplicar corte adelantado").',
@@ -1064,6 +1069,12 @@ function calcCicloLocal(fechaStr, diaCorte) { var d = new Date(fechaStr + 'T12:0
 // Ciclo VIGENTE de una tarjeta según su día de corte: el ciclo que está corriendo hoy.
 // Tras pasar el corte, es el del mes siguiente (ej. RappiCard corte 20, hoy 31-may → 2026-06).
 function cicloVigente(diaCorte) { return calcCicloLocal(todayISO(), diaCorte); }
+// Ciclo siguiente a 'YYYY-MM' (aritmetica directa). Espejo de helpers/cortes.siguienteCiclo (backend).
+function cicloSiguiente(ciclo) { var a = String(ciclo).split('-'); var y = Number(a[0]), m = Number(a[1]) + 1; if (m > 12) { m = 1; y += 1; } return y + '-' + String(m).padStart(2, '0'); }
+// Ciclo destino de una fecha CONSCIENTE del corte adelantado: espejo de helpers/cortes.cicloConCorte.
+// Si hay corte real para el ciclo teorico de la fecha y la compra es POSTERIOR a ese corte, salta al
+// siguiente ciclo (solo ADELANTO). cortesMap: { 'YYYY-MM': 'YYYY-MM-DD' } = tarjeta.cortes_custom.
+function cicloConCorteFront(fecha, diaCorte, cortesMap) { var teorico = calcCicloLocal(fecha, diaCorte); var corte = cortesMap && cortesMap[teorico]; return (corte && fecha > corte) ? cicloSiguiente(teorico) : teorico; }
 
 function CicloPicker({ value, onChange }) {
   function shift(delta) {
@@ -3370,7 +3381,13 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
   // solo quedan editables el Nombre en el Extracto y las notas (el backend ignora el resto de
   // todas formas: PUT endurecido, espejo del form de Avances). Los grupos sin .ciclo propio usan
   // el ciclo de la vista desde la que se abrieron.
-  const isCicloCerrado = !!item && !!tarjeta && ((item.ciclo || ciclo) < cicloVigente(tarjeta.dia_corte));
+  // El vigente CONSCIENTE del corte adelantado lo entrega el backend (ciclo_vigente, derivado de
+  // cortes_custom). item.ciclo ya viene del motor consciente del corte → comparar ambos sella sólo
+  // los ciclos realmente cerrados y deja 100% editables las compras que el corte empujó al vigente
+  // (ej. las del 19-20 que pasaron al mes siguiente). Fallback al cálculo teórico local sólo si el
+  // backend no envió ciclo_vigente (robustez).
+  const vigenteTarjeta = tarjeta && (tarjeta.ciclo_vigente || cicloVigente(tarjeta.dia_corte));
+  const isCicloCerrado = !!item && !!tarjeta && ((item.ciclo || ciclo) < vigenteTarjeta);
   const lockStyle = isCicloCerrado ? { opacity: 0.6, cursor: 'not-allowed' } : undefined;
   // "Libertad total" de cuotas: en edición el campo Cuotas queda libre para compras individuales
   // sin abonos — 1→N convierte, N→M reprograma y N→1 revierte; cada acción la ejecuta su
@@ -3474,9 +3491,14 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
     // ya facturó ese extracto (el backend rechaza el POST con 403). Validar ANTES de crear nada
     // evita dejar una diferida huérfana (en el flujo de cuotas la diferida se crea primero).
     if (!item && tarjeta) {
-      const cicloDeFecha = calcCicloLocal(fecha, tarjeta.dia_corte);
-      if (cicloDeFecha < cicloVigente(tarjeta.dia_corte)) {
-        toastErr('No se puede registrar: la fecha cae en el ciclo ' + cicloDeFecha + ', que ya cerró (el banco ya generó ese extracto). Si el extracto real incluye esta compra, usa el Asistente IA de conciliación.');
+      // Ciclo destino EXACTO (igual que el motor del backend): consciente del corte adelantado. Una
+      // fecha en la ventana post-corte salta al ciclo siguiente, así una compra del 19-20 que el
+      // corte manda al vigente NO se bloquea por error (ni deja una diferida huérfana, ya que en el
+      // flujo de cuotas la diferida se crea ANTES del POST). El backend revalida con esCicloCerrado.
+      const vig = tarjeta.ciclo_vigente || cicloVigente(tarjeta.dia_corte);
+      const cicloDestino = cicloConCorteFront(fecha, tarjeta.dia_corte, tarjeta.cortes_custom || {});
+      if (cicloDestino < vig) {
+        toastErr('No se puede registrar: la fecha cae en el ciclo ' + cicloDestino + ', que ya cerró (el banco ya generó ese extracto). Si el extracto real incluye esta compra, usa el Asistente IA de conciliación.');
         return;
       }
     }
@@ -4207,7 +4229,11 @@ function Pagos({ tarjeta, onDataChange }) {
 
   const hoy = todayISO();
   const totalPagado = pagos.reduce((s, p) => s + p.monto, 0);
-  const cicloAct = cicloVigente(tarjeta.dia_corte);
+  // Ciclo "actual" para agrupar la tabla = ciclo vigente consciente del corte adelantado (viene del
+  // backend); si el banco ya cortó junio, el actual es julio y junio baja a "Por pagar". Fallback al
+  // cálculo local (sin corte) solo si el backend no lo envió. cicloAct alimenta el DISPLAY de la
+  // vista Pagos (Ciclo Actual / Por pagar); los candados de edición viven en CompraForm (isCicloCerrado).
+  const cicloAct = tarjeta.ciclo_vigente || cicloVigente(tarjeta.dia_corte);
   const extCicloActual = extractos.find(x => x.ciclo === cicloAct);
   const extFaltaPagar = extractos.filter(x => x.ciclo !== cicloAct && x.estado === 'pendiente' && x.fecha_corte <= hoy).sort((a, b) => a.ciclo.localeCompare(b.ciclo));
   const extProximosCiclos = extractos.filter(x => x.ciclo !== cicloAct && x.estado === 'pendiente' && x.fecha_corte > hoy).sort((a, b) => a.ciclo.localeCompare(b.ciclo));
@@ -4234,7 +4260,8 @@ function Pagos({ tarjeta, onDataChange }) {
       onClick: hasDetail ? () => setExpandedExt(isExpanded ? null : ext.id) : undefined
     },
       e('td', { style: { fontWeight: 600 } }, hasDetail ? (isExpanded ? '\u25BC ' : '\u25B6 ') : '  ', fmtCiclo(ext.ciclo)),
-      e('td', null, fmtDate(ext.fecha_corte)),
+      e('td', null, fmtDate(ext.fecha_corte),
+        ext.es_corte_adelantado && e('span', { style: { fontSize: 9, marginLeft: 6, color: 'var(--accent)', fontWeight: 700, letterSpacing: 0.3 }, title: ext.fecha_corte_auto ? 'Corte te\u00F3rico: ' + fmtDate(ext.fecha_corte_auto) : undefined }, '(ADELANTADO)')),
       e('td', { style: { color: vencido ? 'var(--danger)' : '' } },
         fmtDate(ext.fecha_pago),
         ext.es_fecha_pago_manual && e('span', { style: { fontSize: 9, marginLeft: 6, color: 'var(--accent)', fontWeight: 700, letterSpacing: 0.3 } }, '(MANUAL)'),
@@ -5930,7 +5957,9 @@ function IaAsistente({ iaConfig, onIaConfigChange, tarjetas, onGoConfig, demoMod
   useEffect(() => {
     const card = (tarjetas || []).find(t => String(t.id) === String(tarjetaId));
     if (!card) { setCiclosTarjeta([]); setCiclo(''); setLoadingCiclos(false); return; }
-    const vig = cicloVigente(card.dia_corte);
+    // Vigente consciente del corte (del backend): si el banco ya cortó, avanza al mes siguiente y
+    // el mes que cerró pasa a ser un "cerrado" más en la lista (sin rótulo de "en curso").
+    const vig = card.ciclo_vigente || cicloVigente(card.dia_corte);
     const seq = ++fetchSeq.current;
     setLoadingCiclos(true);
     setCiclosTarjeta([]);   // limpia ya: nunca quedan visibles los de otra tarjeta
@@ -6125,14 +6154,20 @@ function IaAsistente({ iaConfig, onIaConfigChange, tarjetas, onGoConfig, demoMod
                   ? e('div', { className: 'form-input', style: { color: 'var(--text-muted)', display: 'flex', alignItems: 'center' } }, 'Cargando periodos...')
                   : ciclosTarjeta.length
                     ? (function() {
-                        // Rótulos: el ciclo vigente (en curso) se marca "Corte adelantado"; el primer
-                        // ciclo realmente cerrado, "Ultimo extracto cerrado".
+                        // Vigente consciente del corte (backend). vigAvanzo = el banco YA cortó y el
+                        // ciclo en curso avanzó al siguiente → el mes que cerró es un "cerrado" normal
+                        // ("Ultimo extracto cerrado"), no "en curso". Si NO avanzó (sin corte registrado),
+                        // se conserva el rótulo de v4.5.6 para poder conciliar el mes en curso por adelanto.
                         const cardSel = activas.find(t => String(t.id) === String(tarjetaId));
-                        const vigSel = cardSel ? cicloVigente(cardSel.dia_corte) : null;
+                        const vigLocal = cardSel ? cicloVigente(cardSel.dia_corte) : null;
+                        const vigSel = cardSel ? (cardSel.ciclo_vigente || vigLocal) : null;
+                        const vigAvanzo = !!(vigSel && vigLocal && vigSel !== vigLocal);
                         const primerCerrado = ciclosTarjeta.find(c => c !== vigSel);
                         return e('select', { className: 'form-input', value: ciclo, onChange: ev => setCiclo(ev.target.value) },
                           ciclosTarjeta.map(c => e('option', { key: c, value: c },
-                            cicloLabel(c) + (c === vigSel ? ' (Ciclo en curso / Corte adelantado)' : (c === primerCerrado ? ' (Ultimo extracto cerrado)' : '')))));
+                            cicloLabel(c) + (c === vigSel
+                              ? (vigAvanzo ? ' (Ciclo en curso)' : ' (Ciclo en curso / Corte adelantado)')
+                              : (c === primerCerrado ? ' (Ultimo extracto cerrado)' : '')))));
                       })()
                     : e('div', { className: 'form-input', style: { color: 'var(--text-muted)', display: 'flex', alignItems: 'center' } }, 'Sin periodos disponibles')
               )

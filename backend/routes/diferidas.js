@@ -1,6 +1,7 @@
 // backend/routes/diferidas.js — CRUD /api/diferidas
 const { Router } = require('express');
 const { hoyLocal, calcCicloLocal } = require('../helpers/dates');
+const { cicloConCorte, getCortesCustomMap } = require('../helpers/cortes');
 const { calcularAmortizacionDiferida } = require('../engine/amortizacion');
 const { nuOpts } = require('../helpers/banco');
 const { compraTerceroConReembolso } = require('../helpers/bolsillo');
@@ -149,7 +150,7 @@ module.exports = function(db, { logAction, tjNombre }) {
       const diaCorteRep = (tjRep && tjRep.dia_corte) || 30;
       const compraVincRep = db.prepare('SELECT ciclo FROM compras WHERE diferida_id=? LIMIT 1').get(req.params.id);
       const cicloOrigenRep = (compraVincRep && compraVincRep.ciclo) || calcCicloLocal(d.fecha_compra, diaCorteRep);
-      const cicloVigRep = calcCicloLocal(hoyLocal(), diaCorteRep);
+      const cicloVigRep = cicloConCorte(hoyLocal(), diaCorteRep, getCortesCustomMap(db, d.tarjeta_id));
       if (cicloOrigenRep < cicloVigRep) {
         return res.status(403).json({ error: 'No se puede reprogramar: la compra pertenece al ciclo ' + cicloOrigenRep + ', que ya cerró (el vigente es ' + cicloVigRep + '). El banco ya facturó ese extracto.' });
       }
