@@ -512,6 +512,50 @@ function initDb(dbPathOverride) {
       created_at TEXT DEFAULT (datetime('now','localtime')),
       UNIQUE(tarjeta_id, ciclo)
     );
+
+    CREATE TABLE IF NOT EXISTS bolsillo_cuotas (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      compra_id INTEGER NOT NULL REFERENCES compras(id) ON DELETE CASCADE,
+      cuota_num INTEGER NOT NULL,
+      monto REAL NOT NULL DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now','localtime')),
+      UNIQUE(compra_id, cuota_num)
+    );
+
+    CREATE TABLE IF NOT EXISTS bolsillo_cuotas_avance (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      avance_id INTEGER NOT NULL REFERENCES avances(id) ON DELETE CASCADE,
+      cuota_num INTEGER NOT NULL,
+      monto REAL NOT NULL DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now','localtime')),
+      UNIQUE(avance_id, cuota_num)
+    );
+
+    CREATE TABLE IF NOT EXISTS fechas_pago_custom (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tarjeta_id INTEGER NOT NULL REFERENCES tarjetas(id) ON DELETE CASCADE,
+      ciclo TEXT NOT NULL,
+      fecha_pago TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now','localtime')),
+      UNIQUE(tarjeta_id, ciclo)
+    );
+
+    CREATE TABLE IF NOT EXISTS cortes_custom (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tarjeta_id INTEGER NOT NULL REFERENCES tarjetas(id) ON DELETE CASCADE,
+      ciclo TEXT NOT NULL,
+      fecha_corte TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now','localtime')),
+      UNIQUE(tarjeta_id, ciclo)
+    );
+
+    CREATE TABLE IF NOT EXISTS historial (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      accion TEXT NOT NULL,
+      descripcion TEXT NOT NULL,
+      detalles TEXT,
+      fecha TEXT DEFAULT (datetime('now','localtime'))
+    );
   `);
 
   // ─── Migrations ──────────────────────────────────────────────────
@@ -702,70 +746,14 @@ function initDb(dbPathOverride) {
   db.prepare('UPDATE avances SET monto_bolsillo = ROUND(monto_bolsillo) WHERE monto_bolsillo != ROUND(monto_bolsillo)').run();
   db.prepare('UPDATE diferidas SET monto_bolsillo = ROUND(monto_bolsillo) WHERE monto_bolsillo IS NOT NULL AND monto_bolsillo != ROUND(monto_bolsillo)').run();
 
-  // ── Bolsillo per-cuota para diferidas ─────────────────────────────
-  db.exec(`CREATE TABLE IF NOT EXISTS bolsillo_cuotas (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    compra_id INTEGER NOT NULL REFERENCES compras(id) ON DELETE CASCADE,
-    cuota_num INTEGER NOT NULL,
-    monto REAL NOT NULL DEFAULT 0,
-    created_at TEXT DEFAULT (datetime('now','localtime')),
-    UNIQUE(compra_id, cuota_num)
-  )`);
-
-  // ── Bolsillo per-cuota para avances ───────────────────────────────
-  // Mismo patrón que bolsillo_cuotas (diferidas), pero por avance_id.
-  // Permite apartar dinero independiente por cada cuota mensual proyectada
-  // sin que un único monto global "contamine" la visualización de meses futuros.
-  db.exec(`CREATE TABLE IF NOT EXISTS bolsillo_cuotas_avance (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    avance_id INTEGER NOT NULL REFERENCES avances(id) ON DELETE CASCADE,
-    cuota_num INTEGER NOT NULL,
-    monto REAL NOT NULL DEFAULT 0,
-    created_at TEXT DEFAULT (datetime('now','localtime')),
-    UNIQUE(avance_id, cuota_num)
-  )`);
-
-  // ── Fechas de pago manuales por ciclo ─────────────────────────────
-  // Override puntual: cuando el banco asigna una fecha de pago real
-  // distinta de la calculada (festivos, fines de semana). Aplica solo
-  // al display; no afecta cálculos de intereses, pago mínimo, etc.
-  // Un registro por (tarjeta_id, ciclo) gracias a UNIQUE.
-  db.exec(`CREATE TABLE IF NOT EXISTS fechas_pago_custom (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    tarjeta_id INTEGER NOT NULL REFERENCES tarjetas(id) ON DELETE CASCADE,
-    ciclo TEXT NOT NULL,
-    fecha_pago TEXT NOT NULL,
-    created_at TEXT DEFAULT (datetime('now','localtime')),
-    UNIQUE(tarjeta_id, ciclo)
-  )`);
-
-  // Corte real por ciclo cuando el banco ADELANTA (o atrasa) el corte respecto al `dia_corte`
-  // teórico de la tarjeta (ej. el corte teórico cae en fin de semana y el banco corta antes).
-  // A DIFERENCIA de fechas_pago_custom (solo display), esta SÍ afecta cálculos: el motor de
-  // ciclos (calcCiclo/syncData) la consultará para mandar las compras hechas DESPUÉS de la
-  // `fecha_corte` real al ciclo siguiente. `ciclo` = el ciclo TEÓRICO afectado (YYYY-MM);
-  // `fecha_corte` = la fecha real de corte (YYYY-MM-DD). Un registro por (tarjeta_id, ciclo).
-  // Es por-ciclo a propósito: NUNCA se toca el `dia_corte` global (reescribiría toda la historia).
-  db.exec(`CREATE TABLE IF NOT EXISTS cortes_custom (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    tarjeta_id INTEGER NOT NULL REFERENCES tarjetas(id) ON DELETE CASCADE,
-    ciclo TEXT NOT NULL,
-    fecha_corte TEXT NOT NULL,
-    created_at TEXT DEFAULT (datetime('now','localtime')),
-    UNIQUE(tarjeta_id, ciclo)
-  )`);
-
+  // Migración de DATOS del estado legacy 'por_cobrar' → 'pagado'. El ESQUEMA de bolsillo_cuotas,
+  // bolsillo_cuotas_avance, fechas_pago_custom, cortes_custom e historial ya se creó al INICIO de
+  // initDb (antes de las migraciones), para tolerar BDs de versiones viejas que no tenían esas tablas.
   db.prepare("UPDATE compras SET tercero_pagado = 0 WHERE estado = 'por_cobrar' AND persona_id IS NOT NULL").run();
   db.prepare("UPDATE compras SET estado = 'pagado' WHERE estado = 'por_cobrar'").run();
 
-  try { db.exec('DROP TABLE IF EXISTS log'); } catch(e) {}
-  db.exec(`CREATE TABLE IF NOT EXISTS historial (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    accion TEXT NOT NULL,
-    descripcion TEXT NOT NULL,
-    detalles TEXT,
-    fecha TEXT DEFAULT (datetime('now','localtime'))
-  )`);
+  // Limpieza de la tabla 'log' legacy (reemplazada por 'historial', creada arriba).
+  try { db.exec('DROP TABLE IF EXISTS log'); } catch (e) {}
 
   // Run sync
   syncData(db);

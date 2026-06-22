@@ -261,6 +261,10 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '4.7.1': [
+    'El Asistente de Conciliación ahora puede convertir una compra de contado en una compra a cuotas con un solo botón ("Aplicar"), cuando el extracto del banco la trae diferida (por ejemplo, una suscripción que el banco pasó a 36 cuotas). Antes solo mostraba un mensaje pidiendo hacerlo a mano desde la tarjeta, lo cual era imposible si el mes ya estaba cerrado; ahora la conciliación lo resuelve directamente, respetando siempre los meses que ya pagaste.',
+    'Corregido un error que impedía abrir la aplicación al cargar una copia de seguridad antigua: si a la base de datos le faltaban tablas recientes, el arranque fallaba. Ahora la app actualiza sola la estructura de cualquier base de datos vieja al abrirla, sin trabarse.'
+  ],
   '4.7.0': [
     'Los meses que el banco cierra antes de tiempo (corte adelantado) ahora quedan tan protegidos como cualquier mes ya facturado: las compras de ese mes quedan selladas y no se les puede cambiar el valor, la fecha o el responsable, ni dividirlas en cuotas, reprogramarlas o eliminarlas (solo se permite corregir el nombre o la nota). Antes esta protección se guiaba únicamente por la fecha de corte habitual de la tarjeta; ahora reconoce la fecha real en la que el banco cortó.',
     'Las compras que caen en los días siguientes al corte adelantado —y que la app pasa automáticamente al mes siguiente— siguen siendo totalmente editables, como debe ser: el sellado se aplica solo a las que de verdad quedaron dentro del mes ya cerrado, sin bloquear por error las del mes nuevo.',
@@ -5633,7 +5637,7 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
   const [errAplicar, setErrAplicar] = useState('');
   const [contextoUser, setContextoUser] = useState('');
   // Operaciones que la app puede aplicar automaticamente (mapean a endpoints existentes).
-  const AUTO = { crear_compra: 1, editar_valor: 1, mover_ciclo: 1, reprogramar_cuotas: 1, actualizar_tasa_intl: 1, actualizar_fecha_pago: 1 };
+  const AUTO = { crear_compra: 1, editar_valor: 1, mover_ciclo: 1, reprogramar_cuotas: 1, convertir_a_diferida: 1, actualizar_tasa_intl: 1, actualizar_fecha_pago: 1 };
 
   // Formatea una tasa mensual decimal a porcentaje colombiano (0.020849 -> "2,0849%").
   const fmtPct = (x) => (x == null || x === '') ? '—' : (Number(x) * 100).toFixed(4).replace('.', ',') + '%';
@@ -5677,6 +5681,7 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
       if (esDividir) return { titulo: 'Reprogramar dividiendo en cuotas', endpoint: 'POST /api/compras/' + cid + '/dividir-cuotas', filas: [['Compra', '#' + cid], ['Cuotas (irregulares)', String(p.cuotas.length)], ['Detalle', p.cuotas.map(q => q.ciclo + ': ' + fmtCOP(q.monto)).join('   |   ')]] };
       return { titulo: 'Reprogramar número de cuotas', endpoint: 'POST /api/diferidas/(de #' + cid + ')/reprogramar', filas: [['Compra', '#' + cid], ['Nuevo total de cuotas', String(p.num_cuotas || '')], ['Regenera la proyección', 'si']] };
     }
+    if (op === 'convertir_a_diferida') return { titulo: 'Convertir compra de contado a cuotas (diferida)', endpoint: 'POST /api/compras/' + cid + '/convertir-a-diferida', filas: [['Compra', '#' + cid], ['Pasa de', '1 cuota (contado)'], ['Nuevo total de cuotas', String(p.num_cuotas || '')], ['Cobra intereses', (p.cobrar_intereses === false ? 'no' : 'si')], ['Conserva su fecha real', 'si']] };
     if (op === 'actualizar_tasa_intl') {
       const grupos = Array.isArray(p.grupos) ? p.grupos : (p.tasa_intl != null ? [{ tasa_intl: p.tasa_intl, compra_ids: p.compra_ids || [] }] : []);
       const nTotal = grupos.reduce((s, g) => s + ((g.compra_ids || []).length), 0);
@@ -5745,6 +5750,14 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
           const r = await api('/diferidas/' + a.diferida_id + '/reprogramar', { method: 'POST', body: { num_cuotas: Number(p.num_cuotas), desde_conciliacion: true } });
           if (r && r.error) throw new Error(r.error);
         }
+      } else if (op === 'convertir_a_diferida') {
+        const cid = p.compra_id != null ? p.compra_id : d.compra_id;
+        if (!cid) throw new Error('No se identifico la compra a convertir.');
+        if (!(Number(p.num_cuotas) >= 2)) throw new Error('Falta el numero de cuotas (2 o mas).');
+        // desde_conciliacion: exime del candado de "ciclo cerrado" (la IA convierte a cuotas una compra
+        // que el banco diferio en un extracto YA facturado); el candado de ciclos PAGADOS sigue aplicando.
+        const r = await api('/compras/' + cid + '/convertir-a-diferida', { method: 'POST', body: { num_cuotas: Number(p.num_cuotas), cobrar_intereses: p.cobrar_intereses !== false, desde_conciliacion: true } });
+        if (r && r.error) throw new Error(r.error);
       } else if (op === 'actualizar_tasa_intl') {
         const grupos = Array.isArray(p.grupos) ? p.grupos : (p.tasa_intl != null ? [{ tasa_intl: p.tasa_intl, compra_ids: p.compra_ids || [] }] : []);
         const limpios = grupos.filter(g => Number(g.tasa_intl) > 0 && Array.isArray(g.compra_ids) && g.compra_ids.length);
@@ -5864,8 +5877,7 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
             !aplicada && AUTO[op] && !d.posible_falso_positivo && e('div', { style: { marginTop: 6, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
               e('span', { style: { fontSize: 11.5, color: 'var(--text-muted)' } }, 'Accion sugerida: ', e('strong', { style: { color: 'var(--accent)' } }, fmtOperacion(op))),
               e('button', { className: 'btn btn-sm btn-primary', onClick: () => { setErrAplicar(''); setAccionSel({ d: d, idx: i }); } }, 'Aplicar')
-            ),
-            !aplicada && op === 'convertir_a_diferida' && e('div', { style: { marginTop: 6, fontSize: 11.5, color: 'var(--text-muted)' } }, 'Convertir a diferida: hazlo editando las cuotas de la compra desde la tarjeta (solo posible mientras su ciclo siga vigente).')
+            )
           );
         }),
     // Re-análisis iterativo: el usuario aclara/corrige y la IA vuelve a analizar (mismo PDF y

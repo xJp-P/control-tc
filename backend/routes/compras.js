@@ -618,7 +618,10 @@ module.exports = function(db, { logAction, tjNombre }) {
     // anterior ya CERRÓ (el banco generó ese extracto) aunque no esté pagado: su estructura de cuotas
     // queda sellada. Las ediciones estéticas (PUT regular) no pasan por aquí y siguen permitidas.
     const cicloVig = cicloConCorte(hoyLocal(), diaCorte, getCortesCustomMap(db, c.tarjeta_id));
-    if (c.ciclo < cicloVig) {
+    // La conciliación IA (desde_conciliacion) queda EXENTA del candado de ciclo cerrado: el banco
+    // difirió esta compra en un extracto YA facturado y la IA lo corrige con confirmación del usuario
+    // (espejo de reprogramar/dividir/PUT). El candado de ciclos PAGADOS (abajo) es independiente y SIEMPRE aplica.
+    if (!(req.body && req.body.desde_conciliacion) && c.ciclo < cicloVig) {
       return res.status(403).json({ error: 'No se puede convertir: la compra pertenece al ciclo ' + c.ciclo + ', que ya cerró (el vigente es ' + cicloVig + '). El banco ya facturó ese extracto.' });
     }
     // Y dentro del vigente, tampoco si su extracto ya se pagó (pago anticipado).
