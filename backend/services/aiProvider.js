@@ -139,7 +139,7 @@ async function analizar(args) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
         body: JSON.stringify({
-          model: model || 'claude-3-5-sonnet-latest',
+          model: model || 'claude-sonnet-4-6',
           max_tokens: 2048,
           system: system + '\nResponde UNICAMENTE con el objeto JSON pedido, sin texto adicional ni explicaciones fuera del JSON.',
           messages: [{ role: 'user', content: user }]

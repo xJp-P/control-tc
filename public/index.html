@@ -261,6 +261,10 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '4.7.3': [
+    'Ahora puedes elegir qué modelo de inteligencia artificial usa el Asistente de Conciliación: toda la familia de Claude (Opus, Sonnet y Haiku) está disponible, tanto en la configuración como en cada análisis. Los modelos más potentes razonan mejor; los más rápidos consumen menos. La lista se actualizó a las versiones más recientes.',
+    'El Asistente de Conciliación ya no marca como "monto erróneo" las cuotas de tus compras a plazos: ahora entiende que el banco muestra en cada cuota solo el capital y cobra todos los intereses juntos en un cargo aparte, así que da las cuotas por correctas en lugar de sugerir cambiarlas (lo que habría dañado tu proyección de intereses).'
+  ],
   '4.7.1': [
     'El Asistente de Conciliación ahora puede convertir una compra de contado en una compra a cuotas con un solo botón ("Aplicar"), cuando el extracto del banco la trae diferida (por ejemplo, una suscripción que el banco pasó a 36 cuotas). Antes solo mostraba un mensaje pidiendo hacerlo a mano desde la tarjeta, lo cual era imposible si el mes ya estaba cerrado; ahora la conciliación lo resuelve directamente, respetando siempre los meses que ya pagaste.',
     'Corregido un error que impedía abrir la aplicación al cargar una copia de seguridad antigua: si a la base de datos le faltaban tablas recientes, el arranque fallaba. Ahora la app actualiza sola la estructura de cualquier base de datos vieja al abrirla, sin trabarse.'
@@ -5312,7 +5316,7 @@ function BancosUrlsConfig() {
 const IA_PROVIDERS = [
   { id: 'mock',      label: 'Demo (sin conexion)',  defaultModel: '',                          models: [] },
   { id: 'openai',    label: 'OpenAI',               defaultModel: 'gpt-4o',                     models: ['gpt-4o', 'gpt-4o-mini', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4-turbo'] },
-  { id: 'anthropic', label: 'Anthropic (Claude)',   defaultModel: 'claude-3-5-sonnet-latest',   models: ['claude-3-5-sonnet-latest', 'claude-3-5-sonnet-20241022', 'claude-3-7-sonnet-latest', 'claude-3-5-haiku-latest', 'claude-3-opus-latest'] },
+  { id: 'anthropic', label: 'Anthropic (Claude)',   defaultModel: 'claude-sonnet-4-6',          models: ['claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-opus-4-5-20251101', 'claude-sonnet-4-5-20250929', 'claude-opus-4-1-20250805'] },
   { id: 'gemini',    label: 'Google Gemini',        defaultModel: 'gemini-1.5-pro',             models: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'] },
   { id: 'deepseek',  label: 'DeepSeek',             defaultModel: 'deepseek-chat',              models: ['deepseek-chat', 'deepseek-reasoner', 'deepseek-v4-flash', 'deepseek-v4-pro'] },
 ];
