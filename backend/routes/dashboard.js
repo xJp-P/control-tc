@@ -40,7 +40,9 @@ module.exports = function(db) {
     }
 
     const comprasCiclo = db.prepare("SELECT COALESCE(SUM(valor_cop - COALESCE(monto_abonado,0)),0) as total FROM compras WHERE ciclo=? AND estado NOT IN ('pagado','diferida')" + tjFilter).get(cicloActual, ...tjParams);
-    const saldoBolsilloCompras = db.prepare("SELECT COALESCE(SUM(CASE WHEN estado='bolsillo' THEN valor_cop WHEN estado='bolsillo_parcial' THEN COALESCE(monto_bolsillo,0) WHEN estado='diferida' THEN COALESCE(monto_bolsillo,0) ELSE 0 END),0) as total FROM compras WHERE ciclo=? AND estado IN ('bolsillo','bolsillo_parcial','diferida')" + tjFilter).get(cicloActual, ...tjParams);
+    // 'bolsillo' usa (valor_cop − abonado) en vez de valor_cop: una compra cubierta por bolsillo que
+    // además recibió un abono a capital parcial debe contar solo su saldo neto (abonado=0 → valor_cop).
+    const saldoBolsilloCompras = db.prepare("SELECT COALESCE(SUM(CASE WHEN estado='bolsillo' THEN valor_cop - COALESCE(monto_abonado,0) WHEN estado='bolsillo_parcial' THEN COALESCE(monto_bolsillo,0) WHEN estado='diferida' THEN COALESCE(monto_bolsillo,0) ELSE 0 END),0) as total FROM compras WHERE ciclo=? AND estado IN ('bolsillo','bolsillo_parcial','diferida')" + tjFilter).get(cicloActual, ...tjParams);
     // Avances: bolsillo per-cuota se acumula en el forEach de avancesActivos (más abajo)
     // a partir de bolsillo_cuotas_avance, filtrado por la cuota_num del ciclo navegado.
     // NO se usa avances.monto_bolsillo (que es el cache total acumulado de todas las cuotas).

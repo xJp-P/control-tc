@@ -325,7 +325,10 @@ module.exports = function(db, { logAction, tjNombre }) {
 
     // CAP: nunca apartar más que lo que la compra va a costar (valor [+ interés intl] / cuota).
     let capped = false;
-    const tope = targetBolsillo(c, monedaPago, cuota_num);
+    let tope = targetBolsillo(c, monedaPago, cuota_num);
+    // Si la compra ya tiene un abono a capital (COP), el tope baja al saldo restante: no se debe apartar
+    // más de lo que aún se debe (valor [+ interés] − abonado). Para abonado=0 el tope no cambia.
+    if (monedaPago === 'COP' && tope != null && (c.monto_abonado || 0) > 0) tope = Math.max(0, tope - (c.monto_abonado || 0));
     if (tope != null && nuevoMonto > tope) { nuevoMonto = tope; capped = true; }
 
     if (cuota_num != null && c.estado === 'diferida') {
@@ -346,8 +349,10 @@ module.exports = function(db, { logAction, tjNombre }) {
       logAction('editar', tjNombre(c.tarjeta_id) + 'Bolsillo cuota ' + cuota_num + ' (' + monedaPago + '): ' + c.descripcion + ' - Apartado: ' + fmt);
       res.json({ ok: true, estado: 'diferida', moneda: monedaPago, monto_bolsillo: sumCop.total, monto_bolsillo_usd: sumUsd.total, cuota_num, monto_cuota: nuevoMonto, capped, tope });
     } else {
-      // Non-diferida: bolsillo global. Para compras USD comparamos contra valor_usd; COP contra valor_cop.
-      const target = monedaPago === 'USD' ? (c.valor_usd || 0) : c.valor_cop;
+      // Non-diferida: bolsillo global. Para compras USD comparamos contra valor_usd; COP contra el SALDO
+      // restante (valor − abonado), no el valor completo: si hay un abono a capital previo, un bolsillo
+      // que cubra el saldo restante debe marcar 'bolsillo' (no 'bolsillo_parcial'). Para abonado=0 es igual.
+      const target = monedaPago === 'USD' ? (c.valor_usd || 0) : Math.max(0, c.valor_cop - (c.monto_abonado || 0));
       const nuevoEstado = c.estado === 'diferida' ? 'diferida'
         : nuevoMonto >= target ? 'bolsillo' : nuevoMonto > 0 ? 'bolsillo_parcial' : 'pendiente';
       if (monedaPago === 'USD') {

@@ -16,11 +16,11 @@ module.exports = function(db, { logAction, tjNombre }) {
     comprasPendientes
       .filter(c => (c.valor_cop - (c.monto_abonado || 0)) > 0 && (!c.valor_usd || c.valor_usd === 0))
       .sort(sortFecha)
-      .forEach(c => { const s = c.valor_cop - (c.monto_abonado || 0); deudas.push({ tipo: 'compra', fecha: c.fecha, created_at: c.created_at, id: c.id, descripcion: c.descripcion, monto: s, montoOriginal: c.valor_cop, persona_id: c.persona_id, bolsillo: (c.persona_id == null) ? (c.monto_bolsillo || 0) : 0 }); });
+      .forEach(c => { const s = c.valor_cop - (c.monto_abonado || 0); deudas.push({ tipo: 'compra', fecha: c.fecha, created_at: c.created_at, id: c.id, descripcion: c.descripcion, monto: s, montoOriginal: c.valor_cop, persona_id: c.persona_id, bolsillo: (c.persona_id == null) ? (c.monto_bolsillo || 0) : 0, montoBolsillo: c.monto_bolsillo || 0 }); });
     comprasPendientes
       .filter(c => (c.valor_cop - (c.monto_abonado || 0)) > 0 && c.valor_usd && c.valor_usd > 0)
       .sort(sortFecha)
-      .forEach(c => { const s = c.valor_cop - (c.monto_abonado || 0); deudas.push({ tipo: 'compra', fecha: c.fecha, created_at: c.created_at, id: c.id, descripcion: c.descripcion, monto: s, montoOriginal: c.valor_cop, persona_id: c.persona_id, bolsillo: (c.persona_id == null) ? (c.monto_bolsillo || 0) : 0 }); });
+      .forEach(c => { const s = c.valor_cop - (c.monto_abonado || 0); deudas.push({ tipo: 'compra', fecha: c.fecha, created_at: c.created_at, id: c.id, descripcion: c.descripcion, monto: s, montoOriginal: c.valor_cop, persona_id: c.persona_id, bolsillo: (c.persona_id == null) ? (c.monto_bolsillo || 0) : 0, montoBolsillo: c.monto_bolsillo || 0 }); });
     diferidasActivas
       .sort((a, b) => a.fecha_compra.localeCompare(b.fecha_compra) || (a.created_at || '').localeCompare(b.created_at || ''))
       .forEach(d => {
@@ -67,7 +67,21 @@ module.exports = function(db, { logAction, tjNombre }) {
       if (restante <= 0) break;
       const montoAplicar = Math.min(restante, d.monto);
       restante -= montoAplicar;
-      const liberado = d.bolsillo || 0;
+      // Bolsillo liberado estimado (espejo de la lógica del POST):
+      //   - compra personal, abono TOTAL  → se libera todo el bolsillo.
+      //   - compra personal, abono PARCIAL → solo el excedente que queda por encima del nuevo saldo.
+      //   - compra de tercero             → 0 (el reembolso del deudor nunca se libera).
+      //   - diferida/avance               → el helper libera el bolsillo per-cuota al tocar el capital.
+      let liberado;
+      if (d.tipo === 'compra') {
+        const esPersonal = (d.persona_id == null);
+        const bol = d.montoBolsillo || 0;
+        if (!esPersonal) liberado = 0;
+        else if (montoAplicar >= d.monto) liberado = bol;
+        else liberado = Math.max(0, Math.round((bol - (d.monto - montoAplicar)) * 100) / 100);
+      } else {
+        liberado = d.bolsillo || 0;
+      }
       if (liberado > 0) bolsilloLiberado += liberado;
       detalle.push({ tipo: d.tipo, id: d.id, descripcion: d.descripcion, saldoOriginal: d.monto, montoAplicado: montoAplicar, cubierto: montoAplicar >= d.monto ? 'total' : 'parcial', bolsilloLiberado: liberado });
     }
@@ -101,18 +115,39 @@ module.exports = function(db, { logAction, tjNombre }) {
         const montoAplicar = Math.min(restante, d.monto);
         restante -= montoAplicar;
         const nuevoAbonado = (d.montoOriginal - d.monto) + montoAplicar;
-        // Liberar el bolsillo SOLO si la compra es personal (plata propia apartada que el abono
-        // dejó libre, no proporcional). En compras de tercero, monto_bolsillo es el reembolso del
-        // deudor (lo usa la vista Terceros como valor_cop - monto_bolsillo) → se conserva intacto.
+        const nuevoSaldo = Math.round((d.monto - montoAplicar) * 100) / 100; // deuda restante tras el abono
         const esPersonal = (d.persona_id == null);
-        const liberado = esPersonal ? (d.bolsillo || 0) : 0;
-        if (liberado > 0) bolsilloLiberado += liberado;
-        const setBol = esPersonal ? ', monto_bolsillo=0, monto_bolsillo_usd=0' : '';
+        const bolsilloActual = d.montoBolsillo || 0; // monto_bolsillo real (en compras de tercero = reembolso del deudor)
+
         if (montoAplicar >= d.monto) {
+          // ABONO TOTAL → deuda saldada ('pagado'). En personales se libera TODO el bolsillo (ya no se
+          // necesita apartar nada). En terceros el reembolso (monto_bolsillo) se conserva intacto: es la
+          // contabilidad del deudor (la vista Terceros lo usa como valor_cop - monto_bolsillo), no plata propia.
+          const liberado = esPersonal ? bolsilloActual : 0;
+          if (liberado > 0) bolsilloLiberado += liberado;
+          const setBol = esPersonal ? ', monto_bolsillo=0, monto_bolsillo_usd=0' : '';
           db.prepare("UPDATE compras SET estado='pagado', monto_abonado=?" + setBol + " WHERE id=?").run(nuevoAbonado, d.id);
           detalle.push({ tipo: 'compra', id: d.id, descripcion: d.descripcion, saldoOriginal: d.monto, montoAplicado: montoAplicar, cubierto: 'total', bolsilloLiberado: liberado });
         } else {
-          db.prepare("UPDATE compras SET estado='pendiente', monto_abonado=?" + setBol + " WHERE id=?").run(nuevoAbonado, d.id);
+          // ABONO PARCIAL → la compra mantiene saldo. NO se vacía el bolsillo: se conserva, y solo si por
+          // la reducción de la deuda quedó por encima del nuevo saldo se cap-ea a ese saldo (el excedente
+          // se libera). El estado se DERIVA de cuánto cubre el bolsillo del saldo restante (>= saldo →
+          // 'bolsillo'; > 0 → 'bolsillo_parcial'; si no → 'pendiente'), en vez de forzar 'pendiente'.
+          // En terceros el reembolso no se toca, pero igual decide el estado (puede cubrir la deuda).
+          let nuevoBolsillo = bolsilloActual;
+          let liberado = 0;
+          if (esPersonal && bolsilloActual > nuevoSaldo) {
+            nuevoBolsillo = nuevoSaldo;
+            liberado = Math.round((bolsilloActual - nuevoSaldo) * 100) / 100;
+            if (liberado > 0) bolsilloLiberado += liberado;
+          }
+          const bolParaEstado = esPersonal ? nuevoBolsillo : bolsilloActual;
+          const nuevoEstado = bolParaEstado >= nuevoSaldo ? 'bolsillo' : (bolParaEstado > 0 ? 'bolsillo_parcial' : 'pendiente');
+          if (esPersonal) {
+            db.prepare("UPDATE compras SET estado=?, monto_abonado=?, monto_bolsillo=? WHERE id=?").run(nuevoEstado, nuevoAbonado, nuevoBolsillo, d.id);
+          } else {
+            db.prepare("UPDATE compras SET estado=?, monto_abonado=? WHERE id=?").run(nuevoEstado, nuevoAbonado, d.id);
+          }
           detalle.push({ tipo: 'compra', id: d.id, descripcion: d.descripcion, saldoOriginal: d.monto, montoAplicado: montoAplicar, cubierto: 'parcial', bolsilloLiberado: liberado });
         }
       } else if (d.tipo === 'diferida') {

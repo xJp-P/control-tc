@@ -261,6 +261,11 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '4.7.4': [
+    'La tabla de movimientos quedó más limpia cuando una compra tiene un abono parcial: la columna de Valor muestra solo el valor original y, debajo en texto gris, cuánto llevas abonado; el saldo que aún debes pasó a la columna Total. Antes todo se amontonaba en la columna de Valor.',
+    'Corregido: al registrar un abono parcial, el estado de la compra ya no se queda en "Pendiente" por error. Ahora, si el dinero apartado en el bolsillo (o el reembolso de un tercero) cubre el saldo que queda, la compra se muestra correctamente como "Bolsillo".',
+    'Corregido: hacer un abono parcial ya no borra el dinero que tenías apartado en el bolsillo de esa compra. Ese dinero se conserva (ajustado al nuevo saldo si quedaba de más) en lugar de desaparecer.'
+  ],
   '4.7.3': [
     'Ahora puedes elegir qué modelo de inteligencia artificial usa el Asistente de Conciliación: toda la familia de Claude (Opus, Sonnet y Haiku) está disponible, tanto en la configuración como en cada análisis. Los modelos más potentes razonan mejor; los más rápidos consumen menos. La lista se actualizó a las versiones más recientes.',
     'El Asistente de Conciliación ya no marca como "monto erróneo" las cuotas de tus compras a plazos: ahora entiende que el banco muestra en cada cuota solo el capital y cobra todos los intereses juntos en un cargo aparte, así que da las cuotas por correctas en lugar de sugerir cambiarlas (lo que habría dañado tu proyección de intereses).'
@@ -2549,7 +2554,11 @@ function CardResumen({ tarjeta, onDataChange }) {
               (c.valor_usd && c.valor_usd > 0 && !valorMostrar)
                 ? e('span', { style: { color: 'var(--text-muted)' } }, '—')
                 : fmtCOP(valorMostrar),
-              tieneParcial && e('div', { style: { fontSize: 11, color: 'var(--primary)' } }, 'Abonado: ' + fmtCOP(abonado) + ' | Resta: ' + fmtCOP(c.valor_cop - abonado))
+              // Abono parcial: el valor original queda inmutable arriba; debajo, en texto silenciado, lo
+              // abonado. El saldo neto vive en la columna Total (tarjetas con interés intl); si la tarjeta
+              // no tiene esa columna, se muestra el saldo aquí como segunda línea para no perder el dato.
+              tieneParcial && e('div', { style: { fontSize: 11, color: 'var(--text-muted)' } }, 'Abonado: ' + fmtCOP(abonado)),
+              tieneParcial && !aplicaIntl && e('div', { style: { fontSize: 11, color: 'var(--primary)' } }, 'Saldo: ' + fmtCOP(valorMostrar - abonado))
             ),
             e('td', { className: 'text-right text-mono', style: { color: '#4FC3F7', fontWeight: 600 } },
               c.valor_usd && c.valor_usd > 0
@@ -2558,7 +2567,10 @@ function CardResumen({ tarjeta, onDataChange }) {
             ),
             aplicaIntl && tasaIntlTd(c, tarjeta),
             aplicaIntl && e('td', { className: 'text-right text-mono', style: { fontSize: 12 } }, interesIntl > 0 ? fmtCOP(interesIntl) : e('span', { style: { color: 'var(--text-muted)' } }, '—')),
-            aplicaIntl && e('td', { className: 'text-right text-mono', style: { fontWeight: interesIntl > 0 ? 600 : undefined } }, fmtCOP(interesIntl > 0 ? valorMostrar + interesIntl : valorMostrar)),
+            aplicaIntl && e('td', { className: 'text-right text-mono', style: { fontWeight: (interesIntl > 0 || tieneParcial) ? 600 : undefined } },
+              // Deuda neta de la fila = valor + interés intl − abonado. En filas pagadas se muestra el
+              // total bruto original (el badge "Pagado" ya indica saldo 0) para no mostrar $0 confuso.
+              fmtCOP(showAsPaid ? valorMostrar : ((interesIntl > 0 ? valorMostrar + interesIntl : valorMostrar) - abonado))),
             e('td', null,
               showAsPaid
                 ? e('span', { className: 'badge badge-pagado', style: { display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, padding: '4px 10px' } },
