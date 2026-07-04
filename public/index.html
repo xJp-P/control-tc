@@ -261,6 +261,12 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '4.8.2': [
+    'Arreglado un caso en Terceros con compras internacionales: cuando el "Dinero a favor" de una persona (un reverso) cubria solo el valor de la compra pero no su interes, la app la marcaba como Pagada antes de tiempo y bloqueaba el boton para completar lo que faltaba. Ahora queda como pago parcial y puedes agregar el interes restante desde el boton Bolsillo hasta saldarla del todo.',
+    'En Terceros, las compras internacionales de un tercero ahora tienen en cuenta su interes al calcular cuanto falta por cubrir, igual que la card "Me Deben". Antes ese interes no se contaba y la compra parecia saldada aunque faltara un poco.',
+    'En la tabla de compras, cuando el banco te reversa una compra de un tercero que ya te habian reembolsado, ese movimiento ahora se marca con la etiqueta "reverso" (antes decia "abono parcial"), para que quede claro de donde viene.',
+    'Al aplicar el "Dinero a favor" contra una deuda de la persona, el monto que se muestra que debe ahora incluye el interes internacional, para reflejar la deuda total real.'
+  ],
   '4.8.1': [
     'En la pestaña Terceros, cuando el "Dinero a favor" de una persona (de un reverso) alcanzó a cubrir solo una parte de una compra, ahora puedes registrar en efectivo el resto que te pagó desde el botón Bolsillo, hasta dejarla en Pagado. Antes ese botón quedaba bloqueado y la compra se quedaba trabada en pago parcial.'
   ],
@@ -2538,6 +2544,10 @@ function CardResumen({ tarjeta, onDataChange }) {
           const abonado = c.monto_abonado || 0;
           const tieneParcial = abonado > 0 && c.estado !== 'pagado';
           const bolsillo = c.monto_bolsillo || 0;
+          // Crédito de reverso (NO un abono a capital del usuario): compra de tercero cubierta por su
+          // bolsillo pero con monto_abonado — el banco redujo la deuda al aplicar un reverso a esta compra.
+          // El usuario no le hace abonos a capital a compras de tercero, así que ese abonado es el crédito.
+          const esReverso = !!c.persona_id && c.estado === 'bolsillo' && abonado > 0;
           const isDif = c.estado === 'diferida';
           const isPaidLikePast = cicloPagadoC && isDif; // diferida en ciclo pagado
           const interesIntl = calcInteresIntl(c);
@@ -2564,7 +2574,7 @@ function CardResumen({ tarjeta, onDataChange }) {
                 c.nota_personal && e('span', { style: { fontSize: 11, color: 'var(--text-muted)' } }, c.nota_personal),
                 // El valor USD vive en su propia columna; el responsable también.
                 isDif && c.cuota_num && e('span', { style: { fontSize: 10, color: 'var(--accent)' } }, 'Cuota ' + c.cuota_num + '/' + c.cuotas_total),
-                tieneParcial && e('span', { className: 'badge badge-active', style: { fontSize: 10 } }, 'abono parcial')
+                tieneParcial && e('span', { className: 'badge badge-active', style: { fontSize: 10 } }, esReverso ? 'reverso' : 'abono parcial')
               )
             ),
             // Responsable: tercero con persona-dot o "—" si es Personal.
@@ -2583,7 +2593,7 @@ function CardResumen({ tarjeta, onDataChange }) {
               // Abono parcial: el valor original queda inmutable arriba; debajo, en texto silenciado, lo
               // abonado. El saldo neto vive en la columna Total (tarjetas con interés intl); si la tarjeta
               // no tiene esa columna, se muestra el saldo aquí como segunda línea para no perder el dato.
-              tieneParcial && e('div', { style: { fontSize: 11, color: 'var(--text-muted)' } }, 'Abonado: ' + fmtCOP(abonado)),
+              tieneParcial && e('div', { style: { fontSize: 11, color: 'var(--text-muted)' } }, (esReverso ? 'Reverso: ' : 'Abonado: ') + fmtCOP(abonado)),
               tieneParcial && !aplicaIntl && e('div', { style: { fontSize: 11, color: 'var(--primary)' } }, 'Saldo: ' + fmtCOP(valorMostrar - abonado))
             ),
             e('td', { className: 'text-right text-mono', style: { color: '#4FC3F7', fontWeight: 600 } },
@@ -6713,10 +6723,14 @@ function Terceros({ tarjeta }) {
                           );
                         }
                         const bol = c.monto_bolsillo || 0;
-                        const bolCubre = bol >= c.valor_cop;
-                        const faltaBol = Math.max(0, c.valor_cop - bol);
-                        const pctBol = c.valor_cop > 0 ? Math.min(100, Math.round(bol / c.valor_cop * 100)) : 0;
                         const intlTercero = calcInteresIntlTercero(c);
+                        // El tercero debe su valor + su porción proporcional del interés intl de su
+                        // división (v4.8.2): el bolsillo cubre cuando alcanza valor+intl, igual que la
+                        // tabla principal (renderSingleRow) y la card "Me Deben" del dashboard.
+                        const objetivoTercero = c.valor_cop + intlTercero;
+                        const bolCubre = bol >= objetivoTercero;
+                        const faltaBol = Math.max(0, objetivoTercero - bol);
+                        const pctBol = objetivoTercero > 0 ? Math.min(100, Math.round(bol / objetivoTercero * 100)) : 0;
                         return e('tr', { key: c.id, style: (c.tercero_pagado || bolCubre) ? { background: 'rgba(52,211,153,0.08)' } : bol > 0 ? { background: 'rgba(167,139,250,0.06)' } : null },
                           e('td', null, fmtDate(c.fecha)),
                           e('td', { style: { fontWeight: 600 } }, c.descripcion,
@@ -6740,7 +6754,7 @@ function Terceros({ tarjeta }) {
                           // (La columna "Dinero" ya muestra si el tercero reembolsó; si el ciclo se paga, la compra
                           // desaparece de Terceros.)
                           e('td', null, e('span', { className: 'badge badge-' + (c.estado === 'pagado' ? 'pagado' : 'pendiente') }, c.estado === 'pagado' ? 'Pagado' : 'Pendiente')),
-                          e('td', null, dineroCell(c.tercero_pagado || bolCubre, bol, c.valor_cop)),
+                          e('td', null, dineroCell(c.tercero_pagado || bolCubre, bol, objetivoTercero)),
                           e('td', { style: { whiteSpace: 'nowrap', textAlign: 'right' } },
                             // Con cruce: atenuado y protegido SOLO si el cruce ya cubre el 100%. Si el
                             // cruce es PARCIAL, cae al botón Bolsillo activo para completar el resto en
@@ -6886,7 +6900,7 @@ function Terceros({ tarjeta }) {
                             e('div', { className: 'form-group', style: { marginBottom: 8 } },
                               e('label', { className: 'form-label' }, 'Aplicar a la deuda'),
                               e('select', { className: 'form-select', value: aplicarSel.compra_destino_id, onChange: ev => setAplicarSel(prev => ({ ...prev, compra_destino_id: ev.target.value })) },
-                                deudas.map(d => e('option', { key: d.id, value: String(d.id) }, d.descripcion + ' — debe ' + fmtCOP(d.valor_cop - (d.monto_bolsillo || 0)))))
+                                deudas.map(d => e('option', { key: d.id, value: String(d.id) }, d.descripcion + ' — debe ' + fmtCOP(d.valor_cop + calcInteresIntlTercero(d) - (d.monto_bolsillo || 0)))))
                             ),
                             e('div', { className: 'form-group', style: { marginBottom: 6 } },
                               e('label', { className: 'form-label' }, 'Monto a cruzar'),

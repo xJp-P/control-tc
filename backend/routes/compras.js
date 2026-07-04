@@ -3,7 +3,7 @@ const { Router } = require('express');
 const { hoyLocal, daysBetween, primerCorteAvance } = require('../helpers/dates');
 const { calcularAmortizacionDiferida } = require('../engine/amortizacion');
 const { nuOpts, aplicaIntInternacional } = require('../helpers/banco');
-const { compraTerceroConReembolso } = require('../helpers/bolsillo');
+const { compraTerceroConReembolso, objetivoBolsilloCop } = require('../helpers/bolsillo');
 const { getCortesCustomMap, cicloConCorte } = require('../helpers/cortes');
 
 module.exports = function(db, { logAction, tjNombre }) {
@@ -280,20 +280,9 @@ module.exports = function(db, { logAction, tjNombre }) {
       return cuotaObj ? Math.round(cuotaObj.totalPagar) : null;
     }
     if (monedaPago === 'USD') return Math.round((c.valor_usd || 0) * 100) / 100;
-    let tgt = c.valor_cop;
-    if (c.es_internacional && c.ciclo) {
-      const tj = db.prepare('SELECT banco, franquicia, tasa_mv_avances, dia_corte FROM tarjetas WHERE id=?').get(c.tarjeta_id);
-      if (tj && aplicaIntInternacional(tj.banco, tj.franquicia)) {
-        const tasaIntl = (c.tasa_intl != null ? c.tasa_intl : (tj.tasa_mv_avances || 0.01911));
-        const diaCorte = tj.dia_corte || 30;
-        const [yr, mo] = c.ciclo.split('-').map(Number);
-        const lastDay = new Date(yr, mo, 0).getDate();
-        const fCorte = new Date(yr, mo - 1, Math.min(diaCorte, lastDay)).toISOString().slice(0, 10);
-        const dias = daysBetween(c.fecha, fCorte);
-        if (dias > 0) tgt += Math.round(c.valor_cop * tasaIntl * (dias / 30));
-      }
-    }
-    return tgt;
+    // COP: valor + interés intl. Fuente única en helpers/bolsillo → el cruce de saldo a favor y este
+    // cap usan EXACTAMENTE el mismo objetivo (sin drift del interés intl).
+    return objetivoBolsilloCop(db, c);
   }
 
   router.put('/:id/bolsillo', (req, res) => {
@@ -353,7 +342,10 @@ module.exports = function(db, { logAction, tjNombre }) {
       // Non-diferida: bolsillo global. Para compras USD comparamos contra valor_usd; COP contra el SALDO
       // restante (valor − abonado), no el valor completo: si hay un abono a capital previo, un bolsillo
       // que cubra el saldo restante debe marcar 'bolsillo' (no 'bolsillo_parcial'). Para abonado=0 es igual.
-      const target = monedaPago === 'USD' ? (c.valor_usd || 0) : Math.max(0, c.valor_cop - (c.monto_abonado || 0));
+      // El objetivo de estado = el MISMO tope intl-aware ya calculado arriba (valor [+ intl] − abonado).
+      // Antes se recomputaba como valor_cop − abonado, ignorando el intl → una compra internacional
+      // marcaba 'bolsillo' cubriendo solo el capital, incoherente con el cap y con Terceros (v4.8.2).
+      const target = tope != null ? tope : (monedaPago === 'USD' ? (c.valor_usd || 0) : Math.max(0, c.valor_cop - (c.monto_abonado || 0)));
       const nuevoEstado = c.estado === 'diferida' ? 'diferida'
         : nuevoMonto >= target ? 'bolsillo' : nuevoMonto > 0 ? 'bolsillo_parcial' : 'pendiente';
       if (monedaPago === 'USD') {

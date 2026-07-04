@@ -13,6 +13,32 @@
 // (la vista Terceros y la card "Me Deben" calculan la deuda como valor_cop - monto_bolsillo).
 // Vaciarlo borraría ese libro de deuda → jamás se toca.
 
+const { daysBetween } = require('./dates');
+const { aplicaIntInternacional } = require('./banco');
+
+// Objetivo de bolsillo (COP) de una compra de 1 CUOTA = valor_cop + interés intl atribuido.
+// Es el "costo real" de la compra: una internacional (Bancolombia Visa) no queda cubierta hasta
+// apartar/reembolsar también su interés. Espejo EXACTO del branch COP de targetBolsillo (compras.js);
+// se centraliza aquí para que el cruce de saldo a favor (saldosFavor.js) y el cap de /bolsillo usen
+// el MISMO objetivo (evita el drift del interés intl que documenta CLAUDE.md). Nacional → valor_cop.
+// NO resta monto_abonado: eso lo hace cada llamador según su contexto (saldo restante).
+function objetivoBolsilloCop(db, c) {
+  let tgt = c.valor_cop || 0;
+  if (c.es_internacional && c.ciclo) {
+    const tj = db.prepare('SELECT banco, franquicia, tasa_mv_avances, dia_corte FROM tarjetas WHERE id=?').get(c.tarjeta_id);
+    if (tj && aplicaIntInternacional(tj.banco, tj.franquicia)) {
+      const tasaIntl = (c.tasa_intl != null ? c.tasa_intl : (tj.tasa_mv_avances || 0.01911));
+      const diaCorte = tj.dia_corte || 30;
+      const [yr, mo] = c.ciclo.split('-').map(Number);
+      const lastDay = new Date(yr, mo, 0).getDate();
+      const fCorte = new Date(yr, mo - 1, Math.min(diaCorte, lastDay)).toISOString().slice(0, 10);
+      const dias = daysBetween(c.fecha, fCorte);
+      if (dias > 0) tgt += Math.round((c.valor_cop || 0) * tasaIntl * (dias / 30));
+    }
+  }
+  return tgt;
+}
+
 // Diferida: el bolsillo vive en bolsillo_cuotas (vía la(s) compra(s) vinculada(s)) y se cachea en
 // compras.monto_bolsillo / monto_bolsillo_usd. Libera solo las partes personales y devuelve el
 // total liberado (COP). Las partes de tercero conservan su bolsillo intacto.
@@ -51,4 +77,4 @@ function compraTerceroConReembolso(db, compraId) {
   return !!(bc && bc.n > 0);
 }
 
-module.exports = { liberarBolsilloDiferida, liberarBolsilloAvance, compraTerceroConReembolso };
+module.exports = { liberarBolsilloDiferida, liberarBolsilloAvance, compraTerceroConReembolso, objetivoBolsilloCop };

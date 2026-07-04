@@ -5,6 +5,7 @@
 // La app NUNCA cruza el crédito de un tercero con deudas de OTRO (regla de negocio v4.7.5).
 const { Router } = require('express');
 const { hoyLocal } = require('../helpers/dates');
+const { objetivoBolsilloCop } = require('../helpers/bolsillo');
 
 module.exports = function(db, { logAction }) {
   const router = Router();
@@ -15,7 +16,9 @@ module.exports = function(db, { logAction }) {
   // Las diferidas conservan 'diferida' (usan bolsillo per-cuota, fuera del alcance de v1).
   function derivarEstadoCompra(c, nuevoBolsillo) {
     if (c.estado === 'diferida') return 'diferida';
-    const saldo = r2(c.valor_cop - (c.monto_abonado || 0));
+    // El tercero no queda saldado hasta cubrir valor + interés intl (no solo el capital). Mismo
+    // objetivo que el cap de /bolsillo, la tabla principal y la card "Me Deben" del dashboard (v4.8.2).
+    const saldo = r2(objetivoBolsilloCop(db, c) - (c.monto_abonado || 0));
     if (saldo <= 0) return 'pagado';
     return nuevoBolsillo >= saldo ? 'bolsillo' : (nuevoBolsillo > 0 ? 'bolsillo_parcial' : 'pendiente');
   }
@@ -88,7 +91,10 @@ module.exports = function(db, { logAction }) {
     const nuevoAplicado = r2(credito.monto_aplicado + m);
     const nuevoEstadoCredito = nuevoAplicado >= r2(credito.monto) - 0.01 ? 'consumido' : 'activo';
     const nuevoEstadoCompra = derivarEstadoCompra(destino, nuevoBolsillo);
-    const terceroPagado = nuevoBolsillo >= destino.valor_cop ? 1 : (destino.tercero_pagado || 0);
+    // tercero_pagado sigue al estado derivado: saldado (bolsillo/pagado cubre valor+intl) → 1. Si el
+    // cruce es PARCIAL (queda el interés intl u otro resto) conserva su valor previo → la compra NO
+    // queda como "Pagada" y el botón Bolsillo sigue activo para completar el resto en efectivo (v4.8.2).
+    const terceroPagado = (nuevoEstadoCompra === 'bolsillo' || nuevoEstadoCompra === 'pagado') ? 1 : (destino.tercero_pagado || 0);
 
     db.transaction(() => {
       db.prepare(`INSERT INTO aplicaciones_saldo_favor (saldo_favor_id, compra_destino_id, tipo, monto, fecha, notas)
@@ -133,7 +139,7 @@ module.exports = function(db, { logAction }) {
         if (destino) {
           const nuevoBolsillo = Math.max(0, r2((destino.monto_bolsillo || 0) - apl.monto));
           const nuevoEstado = derivarEstadoCompra(destino, nuevoBolsillo);
-          const terceroPagado = nuevoBolsillo >= destino.valor_cop ? 1 : 0;
+          const terceroPagado = (nuevoEstado === 'bolsillo' || nuevoEstado === 'pagado') ? 1 : 0;
           db.prepare('UPDATE compras SET monto_bolsillo=?, estado=?, tercero_pagado=? WHERE id=?').run(nuevoBolsillo, nuevoEstado, terceroPagado, destino.id);
         }
       }
