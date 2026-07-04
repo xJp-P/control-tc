@@ -2,6 +2,19 @@
 // Extracción de texto de PDFs de extractos bancarios con pdfjs-dist (build legacy CJS,
 // corre en Node sin worker). Soporta PDFs protegidos con contraseña y detecta PDFs
 // escaneados sin capa de texto (no hay OCR).
+// pdfjs, al cargarse en Node/Electron, intenta "polyfillar" DOMMatrix y Path2D usando el modulo
+// nativo 'canvas'. Esta app SOLO extrae texto (getTextContent), nunca rasteriza/renderiza PDFs, asi
+// que ese polyfill es innecesario. Si 'canvas' falla al cargar (desajuste de ABI de Electron en
+// desarrollo: canvas se prebuild-ea contra el Node del sistema, no contra el ABI de Electron) o no
+// esta instalado (el instalador de produccion lo omite con --omit=optional), pdfjs emite warnings
+// ruidosos en consola ("Cannot polyfill DOMMatrix/Path2D, rendering may be broken"). Definimos estos
+// globals ANTES de requerir pdfjs para que su chequeo interno (`if (globalThis.DOMMatrix) return;`)
+// haga corto y ni siquiera intente cargar 'canvas'. Son stubs inertes: como no renderizamos, nunca
+// se instancian (hoy DOMMatrix ya es undefined y la extraccion de texto funciona, prueba de que no
+// se usan). Si algun dia se agrega renderizado, habria que instalar un polyfill real de DOMMatrix.
+if (typeof globalThis.DOMMatrix === 'undefined') globalThis.DOMMatrix = class DOMMatrix {};
+if (typeof globalThis.Path2D === 'undefined') globalThis.Path2D = class Path2D {};
+
 const pdfjsLib = require('pdfjs-dist/legacy/build/pdf.js');
 
 // Colapsa una linea que es N copias consecutivas exactas de un mismo patron de palabras

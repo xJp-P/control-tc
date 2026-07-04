@@ -261,6 +261,12 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '4.8.3': [
+    'Arreglado un caso en Terceros con compras internacionales: cuando el "Dinero a favor" de una persona (un reverso) cubria solo el valor de la compra pero no su interes, la app la marcaba como Pagada antes de tiempo y bloqueaba el boton para completar lo que faltaba. Ahora queda como pago parcial y puedes agregar el interes restante desde el boton Bolsillo hasta saldarla del todo.',
+    'En Terceros, las compras internacionales de un tercero ahora tienen en cuenta su interes al calcular cuanto falta por cubrir, igual que la card "Me Deben". Antes ese interes no se contaba y la compra parecia saldada aunque faltara un poco.',
+    'En la tabla de compras, cuando el banco te reversa una compra de un tercero que ya te habian reembolsado, ese movimiento ahora se marca con la etiqueta "reverso" (antes decia "abono parcial"), para que quede claro de donde viene.',
+    'Al aplicar el "Dinero a favor" contra una deuda de la persona, el monto que se muestra que debe ahora incluye el interes internacional, para reflejar la deuda total real.'
+  ],
   '4.8.2': [
     'Arreglado un caso en Terceros con compras internacionales: cuando el "Dinero a favor" de una persona (un reverso) cubria solo el valor de la compra pero no su interes, la app la marcaba como Pagada antes de tiempo y bloqueaba el boton para completar lo que faltaba. Ahora queda como pago parcial y puedes agregar el interes restante desde el boton Bolsillo hasta saldarla del todo.',
     'En Terceros, las compras internacionales de un tercero ahora tienen en cuenta su interes al calcular cuanto falta por cubrir, igual que la card "Me Deben". Antes ese interes no se contaba y la compra parecia saldada aunque faltara un poco.',
