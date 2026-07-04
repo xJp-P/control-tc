@@ -261,6 +261,9 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '4.8.1': [
+    'En la pestaña Terceros, cuando el "Dinero a favor" de una persona (de un reverso) alcanzó a cubrir solo una parte de una compra, ahora puedes registrar en efectivo el resto que te pagó desde el botón Bolsillo, hasta dejarla en Pagado. Antes ese botón quedaba bloqueado y la compra se quedaba trabada en pago parcial.'
+  ],
   '4.8.0': [
     'Ahora puedes registrar cuando el banco te devuelve (reversa) una compra: con un botón la marcas como devuelta, deja de contar como deuda y libera cupo, conservando su registro histórico.',
     'Si un tercero ya te había reembolsado una compra que el banco luego reversó, ese dinero queda guardado como "Dinero a favor" de esa persona. Desde la pestaña Terceros puedes cruzarlo contra otras deudas suyas, marcarlo como devuelto en efectivo, o deshacer el movimiento si te equivocaste.',
@@ -6739,7 +6742,10 @@ function Terceros({ tarjeta }) {
                           e('td', null, e('span', { className: 'badge badge-' + (c.estado === 'pagado' ? 'pagado' : 'pendiente') }, c.estado === 'pagado' ? 'Pagado' : 'Pendiente')),
                           e('td', null, dineroCell(c.tercero_pagado || bolCubre, bol, c.valor_cop)),
                           e('td', { style: { whiteSpace: 'nowrap', textAlign: 'right' } },
-                            compraIdsConCruce.has(String(c.id))
+                            // Con cruce: atenuado y protegido SOLO si el cruce ya cubre el 100%. Si el
+                            // cruce es PARCIAL, cae al botón Bolsillo activo para completar el resto en
+                            // efectivo (el backend impide bajar del monto ya cruzado). v4.8.1.
+                            (compraIdsConCruce.has(String(c.id)) && (bolCubre || c.tercero_pagado))
                               ? e('button', {
                                   className: 'btn btn-sm btn-success',
                                   style: { opacity: 0.5, cursor: 'not-allowed' },

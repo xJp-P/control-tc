@@ -306,10 +306,11 @@ module.exports = function(db, { logAction, tjNombre }) {
     if (c.persona_id && !(req.body && req.body.desde_terceros)) {
       return res.status(403).json({ error: 'El bolsillo de una compra de tercero se gestiona desde la pestaña Terceros.' });
     }
-    // Candado de saldo a favor: si la compra recibió un cruce, su bolsillo NO se toca por esta vía
-    // (descuadraría el crédito del tercero). Se deshace desde "Dinero a favor".
-    const cruceSF = db.prepare("SELECT 1 FROM aplicaciones_saldo_favor WHERE compra_destino_id=? AND tipo='cruce' LIMIT 1").get(req.params.id);
-    if (cruceSF) return res.status(409).json({ error: 'Esta compra recibió un saldo a favor cruzado. Deshazlo desde "Dinero a favor" antes de modificar su bolsillo.' });
+    // Candado de saldo a favor (v4.8.1): si la compra recibió un cruce, el bolsillo puede SUBIR (agregar
+    // efectivo para completar un cruce PARCIAL) pero NUNCA bajar de lo ya cruzado — reducirlo descuadraría
+    // el crédito del tercero (para eso se deshace el cruce desde "Dinero a favor"). El piso se valida abajo,
+    // tras aplicar el cap a nuevoMonto.
+    const cruceCubierto = db.prepare("SELECT COALESCE(SUM(monto),0) as s FROM aplicaciones_saldo_favor WHERE compra_destino_id=? AND tipo='cruce'").get(req.params.id).s || 0;
     // Inferir moneda: explícita > heurística (compra USD pura).
     const compraEsUsd = (c.valor_usd && c.valor_usd > 0) && !c.valor_cop;
     const monedaPago = moneda === 'USD' ? 'USD' : (moneda === 'COP' ? 'COP' : (compraEsUsd ? 'USD' : 'COP'));
@@ -324,6 +325,12 @@ module.exports = function(db, { logAction, tjNombre }) {
     // más de lo que aún se debe (valor [+ interés] − abonado). Para abonado=0 el tope no cambia.
     if (monedaPago === 'COP' && tope != null && (c.monto_abonado || 0) > 0) tope = Math.max(0, tope - (c.monto_abonado || 0));
     if (tope != null && nuevoMonto > tope) { nuevoMonto = tope; capped = true; }
+
+    // Piso del cruce: el bolsillo COP no puede quedar por debajo de lo cubierto por un saldo a favor
+    // cruzado (descuadraría el crédito). Subir por encima = agregar efectivo para completar el cruce = OK.
+    if (cruceCubierto > 0 && monedaPago === 'COP' && nuevoMonto < cruceCubierto - 0.5) {
+      return res.status(409).json({ error: 'Esta compra tiene ' + new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(cruceCubierto) + ' cubiertos por un saldo a favor cruzado. No puedes dejar el bolsillo por debajo de ese monto; para reducirlo, deshaz el cruce desde "Dinero a favor".' });
+    }
 
     if (cuota_num != null && c.estado === 'diferida') {
       // Per-cuota bolsillo para diferidas
