@@ -211,27 +211,17 @@ module.exports = function(db, { logAction, tjNombre }) {
         return res.status(403).json({ error: 'No se puede editar: el extracto del ciclo ' + current.ciclo + ' ya está pagado.' });
       }
     }
-    // Inmutabilidad estructural (ciclo CERRADO ≠ pagado): si la compra pertenece a un ciclo anterior
-    // al vigente de su tarjeta, el banco YA generó ese extracto (esté pagado o no) — fecha, valores,
-    // persona, flag intl, ciclo, etc. quedan sellados. Solo pasan los campos COSMÉTICOS (descripcion,
-    // nota_personal, notas): renombrar es seguro siempre y mejora el cruce de la conciliación IA
-    // (espejo del PUT restringido de avances/diferidas). La CONCILIACIÓN IA queda exenta
-    // (desde_conciliacion=true): corrige valores/ciclos de extractos pasados con confirmación del
-    // usuario; su candado de ciclos PAGADOS (arriba) sigue aplicando igual.
+    // SOFT LOCK de ciclos CERRADOS (≠ pagados) — downgrade de v4.7.5: editar una compra que YA está en
+    // un ciclo cerrado se permite AHORA COMPLETO (corregir errores de tipeo del pasado, ej. un valor mal
+    // digitado). Se derogó el "modo cosmético" (antes solo dejaba renombrar). El candado de ciclos
+    // PAGADOS (arriba) sigue firme e independiente. La ÚNICA restricción estructural que se conserva es
+    // la FUGA INVERSA: mover una compra de un ciclo ABIERTO hacia uno CERRADO (inyectaría un movimiento
+    // NUEVO en un extracto ya facturado, igual que crearla allá). La conciliación IA sigue exenta
+    // (desde_conciliacion). El frontend pide confirmación explícita antes de guardar en ciclo cerrado.
+    // OJO tasa_intl: el UPDATE de abajo conserva el snapshot histórico (finalTasaIntl ← body || current),
+    // nunca lo recalcula con la tasa global vigente.
     if (current && !(req.body && req.body.desde_conciliacion)) {
-      if (esCicloCerrado(current.tarjeta_id, current.ciclo)) {
-        const descCerr = descripcion !== undefined ? descripcion : current.descripcion;
-        const notaCerr = nota_personal !== undefined ? (nota_personal || null) : (current.nota_personal || null);
-        const notasCerr = notas !== undefined ? (notas || null) : (current.notas || null);
-        db.prepare('UPDATE compras SET descripcion=?, nota_personal=?, notas=? WHERE id=?')
-          .run(descCerr, notaCerr, notasCerr, req.params.id);
-        logAction('editar', tjNombre(current.tarjeta_id) + 'Compra editada (solo nombre/nota — ciclo ' + current.ciclo + ' cerrado): ' + descCerr);
-        return res.json({ ok: true, solo_cosmetico: true });
-      }
-      // Fuga inversa: la compra está en un ciclo abierto pero el DESTINO (derivado de la nueva
-      // fecha/tarjeta o del ciclo manual) ya cerró — moverla ahí inyectaría un movimiento a un
-      // extracto ya facturado, igual que crearla allá. Mismo candado, misma exención.
-      if (esCicloCerrado(tarjeta_id, ciclo)) {
+      if (!esCicloCerrado(current.tarjeta_id, current.ciclo) && esCicloCerrado(tarjeta_id, ciclo)) {
         return res.status(403).json({ error: 'No se puede mover la compra al ciclo ' + ciclo + ': ese ciclo ya cerró (el banco ya generó ese extracto). Si el extracto real la incluye, usa el Asistente IA de conciliación.' });
       }
     }
@@ -316,6 +306,10 @@ module.exports = function(db, { logAction, tjNombre }) {
     if (c.persona_id && !(req.body && req.body.desde_terceros)) {
       return res.status(403).json({ error: 'El bolsillo de una compra de tercero se gestiona desde la pestaña Terceros.' });
     }
+    // Candado de saldo a favor: si la compra recibió un cruce, su bolsillo NO se toca por esta vía
+    // (descuadraría el crédito del tercero). Se deshace desde "Dinero a favor".
+    const cruceSF = db.prepare("SELECT 1 FROM aplicaciones_saldo_favor WHERE compra_destino_id=? AND tipo='cruce' LIMIT 1").get(req.params.id);
+    if (cruceSF) return res.status(409).json({ error: 'Esta compra recibió un saldo a favor cruzado. Deshazlo desde "Dinero a favor" antes de modificar su bolsillo.' });
     // Inferir moneda: explícita > heurística (compra USD pura).
     const compraEsUsd = (c.valor_usd && c.valor_usd > 0) && !c.valor_cop;
     const monedaPago = moneda === 'USD' ? 'USD' : (moneda === 'COP' ? 'COP' : (compraEsUsd ? 'USD' : 'COP'));
@@ -838,6 +832,51 @@ module.exports = function(db, { logAction, tjNombre }) {
     aplicar();
     logAction('editar', tjNombre(tarjeta_id) + 'Corte adelantado fijado para ' + ciclo + ': ' + fc + ' (' + movidas + ' compra(s) reubicada(s))');
     res.json({ ok: true, fecha_corte: fc, movidas });
+  });
+
+  // ── Reverso manual de una compra (Fase 3, reversos/refunds) ───────────────
+  // POST /:id/reversar  → el banco devolvió (reversó) la compra.
+  //   • Neutraliza la compra como deuda SIN borrar su valor histórico: estado='pagado',
+  //     monto_abonado=valor_cop. Tercero → tercero_pagado=1 (sale de "Me deben"). Personal →
+  //     libera el bolsillo apartado (ya no hay que pagarla).
+  //   • Tercero que YA reembolsó (monto_bolsillo>0): crea un Saldo a Favor a su nombre por ese
+  //     monto (el banco te devolvió dinero que el tercero ya te había pagado — caso LATAM).
+  //   • Marca compras.reversada=1 (idempotencia + badge). NO aplica los candados de ciclo cerrado/
+  //     pagado: un reverso es un evento real del banco sobre cualquier compra, nueva o antigua.
+  // Alcance v1: solo compras de 1 cuota en COP (diferidas, divididas y USD puras quedan fuera).
+  router.post('/:id/reversar', (req, res) => {
+    const c = db.prepare('SELECT * FROM compras WHERE id=?').get(req.params.id);
+    if (!c) return res.status(404).json({ error: 'Compra no encontrada' });
+    // Idempotencia: por el flag y por un crédito de reverso ya existente (ej. el crédito LATAM
+    // sembrado antes de existir la columna reversada).
+    const yaCredito = db.prepare("SELECT id FROM saldos_favor_tercero WHERE origen_tipo='reverso' AND origen_compra_id=?").get(c.id);
+    if (c.reversada || yaCredito) return res.status(409).json({ error: 'Esta compra ya fue reversada.' });
+    if (c.grupo_id) return res.status(400).json({ error: 'Para reversar una compra dividida, revierte primero la división o reversa cada parte por separado.' });
+    if (c.estado === 'diferida' || c.diferida_id) return res.status(400).json({ error: 'El reverso de compras diferidas aún no está soportado (solo compras de 1 cuota).' });
+    if ((c.valor_usd || 0) > 0 && !(c.valor_cop > 0)) return res.status(400).json({ error: 'El reverso de compras en dólares aún no está soportado (solo COP).' });
+
+    const esTercero = c.persona_id != null;
+    const reembolso = esTercero ? Math.round(c.monto_bolsillo || 0) : 0; // lo que el tercero ya te reembolsó
+    let creditoId = null;
+    db.transaction(() => {
+      if (esTercero) {
+        // Conserva monto_bolsillo (registro del reembolso); tercero_pagado=1 lo saca de "Me deben".
+        db.prepare("UPDATE compras SET reversada=1, estado='pagado', monto_abonado=valor_cop, tercero_pagado=1 WHERE id=?").run(c.id);
+      } else {
+        // Personal: libera el bolsillo apartado (ya no hay que pagar la compra).
+        db.prepare("UPDATE compras SET reversada=1, estado='pagado', monto_abonado=valor_cop, monto_bolsillo=0, monto_bolsillo_usd=0 WHERE id=?").run(c.id);
+      }
+      if (reembolso > 0) {
+        const info = db.prepare(`INSERT INTO saldos_favor_tercero
+            (persona_id, monto, origen_tipo, origen_compra_id, tarjeta_id, descripcion, fecha, notas)
+            VALUES (?,?, 'reverso', ?,?,?,?,?)`)
+          .run(c.persona_id, reembolso, c.id, c.tarjeta_id, 'Reverso de ' + c.descripcion, hoyLocal(),
+               'Reverso manual: el banco devolvió esta compra que el tercero ya había reembolsado.');
+        creditoId = info.lastInsertRowid;
+      }
+    })();
+    logAction('editar', tjNombre(c.tarjeta_id) + 'Compra reversada: ' + c.descripcion + (creditoId ? ' → saldo a favor de ' + reembolso : ''));
+    res.json({ ok: true, credito_creado: creditoId != null, credito_id: creditoId, monto_favor: reembolso, persona_id: c.persona_id });
   });
 
   return router;

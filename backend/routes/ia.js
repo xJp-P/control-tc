@@ -4,8 +4,74 @@ const { extraerTextoPdf } = require('../services/pdfExtract');
 const { redactarPII } = require('../services/redactPII');
 const { construirMovimientos, leerBancoDoc } = require('../services/movimientos');
 const { analizar: analizarIA } = require('../services/aiProvider');
-const { cruzar } = require('../services/extracto/motorCruce');
+const { cruzar, parseMontoCol, dice, normalizarDesc } = require('../services/extracto/motorCruce');
 const { getEstrategiaExtracto } = require('../services/extracto');
+
+// ── Detección determinista de REVERSOS (devoluciones/refunds) ──────────────────
+// Un reverso aparece en el extracto como un movimiento de valor NEGATIVO cuyo concepto es un
+// COMERCIO (no "ABONO"/"PAGO"), con el nombre ACORTADO por el banco (ej. "LATAM AIR" por
+// "LATAM AIRLINES COLOM"). Se cruza contra el HISTORIAL de la tarjeta por monto (valor absoluto,
+// ±$2) + descripción difusa (Dice ≥ 0.4). Devuelve discrepancias tipo 'reverso_detectado' con
+// accion_sugerida.operacion='reversar_compra' (o 'ninguna' + ya_aplicado si la compra ya está
+// reversada -> idempotencia). Alcance v1: compras de 1 cuota en COP (las que el endpoint reversa).
+function detectarReversos(db, texto, tarjetaId) {
+  if (!texto || !tarjetaId) return [];
+  const fmt = (n) => '$' + Math.round(n).toLocaleString('es-CO');
+  const esPago = (c) => /\b(ABONO|PAGO|SU PAGO|SALDO A FAVOR|A FAVOR|NU\b)/i.test(c);
+  // Líneas con valor NEGATIVO en pesos: [auth] DD/MM/YYYY  CONCEPTO  $ -NNN.NNN,NN
+  const reNeg = /(\d{1,2}\/\d{1,2}\/\d{2,4})\s+(.+?)\s+\$\s*-\s*([\d][\d.]*(?:,\d{1,2})?)/;
+  const candidatos = [];
+  String(texto).split(/\r?\n/).forEach(raw => {
+    const linea = raw.trim();
+    const m = linea.match(reNeg);
+    if (!m) return;
+    const concepto = m[2].replace(/\s{2,}/g, ' ').trim();
+    if (!concepto || concepto.length < 3 || esPago(concepto)) return;
+    if (!/[A-Za-zÁÉÍÓÚÑ]{3,}/.test(concepto)) return; // debe tener texto de comercio, no solo números
+    const monto = parseMontoCol(m[3]);
+    if (!(monto > 0)) return;
+    candidatos.push({ concepto, monto });
+  });
+  if (!candidatos.length) return [];
+  // Historial de compras EJECUTABLES por el endpoint de reverso (1 cuota, COP, sin grupo/diferida).
+  const compras = db.prepare(
+    "SELECT id, descripcion, valor_cop, fecha, ciclo, persona_id, COALESCE(monto_bolsillo,0) AS monto_bolsillo, COALESCE(reversada,0) AS reversada " +
+    "FROM compras WHERE tarjeta_id=? AND grupo_id IS NULL AND diferida_id IS NULL AND estado != 'diferida' AND COALESCE(valor_cop,0) > 0"
+  ).all(tarjetaId);
+  const usados = {}, out = [];
+  candidatos.forEach(cand => {
+    let best = null;
+    compras.forEach(c => {
+      if (usados[c.id]) return;
+      if (Math.abs(Math.round(c.valor_cop) - Math.round(cand.monto)) > 2) return;   // monto exacto (±$2)
+      const score = dice(normalizarDesc(cand.concepto), normalizarDesc(c.descripcion)); // difuso: banco acorta
+      if (score < 0.4) return;
+      if (!best || score > best.score) best = { c, score };
+    });
+    if (!best) return;
+    usados[best.c.id] = 1;
+    const c = best.c;
+    const esTercero = c.persona_id != null;
+    out.push({
+      tipo: 'reverso_detectado',
+      descripcion: 'El banco reversó "' + cand.concepto + '" por ' + fmt(cand.monto) + '. Coincide con la compra #' + c.id + ' "' + c.descripcion + '"' + (esTercero ? ' (de un tercero que ya reembolsó)' : '') + '.',
+      valor_extracto: -Math.round(cand.monto),
+      valor_app: Math.round(c.valor_cop),
+      compra_id: c.id,
+      severidad: 'alta',
+      ya_aplicado: !!c.reversada,
+      reverso: {
+        concepto_extracto: cand.concepto, monto: Math.round(cand.monto),
+        compra_descripcion: c.descripcion, es_tercero: esTercero,
+        reembolso: esTercero ? Math.round(c.monto_bolsillo) : 0, score: Math.round(best.score * 100) / 100
+      },
+      accion_sugerida: c.reversada
+        ? { operacion: 'ninguna', parametros: {} }
+        : { operacion: 'reversar_compra', parametros: { compra_id: c.id } }
+    });
+  });
+  return out;
+}
 
 // Arma el system + user prompt para la conciliación (esquema JSON estricto).
 function construirPrompt(movimientos, textoExtracto, bancoDoc, contextoUsuario, cruce, estrategia) {
@@ -21,6 +87,7 @@ function construirPrompt(movimientos, textoExtracto, bancoDoc, contextoUsuario, 
     'Objetivo central: CONCILIAR EL PAGO MINIMO: comparar el pago minimo del extracto del banco con el calculado por la app y atribuir la diferencia a causas concretas.',
     'REGLAS:',
     '1. Los movimientos tipo "ABONO SUCURSAL VIRTUAL" o similares NO son compras faltantes: por defecto son el pago del extracto anterior (a veces fraccionado). Reportalos en "pagos_detectados", nunca como discrepancia accionable.',
+    '1b. Los movimientos con valor NEGATIVO cuyo concepto es un COMERCIO (NO "ABONO"/"PAGO"), ej. "LATAM AIR $ -138.920", son REVERSOS (devoluciones) de una compra existente. El backend los detecta y cruza AUTOMATICAMENTE contra el historial; NO los reportes ni como discrepancia ni como pago.',
     '2. Si una parte de la diferencia no se explica con los datos, reportala en "residual_no_explicado"; NO inventes cargos.',
     '2b. La app trabaja en PESOS ENTEROS: si el monto del extracto y el de la app coinciden al redondear (diferencia < $1) NO es discrepancia y NO la incluyas en el array. Tampoco incluyas compras que el usuario divide entre varias personas (en la app son varias filas que SUMAN el monto del extracto): si la suma coincide, NO es discrepancia.',
     '2d. Si varias compras comparten el MISMO monto (ej. dos de $44.900), cruzalas por descripcion/comercio, NO solo por el monto. Antes de marcar una compra como mal clasificada (internacional o no), revisa el campo "es_internacional" de la compra correspondiente en los movimientos: si ya coincide con el extracto, NO la reportes.',
@@ -40,7 +107,7 @@ function construirPrompt(movimientos, textoExtracto, bancoDoc, contextoUsuario, 
       fecha_corte_extracto: 'YYYY-MM-DD',
       fecha_pago_extracto: 'YYYY-MM-DD',
       pagos_detectados: [{ fecha: 'YYYY-MM-DD', monto: 0, etiqueta_extracto: 'string', coincide_con_pago_app: true }],
-      discrepancias: [{ tipo: 'compra_omitida|monto_erroneo|clasificacion_incorrecta|cuota_reprogramada|otro', descripcion: 'string', valor_extracto: 0, valor_app: 0, compra_id: null, severidad: 'alta|media|baja', accion_sugerida: { operacion: 'crear_compra|editar_valor|convertir_a_diferida|reprogramar_cuotas|mover_ciclo|ninguna', parametros: {} } }]
+      discrepancias: [{ tipo: 'compra_omitida|monto_erroneo|clasificacion_incorrecta|cuota_reprogramada|otro', descripcion: 'string', valor_extracto: 0, valor_app: 0, compra_id: null, severidad: 'alta|media|baja', accion_sugerida: { operacion: 'crear_compra|editar_valor|convertir_a_diferida|reprogramar_cuotas|mover_ciclo|reversar_compra|ninguna', parametros: {} } }]
     })
   ];
   if (contextoUsuario && String(contextoUsuario).trim()) {
@@ -509,6 +576,24 @@ module.exports = function(db, ctx) {
         }
       } catch (e) { console.log('[ia/analizar] comparacion de fechas:', e && e.message); }
 
+      // ── Detección determinista de REVERSOS (devoluciones) ──
+      // Movimientos NEGATIVOS que NO son pagos (ej. "LATAM AIR $ -138.920") = devolución de una
+      // compra. Se cruzan contra el historial por monto (abs, ±$2) + descripción difusa (el banco
+      // acorta el nombre) y proponen la acción reversar_compra. Si la compra ya está reversada →
+      // 'ya_aplicado' (idempotencia; el endpoint también responde 409 en ese caso).
+      try {
+        const reversos = detectarReversos(db, texto_redactado, mv && mv.tarjeta && mv.tarjeta.id);
+        if (reversos.length) {
+          if (!Array.isArray(resu.discrepancias)) resu.discrepancias = [];
+          // No duplicar un reverso que la IA ya hubiera propuesto para la misma compra.
+          const yaProp = new Set(resu.discrepancias
+            .filter(d => d && d.accion_sugerida && d.accion_sugerida.operacion === 'reversar_compra' && d.compra_id != null)
+            .map(d => d.compra_id));
+          reversos.forEach(rv => { if (!yaProp.has(rv.compra_id)) resu.discrepancias.push(rv); });
+          resu.reversos_detectados = reversos.length;
+        }
+      } catch (e) { console.log('[ia/analizar] deteccion de reversos:', e && e.message); }
+
       // Transparencia para la UI: cuántas concilió la capa determinista y qué quedó sin cruzar.
       resu.cruce_determinista = {
         conciliadas: cruce.matches.length,
@@ -527,3 +612,6 @@ module.exports = function(db, ctx) {
 
   return router;
 };
+
+// Export auxiliar para pruebas unitarias del detector de reversos (no afecta el factory por defecto).
+module.exports.detectarReversos = detectarReversos;

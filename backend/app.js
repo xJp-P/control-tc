@@ -33,6 +33,7 @@ module.exports = function createApp(dbPathOverride, deps = {}) {
   app.use('/api/extractos',       require('./routes/extractos')(db, ctx));
   app.use('/api/abono-capital',   require('./routes/abonoCapital')(db, ctx));
   app.use('/api/terceros',        require('./routes/terceros')(db, ctx));
+  app.use('/api/saldos-favor',    require('./routes/saldosFavor')(db, ctx));
   app.use('/api/dashboard',       require('./routes/dashboard')(db));
   app.use('/api/proyecciones',    require('./routes/proyecciones')(db));
   app.use('/api/calculadora',     require('./routes/calculadora')(db));

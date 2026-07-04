@@ -549,6 +549,77 @@ function initDb(dbPathOverride) {
       UNIQUE(tarjeta_id, ciclo)
     );
 
+    -- Saldo a Favor de terceros (Fase 2 — reversos). Crédito flotante que nace al reversar una compra
+    -- de tercero que YA había reembolsado: esa plata queda a favor del tercero. Es por-PERSONA (su
+    -- plata, sin importar la tarjeta). disponible = monto - monto_aplicado (derivado, no se persiste).
+    CREATE TABLE IF NOT EXISTS saldos_favor_tercero (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      persona_id INTEGER NOT NULL REFERENCES personas(id) ON DELETE CASCADE,
+      monto REAL NOT NULL,
+      monto_aplicado REAL NOT NULL DEFAULT 0,
+      origen_tipo TEXT NOT NULL DEFAULT 'reverso',
+      origen_compra_id INTEGER REFERENCES compras(id) ON DELETE SET NULL,
+      tarjeta_id INTEGER REFERENCES tarjetas(id) ON DELETE SET NULL,
+      descripcion TEXT,
+      fecha TEXT NOT NULL,
+      estado TEXT NOT NULL DEFAULT 'activo',
+      notas TEXT,
+      created_at TEXT DEFAULT (datetime('now','localtime'))
+    );
+
+    -- Ledger de "cruce de cuentas": a qué deuda del MISMO tercero (o a un cashout, con destino NULL) se
+    -- adjudicó cada crédito. Permite auditar y DESHACER una aplicación. Espejo de abonos_diferida.
+    CREATE TABLE IF NOT EXISTS aplicaciones_saldo_favor (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      saldo_favor_id INTEGER NOT NULL REFERENCES saldos_favor_tercero(id) ON DELETE CASCADE,
+      compra_destino_id INTEGER REFERENCES compras(id) ON DELETE SET NULL,
+      tipo TEXT NOT NULL DEFAULT 'cruce',
+      monto REAL NOT NULL,
+      fecha TEXT NOT NULL,
+      notas TEXT,
+      created_at TEXT DEFAULT (datetime('now','localtime'))
+    );
+
+    -- ─── MOTOR ROTATIVO (Libro Mayor de deuda) ─────────────────────────────────
+    -- Un renglón por extracto (cierre mensual). Es la "masa que rueda": la deuda ya no se
+    -- deriva sumando filas pendientes de UN ciclo, sino que hereda el saldo del cierre previo.
+    -- Identidad de rotación: deuda_corte(N) = saldo_anterior(N) + compras + avances + otros +
+    -- int_corriente - pagos ; y saldo_anterior(N+1) = deuda_corte(N). (Ver CLAUDE.md "Arquitectura
+    -- Futura: Motor Rotativo".) NO alimenta la UI todavía (Fase 1 = infra + motor core).
+    CREATE TABLE IF NOT EXISTS cierres_mensuales (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tarjeta_id INTEGER NOT NULL REFERENCES tarjetas(id) ON DELETE CASCADE,
+      ciclo TEXT NOT NULL,
+      fecha_corte TEXT,
+      saldo_anterior REAL NOT NULL DEFAULT 0,
+      compras_mes REAL NOT NULL DEFAULT 0,
+      avances_mes REAL NOT NULL DEFAULT 0,
+      otros_cargos REAL NOT NULL DEFAULT 0,
+      int_corriente REAL NOT NULL DEFAULT 0,
+      int_mora REAL NOT NULL DEFAULT 0,
+      pagos_abonos REAL NOT NULL DEFAULT 0,
+      deuda_corte REAL NOT NULL DEFAULT 0,
+      pago_minimo REAL NOT NULL DEFAULT 0,
+      cuota_transacciones REAL NOT NULL DEFAULT 0,
+      cuota_avances REAL NOT NULL DEFAULT 0,
+      estado TEXT NOT NULL DEFAULT 'pendiente',
+      created_at TEXT DEFAULT (datetime('now','localtime')),
+      UNIQUE(tarjeta_id, ciclo)
+    );
+
+    -- Pagos GLOBALES a la tarjeta (abonos "a la tarjeta", no a una compra específica). La cascada
+    -- de pagos (waterfall) los reparte: mora -> int_corriente -> otros -> cuotas -> prepago capital.
+    CREATE TABLE IF NOT EXISTS pagos_tarjeta (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tarjeta_id INTEGER NOT NULL REFERENCES tarjetas(id) ON DELETE CASCADE,
+      fecha TEXT NOT NULL,
+      monto REAL NOT NULL,
+      ciclo TEXT,
+      tipo TEXT NOT NULL DEFAULT 'pago_extracto',
+      notas TEXT,
+      created_at TEXT DEFAULT (datetime('now','localtime'))
+    );
+
     CREATE TABLE IF NOT EXISTS historial (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       accion TEXT NOT NULL,
@@ -663,6 +734,18 @@ function initDb(dbPathOverride) {
   // actual (fallback). La fija el usuario (CompraForm), el cierre de extracto (piso) o la IA (futuro).
   try { db.prepare('SELECT tasa_intl FROM compras LIMIT 1').get(); }
   catch (e) { db.exec('ALTER TABLE compras ADD COLUMN tasa_intl REAL'); }
+
+  // reversada=1: el banco reversó (devolvió) esta compra. Se neutraliza como deuda
+  // (estado='pagado', monto_abonado=valor_cop) SIN borrar valor_cop; si un tercero ya la había
+  // reembolsado, se genera un Saldo a Favor a su nombre. Marca para idempotencia + badge "Reversada".
+  try { db.prepare('SELECT reversada FROM compras LIMIT 1').get(); }
+  catch (e) { db.exec('ALTER TABLE compras ADD COLUMN reversada INTEGER DEFAULT 0'); }
+  // Backfill: marca reversada=1 las compras que ya tienen un Saldo a Favor de origen 'reverso'
+  // (ej. el crédito LATAM sembrado antes de existir la columna) → idempotencia del botón Reversar.
+  try {
+    db.exec("UPDATE compras SET reversada=1 WHERE COALESCE(reversada,0)=0 AND id IN " +
+            "(SELECT origen_compra_id FROM saldos_favor_tercero WHERE origen_tipo='reverso' AND origen_compra_id IS NOT NULL)");
+  } catch (e) {}
 
   // Retroactively assign grupo_id to existing split compras
   (() => {

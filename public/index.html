@@ -261,6 +261,15 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '4.8.0': [
+    'Ahora puedes registrar cuando el banco te devuelve (reversa) una compra: con un botón la marcas como devuelta, deja de contar como deuda y libera cupo, conservando su registro histórico.',
+    'Si un tercero ya te había reembolsado una compra que el banco luego reversó, ese dinero queda guardado como "Dinero a favor" de esa persona. Desde la pestaña Terceros puedes cruzarlo contra otras deudas suyas, marcarlo como devuelto en efectivo, o deshacer el movimiento si te equivocaste.',
+    'El Asistente de Conciliación detecta automáticamente los reversos en el extracto (aunque el banco acorte el nombre del comercio) y te deja aplicarlos con un clic.',
+    'En Terceros, la columna "Dinero" ahora muestra "Pendiente" o "Pagado" de forma consistente para compras de contado y para cuotas de compras a plazos. Además, las cuotas que ya pagaste al banco dejan de mostrar el botón para apartar dinero, porque ya no hay nada que reservar.',
+    'Ajustamos el cálculo de los intereses de los avances para que coincida exactamente con lo que cobra el banco en el extracto.',
+    'Ahora puedes editar los datos de una compra de un mes ya cerrado (por ejemplo, corregir un error de tipeo antiguo). La app te pide confirmación antes de guardar; los meses ya pagados al banco siguen totalmente bloqueados.',
+    'El Asistente de Conciliación ya no intenta modificar una compra dividida entre varias personas: te avisa que la edites a mano desde la tabla, evitando errores.'
+  ],
   '4.7.4': [
     'La tabla de movimientos quedó más limpia cuando una compra tiene un abono parcial: la columna de Valor muestra solo el valor original y, debajo en texto gris, cuánto llevas abonado; el saldo que aún debes pasó a la columna Total. Antes todo se amontonaba en la columna de Valor.',
     'Corregido: al registrar un abono parcial, el estado de la compra ya no se queda en "Pendiente" por error. Ahora, si el dinero apartado en el bolsillo (o el reembolso de un tercero) cubre el saldo que queda, la compra se muestra correctamente como "Bolsillo".',
@@ -2029,6 +2038,20 @@ function CardResumen({ tarjeta, onDataChange }) {
     if (!await confirmDialog('Eliminar esta compra?', { confirmText: 'Eliminar' })) return;
     api('/compras/' + id, { method: 'DELETE' }).then(() => { refreshAll(); toast('Compra eliminada'); });
   }
+  // Reverso manual: el banco devolvió la compra. La neutraliza como deuda (no se borra su valor
+  // histórico) y, si un tercero ya la había reembolsado, crea un Saldo a Favor a su nombre
+  // (visible en la pestaña Terceros). Confirmación con modal propio, nunca window.confirm.
+  async function reverseCompra(c) {
+    const reembolso = c.persona_id ? (c.monto_bolsillo || 0) : 0;
+    let msg = 'Reversar «' + c.descripcion + '»?\n\nDejará de contar como deuda y saldrá del cupo (su valor histórico se conserva).';
+    if (reembolso > 0) msg += '\n\n' + (c.persona_nombre || 'El tercero') + ' ya te reembolsó ' + fmtCOP(reembolso) + ' → se creará un saldo a favor a su nombre.';
+    if (!await confirmDialog(msg, { confirmText: 'Reversar compra' })) return;
+    api('/compras/' + c.id + '/reversar', { method: 'POST' }).then((r) => {
+      if (r && r.error) { toastErr(r.error); return; }
+      refreshAll();
+      toast(r.credito_creado ? ('Compra reversada · saldo a favor de ' + fmtCOP(r.monto_favor) + ' creado') : 'Compra reversada');
+    });
+  }
   function saveAvance(data) {
     data.tarjeta_id = tarjeta.id; data.dia_corte = tarjeta.dia_corte;
     const method = editAvance ? 'PUT' : 'POST';
@@ -2586,10 +2609,17 @@ function CardResumen({ tarjeta, onDataChange }) {
               !showAsPaid && faltaBolsillo > 0 && e('div', { style: { fontSize: 11, color: 'var(--warning)', marginTop: 2 } }, 'Falta: ' + fmtCOP(faltaBolsillo))
             ),
             e('td', { style: { whiteSpace: 'nowrap' } },
-              // Cuando el ciclo está pagado: badge "Pagado" va en la columna Estado (arriba); acá queda vacío.
+              // Editar/eliminar: solo mientras no esté pagada. Cuando el ciclo está pagado el badge
+              // "Pagado" vive en la columna Estado (arriba); acá queda solo la acción Reversar.
               !showAsPaid && e('button', { className: 'btn btn-sm', onClick: () => { setEditCompra(c); setShowCompraModal(true); } }, e(Ico, { name: 'edit', size: 14, color: 'currentColor' })),
               !showAsPaid && ' ',
-              !showAsPaid && e('button', { className: 'btn btn-sm btn-danger', onClick: () => removeCompra(c.id) }, e(Ico, { name: 'trash', size: 14, color: 'currentColor' }))
+              !showAsPaid && e('button', { className: 'btn btn-sm btn-danger', onClick: () => removeCompra(c.id) }, e(Ico, { name: 'trash', size: 14, color: 'currentColor' })),
+              // Reversar (devolución del banco): disponible también en compras pagadas/antiguas — es su
+              // caso de uso. No aplica a diferidas (v1). Si ya se reversó, se muestra el badge "Reversada".
+              // Ternario (no `cond &&`): c.reversada es un número (0/1); con `&&` React pintaría el "0".
+              (!isDif && !c.reversada) ? ' ' : null,
+              (!isDif && !c.reversada) ? e('button', { className: 'btn btn-sm', title: 'Reversar compra (devolución del banco)', onClick: () => reverseCompra(c) }, e(Ico, { name: 'undo', size: 14, color: 'currentColor' })) : null,
+              c.reversada ? e('span', { className: 'badge', style: { fontSize: 10, background: 'rgba(148,163,184,0.15)', color: 'var(--text-muted)' } }, 'Reversada') : null
             )
           );
         };
@@ -3394,6 +3424,10 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
     return [{ persona_id: '', monto: '' }];
   });
   const lastUsdField = useRef(null); // tracks which field was edited last: 'usd', 'tasa', 'cop'
+  // Soft lock de ciclo cerrado: confirmación con MODAL NATIVO (no window.confirm). El ref evita el
+  // desfase asíncrono de setState al re-disparar submit() desde el botón "Confirmar edición".
+  const [showCerradoConfirm, setShowCerradoConfirm] = useState(false);
+  const cerradoOkRef = useRef(false);
 
   // Candado estructural de ciclo CERRADO (≠ pagado): la compra pertenece a un ciclo anterior al
   // vigente de su tarjeta — el banco YA generó ese extracto, esté pagado o no. Todos los campos
@@ -3407,8 +3441,15 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
   // (ej. las del 19-20 que pasaron al mes siguiente). Fallback al cálculo teórico local sólo si el
   // backend no envió ciclo_vigente (robustez).
   const vigenteTarjeta = tarjeta && (tarjeta.ciclo_vigente || cicloVigente(tarjeta.dia_corte));
-  const isCicloCerrado = !!item && !!tarjeta && ((item.ciclo || ciclo) < vigenteTarjeta);
-  const lockStyle = isCicloCerrado ? { opacity: 0.6, cursor: 'not-allowed' } : undefined;
+  // Detección: la compra pertenece a un ciclo ya CERRADO (el banco generó ese extracto). Se usa para el
+  // aviso, la confirmación al guardar (submit) y para mantener las CUOTAS bloqueadas (reprogramar sella).
+  const cicloEstaCerrado = !!item && !!tarjeta && ((item.ciclo || ciclo) < vigenteTarjeta);
+  // SOFT LOCK (v4.7.5): downgrade del candado. Los campos estructurales de un ciclo cerrado YA NO se
+  // deshabilitan — el usuario puede corregir errores de tipeo del pasado; al guardar se confirma (submit)
+  // y el backend acepta el PUT completo (solo conserva el candado de PAGADOS). Por eso isCicloCerrado
+  // —que gobierna disabled/opacidad de TODOS los inputs de abajo— queda fijo en false.
+  const isCicloCerrado = false;
+  const lockStyle = undefined;
   // "Libertad total" de cuotas: en edición el campo Cuotas queda libre para compras individuales
   // sin abonos — 1→N convierte, N→M reprograma y N→1 revierte; cada acción la ejecuta su
   // endpoint transaccional DESPUÉS del PUT, conservando SIEMPRE la fila original de la compra
@@ -3421,7 +3462,7 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
   // en pesos, ej. MC/Amex dual), que no es amortizable en COP.
   const esUsdPura = !!(item && item.valor_usd > 0 && !(item.valor_cop > 0));
   const cuotasEditables = !!item && !item._isGrupo && !esUsdPura && !((item.monto_abonado || 0) > 0)
-    && !isCicloCerrado;
+    && !cicloEstaCerrado;
   // Cuotas con las que la compra está HOY en la BD (diferida → su total real; si no, 1).
   const cuotasOriginales = item ? ((item.estado === 'diferida' || item.diferida_id) ? (parseInt(item.cuotas_total || item.num_cuotas, 10) || 1) : 1) : 1;
 
@@ -3492,7 +3533,7 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
   }, [valorUsd, tasaUsd, valorCop, esInternacional, _isDualEarly]);
 
   async function submit(ev) {
-    ev.preventDefault();
+    if (ev) ev.preventDefault(); // ev puede venir undefined cuando lo re-dispara el modal de confirmación
     const totalCop = parseFloat(valorCop) || 0;
 
     // USD/Tasa son opcionales — solo se guardan si la compra es intl y el usuario los proveyó.
@@ -3521,6 +3562,15 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
         toastErr('No se puede registrar: la fecha cae en el ciclo ' + cicloDestino + ', que ya cerró (el banco ya generó ese extracto). Si el extracto real incluye esta compra, usa el Asistente IA de conciliación.');
         return;
       }
+    }
+
+    // Soft lock al EDITAR una compra de un ciclo ya cerrado (v4.7.5): los campos ya no se bloquean, pero
+    // como el cambio altera un extracto YA facturado, se pide confirmación con un MODAL NATIVO de la app
+    // (no window.confirm). Al confirmar, el modal marca cerradoOkRef y re-dispara submit(); el ref evita
+    // el desfase asíncrono de setState. Al cancelar no se ejecuta ninguna modificación.
+    if (item && cicloEstaCerrado) {
+      if (!cerradoOkRef.current) { setShowCerradoConfirm(true); return; }
+      cerradoOkRef.current = false; // ya confirmado; consumir para la próxima edición
     }
 
     // Conversión: grupo dividido con "Dividir" DESMARCADO → fusionar en compra personal.
@@ -3732,13 +3782,26 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
   const showIntlHint = aplicaIntlForm && intlHistMatch && !esInternacional;
 
   return e('form', { onSubmit: submit },
-    // Aviso de ciclo cerrado: explica por qué casi todo el form está bloqueado (mismo estilo de
-    // aviso informativo punteado/azul que usa la conciliación IA).
-    isCicloCerrado && e('div', {
-      style: { fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.45, padding: '8px 10px', background: 'rgba(79,140,255,0.06)', border: '1px dashed rgba(79,140,255,0.5)', borderRadius: 8, marginBottom: 12, display: 'flex', gap: 8, alignItems: 'flex-start' }
+    // Confirmación de edición en ciclo cerrado (soft lock v4.7.5): MODAL NATIVO de la app (no
+    // window.confirm). Se abre solo cuando cicloEstaCerrado y el usuario intenta guardar (submit);
+    // "Confirmar edición" re-dispara submit() vía cerradoOkRef; "Cancelar" no ejecuta nada.
+    e(Modal, { show: showCerradoConfirm, onClose: () => setShowCerradoConfirm(false),
+      title: e('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 8 } },
+        e(Ico, { name: 'alert', size: 18, color: 'var(--warning)' }), 'Ciclo cerrado: ¿Confirmas la edición?') },
+      e('p', { style: { fontSize: 13.5, color: 'var(--text-secondary)', lineHeight: 1.5, margin: '4px 0 18px' } },
+        'Esta compra pertenece a un ciclo ya facturado. Editarla alterará tu historial contable. ¿Deseas continuar?'),
+      e('div', { className: 'modal-actions' },
+        e('button', { type: 'button', className: 'btn', onClick: () => setShowCerradoConfirm(false) }, 'Cancelar'),
+        e('button', { type: 'button', className: 'btn btn-primary', onClick: () => { setShowCerradoConfirm(false); cerradoOkRef.current = true; submit(); } }, 'Confirmar edición')
+      )
+    ),
+    // Aviso de ciclo cerrado: advierte que la compra ya está facturada (soft lock: editable con
+    // confirmación al guardar).
+    cicloEstaCerrado && e('div', {
+      style: { fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.45, padding: '8px 10px', background: 'rgba(251,191,36,0.08)', border: '1px dashed rgba(251,191,36,0.5)', borderRadius: 8, marginBottom: 12, display: 'flex', gap: 8, alignItems: 'flex-start' }
     },
-      e('span', { style: { flexShrink: 0, display: 'inline-flex', marginTop: 1 } }, e(Ico, { name: 'bulb', size: 14, color: 'var(--accent)' })),
-      e('span', null, 'Esta compra pertenece al ciclo ' + (item.ciclo || ciclo) + ', que ya cerró: el banco ya generó ese extracto. Solo puedes editar el nombre y las notas; los demás datos quedan sellados para no descuadrar lo facturado.')
+      e('span', { style: { flexShrink: 0, display: 'inline-flex', marginTop: 1 } }, e(Ico, { name: 'bulb', size: 14, color: 'var(--warning)' })),
+      e('span', null, 'Esta compra pertenece al ciclo ' + (item.ciclo || ciclo) + ', que ya cerró (el banco ya generó ese extracto). Puedes corregirla para cuadrar con el extracto real, pero al guardar alterarás un movimiento ya facturado; se te pedirá confirmación. El número de cuotas sigue bloqueado.')
     ),
     e('div', { className: 'form-row' },
       e('div', { className: 'form-group' },
@@ -5652,8 +5715,15 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
   const [aplicadas, setAplicadas] = useState({});
   const [errAplicar, setErrAplicar] = useState('');
   const [contextoUser, setContextoUser] = useState('');
+  // Compras de la tarjeta: se cargan para detectar si una discrepancia apunta a una compra DIVIDIDA
+  // (grupo). Una acción por compra_id no puede operar sobre un grupo (causaba PUT /api/compras/null).
+  const [comprasTj, setComprasTj] = useState([]);
+  useEffect(() => {
+    if (!tarjetaId) { setComprasTj([]); return; }
+    api('/compras?tarjeta_id=' + Number(tarjetaId)).then(l => setComprasTj(Array.isArray(l) ? l : [])).catch(() => setComprasTj([]));
+  }, [tarjetaId]);
   // Operaciones que la app puede aplicar automaticamente (mapean a endpoints existentes).
-  const AUTO = { crear_compra: 1, editar_valor: 1, mover_ciclo: 1, reprogramar_cuotas: 1, convertir_a_diferida: 1, actualizar_tasa_intl: 1, actualizar_fecha_pago: 1 };
+  const AUTO = { crear_compra: 1, editar_valor: 1, mover_ciclo: 1, reprogramar_cuotas: 1, convertir_a_diferida: 1, actualizar_tasa_intl: 1, actualizar_fecha_pago: 1, reversar_compra: 1 };
 
   // Formatea una tasa mensual decimal a porcentaje colombiano (0.020849 -> "2,0849%").
   const fmtPct = (x) => (x == null || x === '') ? '—' : (Number(x) * 100).toFixed(4).replace('.', ',') + '%';
@@ -5665,7 +5735,7 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
       compra_omitida: 'Compra omitida', monto_erroneo: 'Monto erróneo',
       clasificacion_incorrecta: 'Clasificación incorrecta', cuota_reprogramada: 'Cuota reprogramada',
       tasa_intl_incorrecta: 'Tasa internacional incorrecta', fecha_pago_movida: 'Fecha de pago movida',
-      mover_ciclo: 'Mover de ciclo', otro: 'Otra discrepancia'
+      reverso_detectado: 'Reverso detectado', mover_ciclo: 'Mover de ciclo', otro: 'Otra discrepancia'
     };
     if (map[tipo]) return map[tipo];
     const s = String(tipo).replace(/_/g, ' ').trim();
@@ -5678,13 +5748,28 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
       crear_compra: 'Crear compra', editar_valor: 'Editar valor', mover_ciclo: 'Mover de ciclo',
       reprogramar_cuotas: 'Reprogramar cuotas', actualizar_tasa_intl: 'Actualizar tasa internacional',
       actualizar_fecha_pago: 'Actualizar fecha de pago', fecha_corte_movida: 'Aplicar corte adelantado',
-      convertir_a_diferida: 'Convertir a diferida', ninguna: 'Sin acción'
+      convertir_a_diferida: 'Convertir a diferida', reversar_compra: 'Reversar compra', ninguna: 'Sin acción'
     };
     if (map[op]) return map[op];
     const s = String(op).replace(/_/g, ' ').trim();
     return s.charAt(0).toUpperCase() + s.slice(1);
   };
   function paramsDe(d) { return (d.accion_sugerida && d.accion_sugerida.parametros) || {}; }
+  // ¿La discrepancia apunta a una compra DIVIDIDA (grupo)? Las acciones por compra_id (editar_valor,
+  // mover_ciclo, reprogramar, convertir) no pueden operar sobre un grupo: cada parte es una compra
+  // distinta y no hay un id único (la IA a veces devuelve compra_id null → PUT /api/compras/null).
+  // Detección: (a) la compra objetivo tiene grupo_id, o (b) su descripción cruza con compras agrupadas.
+  function afectaGrupo(d) {
+    const p = paramsDe(d);
+    const cid = p.compra_id != null ? p.compra_id : d.compra_id;
+    if (cid != null && String(cid) !== 'null') {
+      const t = comprasTj.find(x => String(x.id) === String(cid));
+      if (t && t.grupo_id) return true;
+    }
+    const desc = String((p.descripcion != null ? p.descripcion : d.descripcion) || '').toLowerCase().trim();
+    if (desc.length >= 3 && comprasTj.some(x => x.grupo_id && String(x.descripcion || '').toLowerCase().trim() === desc)) return true;
+    return false;
+  }
   function resumenAccion(d) {
     const op = d.accion_sugerida ? d.accion_sugerida.operacion : 'ninguna';
     const p = paramsDe(d);
@@ -5714,6 +5799,14 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
       const fc = p.fecha_corte != null ? p.fecha_corte : d.fecha_extracto;
       return { titulo: 'Fijar el corte adelantado de este ciclo', endpoint: 'POST /api/compras/aplicar-corte-ciclo',
         filas: [['Corte que calculo la app', fmtDate(d.fecha_app)], ['Corte real del extracto', fmtDate(fc)], ['Ciclo', p.ciclo || ciclo], ['Efecto', 'las compras posteriores al corte pasan al ciclo siguiente (ahora y a futuro)']] };
+    }
+    if (op === 'reversar_compra') {
+      const rv = d.reverso || {};
+      const filas = [['Compra', '#' + cid + '  ' + (rv.compra_descripcion || '')],
+        ['Movimiento del extracto', (rv.concepto_extracto || '') + '  ' + fmtCOP(rv.monto != null ? rv.monto : Math.abs(Number(d.valor_extracto) || 0))],
+        ['Efecto', 'la compra deja de contar como deuda (su valor histórico se conserva)']];
+      if (rv.es_tercero) filas.push(['Saldo a favor', 'se crea ' + fmtCOP(rv.reembolso) + ' a favor del tercero (ya te había reembolsado)']);
+      return { titulo: 'Reversar compra (devolución del banco)', endpoint: 'POST /api/compras/' + cid + '/reversar', filas };
     }
     return { titulo: op, endpoint: '', filas: [] };
   }
@@ -5790,6 +5883,13 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
         const fc = p.fecha_corte != null ? p.fecha_corte : d.fecha_extracto;
         if (!fc) throw new Error('No hay una fecha de corte para aplicar.');
         const r = await api('/compras/aplicar-corte-ciclo', { method: 'POST', body: { tarjeta_id: Number(tarjetaId), ciclo: (p.ciclo || ciclo), fecha_corte: fc } });
+        if (r && r.error) throw new Error(r.error);
+      } else if (op === 'reversar_compra') {
+        // Reverso (devolución del banco): neutraliza la compra y, si es de un tercero que ya reembolsó,
+        // crea el saldo a favor. El endpoint es idempotente (409 si ya está reversada).
+        const cid = p.compra_id != null ? p.compra_id : d.compra_id;
+        if (!cid) throw new Error('No se identifico la compra a reversar.');
+        const r = await api('/compras/' + cid + '/reversar', { method: 'POST' });
         if (r && r.error) throw new Error(r.error);
       } else {
         throw new Error('Operacion no aplicable automaticamente.');
@@ -5890,10 +5990,15 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
               e('div', { style: { color: 'var(--text-secondary)' } }, 'Tu app ya tiene una compra de este monto bien clasificada; la IA pudo confundir estas:'),
               (d.candidatas || []).map((cc, ci) => e('div', { key: ci, style: { color: 'var(--text-secondary)', marginTop: 2 } }, '· ' + (cc.descripcion || ('#' + cc.id)) + ' → ' + ((cc.es_internacional || cc.interes_intl > 0) ? 'internacional' : 'no internacional')))
             ),
-            !aplicada && AUTO[op] && !d.posible_falso_positivo && e('div', { style: { marginTop: 6, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
-              e('span', { style: { fontSize: 11.5, color: 'var(--text-muted)' } }, 'Accion sugerida: ', e('strong', { style: { color: 'var(--accent)' } }, fmtOperacion(op))),
-              e('button', { className: 'btn btn-sm btn-primary', onClick: () => { setErrAplicar(''); setAccionSel({ d: d, idx: i }); } }, 'Aplicar')
-            )
+            // Reverso ya aplicado (idempotencia): la compra ya está reversada en la BD -> sin botón.
+            d.ya_aplicado && e('div', { style: { marginTop: 6, fontSize: 11.5, color: 'var(--text-muted)', fontStyle: 'italic' } }, 'Ya aplicado: esta compra ya está reversada en la app.'),
+            !aplicada && AUTO[op] && !d.posible_falso_positivo && (afectaGrupo(d)
+              ? e('div', { style: { marginTop: 6 } },
+                  e('button', { className: 'btn btn-sm btn-primary', disabled: true, style: { opacity: 0.5, cursor: 'not-allowed' } }, 'Aplicar'),
+                  e('div', { style: { fontSize: 11, color: 'var(--text-muted)', marginTop: 3 } }, 'Compra dividida: edítala manualmente en la tabla'))
+              : e('div', { style: { marginTop: 6, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
+                  e('span', { style: { fontSize: 11.5, color: 'var(--text-muted)' } }, 'Accion sugerida: ', e('strong', { style: { color: 'var(--accent)' } }, fmtOperacion(op))),
+                  e('button', { className: 'btn btn-sm btn-primary', onClick: () => { setErrAplicar(''); setAccionSel({ d: d, idx: i }); } }, 'Aplicar')))
           );
         }),
     // Re-análisis iterativo: el usuario aclara/corrige y la IA vuelve a analizar (mismo PDF y
@@ -6295,9 +6400,14 @@ function PersonaForm({ item, onSave, onCancel }) {
 function Terceros({ tarjeta }) {
   const [compras, setCompras] = useState([]);
   const [bolsilloModal, setBolsilloModal] = useState(null); // { compra, target, monto }
+  // Saldo a favor de terceros (reversos, Fase 2): { creditos, porPersona }. Es por-PERSONA (cross-tarjeta).
+  const [saldosFavor, setSaldosFavor] = useState({ creditos: [], porPersona: {} });
+  const [favorModal, setFavorModal] = useState(null);   // { persona_id, nombre, color }
+  const [aplicarSel, setAplicarSel] = useState(null);   // { creditoId, compra_destino_id, monto }
 
   const loadData = useCallback(() => {
     api('/terceros?tarjeta_id=' + tarjeta.id).then(setCompras);
+    api('/saldos-favor').then(setSaldosFavor).catch(() => {});
   }, [tarjeta.id]);
 
   useEffect(() => { loadData(); }, [loadData]);
@@ -6335,6 +6445,31 @@ function Terceros({ tarjeta }) {
     else toast(monto > 0 ? 'Bolsillo actualizado' : 'Bolsillo quitado');
   }
 
+  // ── Saldo a favor: cruce de cuentas (aplicar a una deuda del mismo tercero) y liquidación (cashout) ──
+  async function aplicarSaldo() {
+    if (!aplicarSel || !aplicarSel.compra_destino_id) { toastErr('Elige una deuda destino.'); return; }
+    const monto = parseFloat(aplicarSel.monto) || 0;
+    if (monto <= 0) { toastErr('Ingresa un monto válido.'); return; }
+    const resp = await api('/saldos-favor/' + aplicarSel.creditoId + '/aplicar', { method: 'POST', body: { compra_destino_id: Number(aplicarSel.compra_destino_id), monto } });
+    if (resp && resp.error) { toastErr(resp.error); return; }
+    setAplicarSel(null);
+    toast('Saldo a favor aplicado a la deuda.');
+    loadData();
+  }
+  async function liquidarSaldo(creditoId) {
+    const resp = await api('/saldos-favor/' + creditoId + '/liquidar', { method: 'POST', body: { notas: 'Devolución en efectivo/transferencia' } });
+    if (resp && resp.error) { toastErr(resp.error); return; }
+    toast('Saldo a favor liquidado (devuelto en efectivo).');
+    loadData();
+  }
+  // Deshace un movimiento (cruce o liquidación): restaura la compra destino y devuelve el disponible al crédito.
+  async function deshacerAplicacion(aplId) {
+    const resp = await api('/saldos-favor/aplicaciones/' + aplId, { method: 'DELETE' });
+    if (resp && resp.error) { toastErr(resp.error); return; }
+    toast('Movimiento deshecho; el saldo a favor se restauró.');
+    loadData();
+  }
+
   // Solo Bancolombia Visa cobra intereses sobre compras intl en COP (validado con extracto real).
   const _frT = tarjeta.franquicia ? tarjeta.franquicia.toLowerCase() : '';
   const _dualT = _frT.includes('mastercard') || _frT.includes('amex') || _frT.includes('american express');
@@ -6358,11 +6493,30 @@ function Terceros({ tarjeta }) {
     return Math.round(saldo * tasaIntl * (dias / 30));
   };
 
+  // Columna DINERO unificada (compras 1-cuota y cuotas de diferida): "Pagado" (verde) si el tercero
+  // saldó — sea por el toggle "Recibido" o porque el bolsillo/reembolso cubre el total —; "Pendiente"
+  // (rojo) si aún debe. En parcial conserva el detalle "$apartado / $total · Falta" (sigue pendiente).
+  const dineroCell = (settled, bol, total) => {
+    if (settled) return e('span', { className: 'badge badge-pagado' }, 'Pagado');
+    if (bol > 0 && total > 0 && bol < total) {
+      const falta = Math.max(0, total - bol);
+      const pct = Math.min(100, Math.round(bol / total * 100));
+      return e('div', null,
+        e('span', { className: 'badge badge-vencido' }, 'Pendiente'),
+        e('div', { style: { fontSize: 11, color: 'var(--purple)', fontWeight: 600, marginTop: 3 } }, fmtCOP(bol) + ' / ' + fmtCOP(total)),
+        e('div', { style: { background: 'var(--bg-tertiary)', borderRadius: 4, height: 4, marginTop: 3, width: 80 } },
+          e('div', { style: { background: 'var(--purple)', borderRadius: 4, height: 4, width: pct + '%' } })),
+        e('div', { style: { fontSize: 10, color: 'var(--text-muted)', marginTop: 2 } }, 'Falta: ' + fmtCOP(falta))
+      );
+    }
+    return e('span', { className: 'badge badge-vencido' }, 'Pendiente');
+  };
+
   // Group by persona
   const grouped = {};
   compras.forEach(c => {
     const key = c.persona_id;
-    if (!grouped[key]) grouped[key] = { nombre: c.persona_nombre, color: c.persona_color, compras: [], totalPendiente: 0, totalPendienteUsd: 0, totalRecibido: 0, totalRecibidoUsd: 0 };
+    if (!grouped[key]) grouped[key] = { persona_id: c.persona_id, nombre: c.persona_nombre, color: c.persona_color, compras: [], totalPendiente: 0, totalPendienteUsd: 0, totalRecibido: 0, totalRecibidoUsd: 0 };
     grouped[key].compras.push(c);
     if (c.tercero_pagado) {
       grouped[key].totalRecibido += c.valor_cop;
@@ -6389,6 +6543,14 @@ function Terceros({ tarjeta }) {
     return s + (c.monto_bolsillo || 0);
   }, 0);
   const fmtUsd = (n) => 'USD $' + new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n || 0);
+
+  // Compras que recibieron un cruce de saldo a favor: su estado/bolsillo NO se tocan por la vía directa
+  // (Desmarcar / quitar bolsillo) porque descuadraría el crédito. Se gestionan con "Deshacer" en el
+  // modal de Dinero a favor. Se derivan de las aplicaciones que ya trae saldosFavor.creditos.
+  const compraIdsConCruce = new Set();
+  (saldosFavor.creditos || []).forEach(cr => (cr.aplicaciones || []).forEach(ap => {
+    if (ap.tipo === 'cruce' && ap.compra_destino_id != null) compraIdsConCruce.add(String(ap.compra_destino_id));
+  }));
 
   return e('div', null,
     // Summary cards
@@ -6448,7 +6610,27 @@ function Terceros({ tarjeta }) {
                   e('span', { style: { fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 1 } }, 'Recibido'),
                   e('span', { style: { fontSize: 14, fontWeight: 700, color: 'var(--success)', fontFamily: 'monospace' } }, fmtCOP(p.totalRecibido)),
                   (p.totalRecibidoUsd || 0) > 0 && e('span', { style: { fontSize: 12, fontWeight: 700, color: '#4FC3F7', fontFamily: 'monospace' } }, fmtUsd(p.totalRecibidoUsd))
-                )
+                ),
+                // Saldo a favor del tercero (reversos): chip clickable → abre el modal de gestión.
+                // Se muestra con disponible activo (verde) O si tiene créditos ya consumidos/liquidados
+                // (gris, "ver") para poder deshacer sus movimientos.
+                ((saldosFavor.porPersona[p.persona_id] || 0) > 0 || (saldosFavor.creditos || []).some(cr => String(cr.persona_id) === String(p.persona_id))) && (() => {
+                  const disp = saldosFavor.porPersona[p.persona_id] || 0;
+                  const activo = disp > 0;
+                  return e('div', {
+                    className: 'badge-clickable',
+                    style: { display: 'inline-flex', alignItems: 'center', gap: 8, background: activo ? 'rgba(52,211,153,0.16)' : 'var(--bg-input)', border: '1px solid ' + (activo ? 'rgba(52,211,153,0.55)' : 'var(--border)'), borderRadius: 8, padding: '6px 10px', cursor: 'pointer' },
+                    onClick: () => { setAplicarSel(null); setFavorModal({ persona_id: p.persona_id, nombre: p.nombre, color: p.color }); },
+                    title: 'Gestionar saldo a favor de ' + p.nombre
+                  },
+                    e(Ico, { name: 'dollar', size: 15, color: activo ? 'var(--success)' : 'var(--text-muted)' }),
+                    e('div', { style: { display: 'flex', flexDirection: 'column', alignItems: 'flex-start', lineHeight: 1.15, gap: 3 } },
+                      e('span', { style: { fontSize: 9.5, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 1, fontWeight: 700 } }, 'Dinero a favor'),
+                      e('span', { style: { fontSize: 13, fontWeight: 700, fontFamily: 'monospace', color: activo ? 'var(--success)' : 'var(--text-secondary)' } }, activo ? fmtCOP(disp) : 'Gestionar')
+                    ),
+                    e(Ico, { name: 'chevron-right', size: 14, color: activo ? 'var(--success)' : 'var(--text-muted)' })
+                  );
+                })()
               )
             ),
             e('div', { className: 'persona-card-body' },
@@ -6512,22 +6694,18 @@ function Terceros({ tarjeta }) {
                             // Pagado si el extracto de su ciclo ya se pagó; si no, Pendiente. Mismo criterio
                             // (y mismas clases de color) que la fila simple de abajo.
                             e('td', null, e('span', { className: 'badge badge-' + (q.ciclo_pagado ? 'pagado' : 'pendiente') }, q.ciclo_pagado ? 'Pagado' : 'Pendiente')),
-                            e('td', null,
-                              c.tercero_pagado
-                                ? e('span', { className: 'badge badge-pagado' }, 'Recibido')
-                                : cubierta
-                                  ? e('span', { className: 'badge badge-bolsillo' }, 'Bolsillo')
-                                  : bolsilloParcial
-                                    ? e('span', { className: 'badge badge-bolsillo_parcial' }, fmtCOP(bolCuota) + ' / ' + fmtCOP(q.total))
-                                    : e('span', { className: 'badge badge-vencido' }, 'Pendiente')
-                            ),
-                            e('td', { style: { whiteSpace: 'nowrap' } },
-                              c.tercero_pagado
-                                ? e('button', { className: 'btn btn-sm btn-danger', onClick: () => togglePagado(c.id) }, 'Desmarcar')
-                                : e('button', {
-                                    className: 'btn btn-sm btn-success',
-                                    onClick: () => openBolsilloTercero(Object.assign({}, c, { _bolsilloCuota: bolCuota }), q.total, q.num)
-                                  }, 'Bolsillo')
+                            e('td', null, dineroCell(hecha, bolCuota, q.total)),
+                            e('td', { style: { whiteSpace: 'nowrap', textAlign: 'right' } },
+                              (q.ciclo_pagado && hecha)
+                                // Cuota con corte pagado Y saldada por el tercero: el dinero reservado ya se
+                                // usó al pagar el extracto -> no hay bolsillo que apartar ni retirar.
+                                ? e('span', { className: 'badge', style: { background: 'rgba(148,163,184,0.15)', color: 'var(--text-muted)' } }, 'Saldada')
+                                : c.tercero_pagado
+                                  ? e('button', { className: 'btn btn-sm btn-danger', onClick: () => togglePagado(c.id) }, 'Desmarcar')
+                                  : e('button', {
+                                      className: 'btn btn-sm btn-success',
+                                      onClick: () => openBolsilloTercero(Object.assign({}, c, { _bolsilloCuota: bolCuota }), q.total, q.num)
+                                    }, 'Bolsillo')
                             )
                           );
                         }
@@ -6536,7 +6714,7 @@ function Terceros({ tarjeta }) {
                         const faltaBol = Math.max(0, c.valor_cop - bol);
                         const pctBol = c.valor_cop > 0 ? Math.min(100, Math.round(bol / c.valor_cop * 100)) : 0;
                         const intlTercero = calcInteresIntlTercero(c);
-                        return e('tr', { key: c.id, style: c.tercero_pagado ? { background: 'rgba(52,211,153,0.08)' } : bol > 0 && !bolCubre ? { background: 'rgba(167,139,250,0.06)' } : null },
+                        return e('tr', { key: c.id, style: (c.tercero_pagado || bolCubre) ? { background: 'rgba(52,211,153,0.08)' } : bol > 0 ? { background: 'rgba(167,139,250,0.06)' } : null },
                           e('td', null, fmtDate(c.fecha)),
                           e('td', { style: { fontWeight: 600 } }, c.descripcion,
                             c.nota_personal && e('div', { style: { fontSize: 11, color: 'var(--text-muted)', fontWeight: 400, marginTop: 1 } }, c.nota_personal)
@@ -6559,28 +6737,21 @@ function Terceros({ tarjeta }) {
                           // (La columna "Dinero" ya muestra si el tercero reembolsó; si el ciclo se paga, la compra
                           // desaparece de Terceros.)
                           e('td', null, e('span', { className: 'badge badge-' + (c.estado === 'pagado' ? 'pagado' : 'pendiente') }, c.estado === 'pagado' ? 'Pagado' : 'Pendiente')),
-                          e('td', null,
-                            c.tercero_pagado
-                              ? e('span', { className: 'badge badge-pagado' }, 'Recibido')
-                              : bolCubre
-                                ? e('span', { className: 'badge badge-pagado' }, 'Pagado')
-                                : bol > 0
-                                  ? e('div', null,
-                                      e('div', { style: { fontSize: 11, color: 'var(--purple)', fontWeight: 600 } }, fmtCOP(bol) + ' / ' + fmtCOP(c.valor_cop)),
-                                      e('div', { style: { background: 'var(--bg-tertiary)', borderRadius: 4, height: 4, marginTop: 3, width: 80 } },
-                                        e('div', { style: { background: 'var(--purple)', borderRadius: 4, height: 4, width: pctBol + '%' } })
-                                      ),
-                                      e('div', { style: { fontSize: 10, color: 'var(--text-muted)', marginTop: 2 } }, 'Falta: ' + fmtCOP(faltaBol))
-                                    )
-                                  : e('span', { className: 'badge badge-vencido' }, 'Me debe')
-                          ),
-                          e('td', { style: { whiteSpace: 'nowrap' } },
-                            c.tercero_pagado
-                              ? e('button', { className: 'btn btn-sm btn-danger', onClick: () => togglePagado(c.id) }, 'Desmarcar')
-                              : e('button', {
+                          e('td', null, dineroCell(c.tercero_pagado || bolCubre, bol, c.valor_cop)),
+                          e('td', { style: { whiteSpace: 'nowrap', textAlign: 'right' } },
+                            compraIdsConCruce.has(String(c.id))
+                              ? e('button', {
                                   className: 'btn btn-sm btn-success',
-                                  onClick: () => openBolsilloTercero(c, c.valor_cop + calcInteresIntlTercero(c))
+                                  style: { opacity: 0.5, cursor: 'not-allowed' },
+                                  title: 'Esta compra recibió un saldo a favor cruzado. Gestiónalo desde "Dinero a favor" (arriba).',
+                                  onClick: () => { setAplicarSel(null); setFavorModal({ persona_id: p.persona_id, nombre: p.nombre, color: p.color }); }
                                 }, 'Bolsillo')
+                              : c.tercero_pagado
+                                ? e('button', { className: 'btn btn-sm btn-danger', onClick: () => togglePagado(c.id) }, 'Desmarcar')
+                                : e('button', {
+                                    className: 'btn btn-sm btn-success',
+                                    onClick: () => openBolsilloTercero(c, c.valor_cop + calcInteresIntlTercero(c))
+                                  }, 'Bolsillo')
                           )
                         );
                       })
@@ -6656,6 +6827,82 @@ function Terceros({ tarjeta }) {
               e('button', { type: 'button', className: 'btn', onClick: () => setBolsilloModal(null) }, 'Cancelar'),
               e('button', { type: 'button', className: 'btn btn-primary', onClick: saveBolsilloTercero }, 'Guardar')
             )
+          )
+        )
+      );
+    })(),
+
+    // Modal: gestión del Saldo a Favor de un tercero (cruce contra sus deudas o liquidación en efectivo).
+    favorModal && (() => {
+      const pid = favorModal.persona_id;
+      const creditos = (saldosFavor.creditos || [])
+        .filter(cr => String(cr.persona_id) === String(pid))
+        .sort((a, b) => (a.estado === 'activo' ? 0 : 1) - (b.estado === 'activo' ? 0 : 1));
+      const deudas = compras.filter(c => String(c.persona_id) === String(pid) && !c.es_diferida && (c.valor_cop - (c.monto_bolsillo || 0)) > 0);
+      return e('div', { className: 'modal-overlay', onClick: () => { setFavorModal(null); setAplicarSel(null); } },
+        e('div', { className: 'modal', onClick: ev => ev.stopPropagation() },
+          e('div', { className: 'modal-header' },
+            e('div', { className: 'modal-title', style: { display: 'inline-flex', alignItems: 'center', gap: 8 } },
+              e('span', { className: 'persona-dot', style: { background: favorModal.color } }), 'Saldo a favor de ' + favorModal.nombre),
+            e('button', { type: 'button', className: 'modal-close-btn', onClick: () => { setFavorModal(null); setAplicarSel(null); }, title: 'Cerrar' }, '✕')
+          ),
+          e('div', { style: { padding: '16px 20px' } },
+            e('div', { style: { fontSize: 12.5, color: 'var(--text-secondary)', lineHeight: 1.45, marginBottom: 14 } },
+              'Créditos a favor de esta persona (ej. reversos de compras que ya te había reembolsado). Aplícalos a otras deudas suyas o liquídalos si le devolviste el dinero.'),
+            creditos.length === 0
+              ? e('div', { style: { fontSize: 13, color: 'var(--text-muted)', textAlign: 'center', padding: '12px 0' } }, 'Sin créditos a favor.')
+              : creditos.map(cr => {
+                  const disp = Math.round(cr.disponible);
+                  const abierto = !!(aplicarSel && aplicarSel.creditoId === cr.id);
+                  const dSel = deudas.find(x => String(x.id) === String(aplicarSel && aplicarSel.compra_destino_id));
+                  const maxCruce = dSel ? Math.min(disp, Math.round(dSel.valor_cop - (dSel.monto_bolsillo || 0))) : disp;
+                  const aps = cr.aplicaciones || [];
+                  const estadoLabel = cr.estado === 'liquidado' ? 'Liquidado' : (disp > 0 ? 'Disponible' : 'Consumido');
+                  return e('div', { key: cr.id, style: { border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px', marginBottom: 10, background: 'var(--bg-input)' } },
+                    e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
+                      e('div', null,
+                        e('div', { style: { fontSize: 13, fontWeight: 600 } }, cr.descripcion || 'Reverso'),
+                        e('div', { style: { fontSize: 11, color: 'var(--text-muted)' } }, (cr.origen_tipo || 'reverso') + ' · ' + fmtDate(cr.fecha) + ' · crédito de ' + fmtCOP(Math.round(cr.monto)))
+                      ),
+                      e('div', { style: { textAlign: 'right' } },
+                        e('div', { style: { fontSize: 15, fontWeight: 700, color: disp > 0 ? 'var(--success)' : 'var(--text-muted)', fontFamily: 'monospace' } }, fmtCOP(disp)),
+                        e('div', { style: { fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.5 } }, estadoLabel)
+                      )
+                    ),
+                    disp > 0 && e('div', { style: { display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' } },
+                      e('button', { type: 'button', className: 'btn btn-sm btn-primary', onClick: () => setAplicarSel(abierto ? null : { creditoId: cr.id, compra_destino_id: (deudas[0] ? String(deudas[0].id) : ''), monto: '' }) }, abierto ? 'Cerrar' : 'Aplicar a una deuda'),
+                      e('button', { type: 'button', className: 'btn btn-sm', onClick: () => liquidarSaldo(cr.id) }, 'Liquidar (efectivo)')
+                    ),
+                    abierto && e('div', { style: { marginTop: 10, paddingTop: 10, borderTop: '1px dashed var(--border)' } },
+                      deudas.length === 0
+                        ? e('div', { style: { fontSize: 12.5, color: 'var(--warning)' } }, 'Este tercero no tiene otras deudas de 1 cuota pendientes; puedes liquidar el crédito en efectivo.')
+                        : e('div', null,
+                            e('div', { className: 'form-group', style: { marginBottom: 8 } },
+                              e('label', { className: 'form-label' }, 'Aplicar a la deuda'),
+                              e('select', { className: 'form-select', value: aplicarSel.compra_destino_id, onChange: ev => setAplicarSel(prev => ({ ...prev, compra_destino_id: ev.target.value })) },
+                                deudas.map(d => e('option', { key: d.id, value: String(d.id) }, d.descripcion + ' — debe ' + fmtCOP(d.valor_cop - (d.monto_bolsillo || 0)))))
+                            ),
+                            e('div', { className: 'form-group', style: { marginBottom: 6 } },
+                              e('label', { className: 'form-label' }, 'Monto a cruzar'),
+                              e(MoneyInput, { value: aplicarSel.monto, onChange: val => setAplicarSel(prev => ({ ...prev, monto: val })), placeholder: 'Ej: ' + maxCruce })
+                            ),
+                            e('div', { style: { fontSize: 11, color: 'var(--text-muted)', marginBottom: 10 } }, 'Máximo aquí: ' + fmtCOP(maxCruce) + '  ',
+                              e('span', { style: { color: 'var(--accent)', cursor: 'pointer', fontWeight: 600 }, onClick: () => setAplicarSel(prev => ({ ...prev, monto: String(maxCruce) })) }, 'usar máximo')),
+                            e('button', { type: 'button', className: 'btn btn-sm btn-success', onClick: aplicarSaldo }, 'Aplicar cruce')
+                          )
+                    ),
+                    aps.length > 0 && e('div', { style: { marginTop: 10, paddingTop: 8, borderTop: '1px solid var(--border)' } },
+                      e('div', { style: { fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 6 } }, 'Movimientos aplicados'),
+                      aps.map(ap => e('div', { key: ap.id, style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '4px 0' } },
+                        e('div', { style: { fontSize: 12 } },
+                          e('span', { style: { fontFamily: 'monospace', fontWeight: 600 } }, fmtCOP(Math.round(ap.monto))),
+                          e('span', { style: { color: 'var(--text-muted)' } }, ' · ' + (ap.tipo === 'liquidacion' ? 'Liquidación (efectivo)' : ('cruce a ' + (ap.compra_desc || ('compra #' + ap.compra_destino_id)))))
+                        ),
+                        e('button', { type: 'button', className: 'btn btn-sm', style: { color: 'var(--danger)' }, onClick: () => deshacerAplicacion(ap.id), title: 'Deshacer este movimiento' }, 'Deshacer')
+                      ))
+                    )
+                  );
+                })
           )
         )
       );

@@ -115,6 +115,10 @@ module.exports = function(db, { logAction, tjNombre }) {
     const compra = db.prepare('SELECT * FROM compras WHERE id=?').get(req.params.id);
     if (!compra) return res.status(404).json({ error: 'Compra no encontrada' });
     if (!compra.persona_id) return res.status(400).json({ error: 'Solo compras de terceros' });
+    // Candado de saldo a favor: si la compra recibió un cruce, su estado se gestiona SOLO desde
+    // "Dinero a favor" (deshacer el cruce), para no descuadrar el crédito del tercero.
+    const cruceSF = db.prepare("SELECT 1 FROM aplicaciones_saldo_favor WHERE compra_destino_id=? AND tipo='cruce' LIMIT 1").get(req.params.id);
+    if (cruceSF) return res.status(409).json({ error: 'Esta compra recibió un saldo a favor cruzado. Deshazlo desde "Dinero a favor" antes de cambiar su estado.' });
     const nuevo = compra.tercero_pagado ? 0 : 1;
     db.prepare('UPDATE compras SET tercero_pagado=?, tercero_monto_abonado=? WHERE id=?').run(nuevo, nuevo ? compra.valor_cop : 0, req.params.id);
     const persona = compra.persona_id ? db.prepare('SELECT nombre FROM personas WHERE id=?').get(compra.persona_id) : null;

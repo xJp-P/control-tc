@@ -2,13 +2,14 @@
 const { hoyLocal, addMonths, daysBetween, primerCorteAvance } = require('../helpers/dates');
 
 // ─── Amortization engine: Avances ─────────────────────────────────
-// opts.esBancolombia = true → usa "saldo facturado" (saldoInicio + cuotaCapital del período)
-//                              para el cálculo de intereses. Reconciliado con extracto Visa
-//                              Platinum abril 2026: cuota 2/24 cobró intereses sobre 20M
-//                              (no sobre 19.16M amortizado). El banco trata la cuota capital
-//                              como "no amortizada hasta el pago" para efectos de intereses.
+// El interés se liquida sobre el SALDO AMORTIZADO (saldoInicio): el capital que resta
+// DESPUÉS de amortizar la cuota del mes anterior; NO se re-suma la cuota del mes en curso.
+// Reconciliado con los extractos Bancolombia Visa mar–jun 2026 (auditoría forense): la
+// hipótesis previa de "saldo facturado" (saldoInicio + cuotaCapital para Bancolombia)
+// sobreestimaba el interés ~$23k/mes y hacía que el interés de avances superara el total de
+// "intereses corrientes" del extracto en mayo/junio (imposible). Marzo (mes limpio, sin
+// rotativo) cuadra al peso con el saldo amortizado. opts se conserva por compatibilidad.
 function calcularAmortizacionAvance(monto, tasaMV, plazo, fechaDesembolso, diaCorte, abonos, comision, opts) {
-  const esBancolombia = opts && opts.esBancolombia;
   const cuotaCapitalFija = monto / plazo;
   const tabla = [];
   let saldoInicio = monto;
@@ -25,20 +26,17 @@ function calcularAmortizacionAvance(monto, tasaMV, plazo, fechaDesembolso, diaCo
     const diasPreAbono = fecha1erAbono ? daysBetween(fechaAnterior, fecha1erAbono) : dias;
     const diasPostAbono = fecha1erAbono ? daysBetween(fecha1erAbono, fechaCorte) : 0;
 
-    // Saldo base para intereses:
-    // - Bancolombia (cycle 2+): saldoInicio + cuotaCapital (saldo "facturado", la cuota
-    //   capital aún no se considera amortizada para efectos de intereses).
-    // - Cycle 1 / otros bancos: saldoInicio (modelo estándar).
-    const saldoFacturado = (esBancolombia && i > 0)
-      ? saldoInicio + cuotaCapitalFija
-      : saldoInicio;
+    // Saldo base para intereses = saldo AMORTIZADO al inicio del periodo (saldoInicio).
+    // El banco cobra sobre el capital que resta tras amortizar la cuota del mes anterior;
+    // no re-suma la cuota del mes en curso (ver auditoría forense en el encabezado).
+    const saldoBase = saldoInicio;
 
     let interes;
     if (!fecha1erAbono || sumaAbonos === 0) {
-      interes = saldoFacturado * tasaMV * (dias / 30);
+      interes = saldoBase * tasaMV * (dias / 30);
     } else {
-      interes = (saldoFacturado * tasaMV * (diasPreAbono / 30))
-              + (Math.max(0, saldoFacturado - sumaAbonos) * tasaMV * (diasPostAbono / 30));
+      interes = (saldoBase * tasaMV * (diasPreAbono / 30))
+              + (Math.max(0, saldoBase - sumaAbonos) * tasaMV * (diasPostAbono / 30));
     }
 
     const cuotaCapital = Math.min(cuotaCapitalFija, Math.max(0, saldoInicio - sumaAbonos));
