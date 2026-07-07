@@ -261,6 +261,10 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '4.9.0': [
+    'Nueva casilla al registrar una compra: "El banco facturó esta compra en el siguiente corte". Márcala cuando compras cerca del día de cierre y el banco la carga hasta el extracto del mes siguiente: la compra queda contada en el corte correcto conservando su fecha real, sin tener que cambiarle la fecha a mano. Disponible para compras de una sola cuota.',
+    'El autocompletado del "Nombre en el Extracto" ahora está separado por tarjeta: al registrar una compra solo te sugiere comercios que ya habías usado en ESA tarjeta. Antes se mezclaban los de todas (por ejemplo, estando en la Visa te aparecían nombres de la RappiCard).'
+  ],
   '4.8.3': [
     'Arreglado un caso en Terceros con compras internacionales: cuando el "Dinero a favor" de una persona (un reverso) cubria solo el valor de la compra pero no su interes, la app la marcaba como Pagada antes de tiempo y bloqueaba el boton para completar lo que faltaba. Ahora queda como pago parcial y puedes agregar el interes restante desde el boton Bolsillo hasta saldarla del todo.',
     'En Terceros, las compras internacionales de un tercero ahora tienen en cuenta su interes al calcular cuanto falta por cubrir, igual que la card "Me Deben". Antes ese interes no se contaba y la compra parecia saldada aunque faltara un poco.',
@@ -3421,6 +3425,12 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
   // compra pertenece a ese ciclo sin importar su fecha (cuotas reprogramadas por el banco que
   // se pagan en otro ciclo). Solo se ofrece al editar una compra individual de 1 cuota.
   const [cicloManualVal, setCicloManualVal] = useState(item && item.ciclo_manual ? item.ciclo : '');
+  // Spillover / "canje retrasado" al corte siguiente: el banco a veces factura una compra hecha el
+  // último día del corte en el extracto del mes SIGUIENTE. Al marcar este checkbox (SOLO al crear una
+  // compra individual de 1 cuota), la compra se registra en el ciclo siguiente al natural de su fecha
+  // (ciclo_manual=1) conservando su fecha real; el candado de "ciclo cerrado" se evalúa entonces contra
+  // ese ciclo destino (que está abierto), tanto en el frontend como en el backend (que ya valida el destino).
+  const [facturaSiguienteCorte, setFacturaSiguienteCorte] = useState(false);
   // Checkbox unificado: marca la compra como internacional (acumula intereses) y opcionalmente
   // permite registrar valor USD + tasa (datos informativos, no obligatorios).
   const [esInternacional, setEsInternacional] = useState(item ? !!(item.es_internacional || item.valor_usd) : false);
@@ -3496,8 +3506,12 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
   // sugerirlos en un dropdown custom mientras el usuario escribe (ej. "A" → APPLE.COM/US, AMAZON).
   const [nombresUnicos, setNombresUnicos] = useState([]);
   useEffect(() => {
-    api('/compras/nombres-unicos').then(setNombresUnicos).catch(() => setNombresUnicos([]));
-  }, []);
+    // Aislado por tarjeta: solo descripciones ya usadas en ESTA tarjeta (no mezcla el historial entre
+    // tarjetas — estando en la Visa no sugiere nombres de la RappiCard). Sin tarjeta → global (fallback
+    // defensivo; al registrar un movimiento siempre hay una tarjeta activa). Re-fetch si cambia la tarjeta.
+    const tid = tarjeta && tarjeta.id;
+    api('/compras/nombres-unicos' + (tid ? '?tarjeta_id=' + tid : '')).then(setNombresUnicos).catch(() => setNombresUnicos([]));
+  }, [tarjeta && tarjeta.id]);
   // Visibilidad del dropdown de autocompletado (solo con foco + coincidencias).
   const [descSugAbierto, setDescSugAbierto] = useState(false);
 
@@ -3567,6 +3581,14 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
     // como decimal (0.020849). Solo si la compra es internacional y el usuario la proveyó.
     const tasaIntlNum = (esInternacional && tasaIntl !== '' && !isNaN(parseFloat(tasaIntl))) ? (parseFloat(tasaIntl) / 100) : null;
 
+    // Spillover / "canje retrasado": ciclo destino cuando el banco factura la compra en el corte
+    // SIGUIENTE (checkbox, SOLO al crear una compra individual de 1 cuota, no dividida). Es el ciclo
+    // siguiente al natural de la fecha (consciente del corte adelantado). null si no aplica → el ciclo
+    // se auto-deriva de la fecha (comportamiento normal). Se reutiliza en la validación y en el payload.
+    const cicloSpilloverBody = (!item && facturaSiguienteCorte && !dividir && (parseInt(numCuotas, 10) || 1) <= 1 && tarjeta)
+      ? cicloSiguiente(cicloConCorteFront(fecha, tarjeta.dia_corte, tarjeta.cortes_custom || {}))
+      : null;
+
     // Candado de ciclo cerrado al CREAR: si la fecha cae en un ciclo anterior al vigente, el banco
     // ya facturó ese extracto (el backend rechaza el POST con 403). Validar ANTES de crear nada
     // evita dejar una diferida huérfana (en el flujo de cuotas la diferida se crea primero).
@@ -3575,8 +3597,9 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
       // fecha en la ventana post-corte salta al ciclo siguiente, así una compra del 19-20 que el
       // corte manda al vigente NO se bloquea por error (ni deja una diferida huérfana, ya que en el
       // flujo de cuotas la diferida se crea ANTES del POST). El backend revalida con esCicloCerrado.
+      // Con "canje retrasado" el destino es el ciclo SIGUIENTE (spillover), que está abierto → pasa.
       const vig = tarjeta.ciclo_vigente || cicloVigente(tarjeta.dia_corte);
-      const cicloDestino = cicloConCorteFront(fecha, tarjeta.dia_corte, tarjeta.cortes_custom || {});
+      const cicloDestino = cicloSpilloverBody || cicloConCorteFront(fecha, tarjeta.dia_corte, tarjeta.cortes_custom || {});
       if (cicloDestino < vig) {
         toastErr('No se puede registrar: la fecha cae en el ciclo ' + cicloDestino + ', que ya cerró (el banco ya generó ese extracto). Si el extracto real incluye esta compra, usa el Asistente IA de conciliación.');
         return;
@@ -3761,8 +3784,11 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
       tasa_usd: tasaNum,
       persona_id: personaId ? parseInt(personaId) : null,
       estado: estadoCalculado,
-      ciclo: cicloManualVal || ciclo,
-      ciclo_manual: cicloManualVal ? 1 : 0,
+      // Ciclo destino: prioridad al spillover ("canje retrasado": el banco facturó en el corte
+      // siguiente) → ciclo_manual con el ciclo SIGUIENTE al natural de la fecha; luego el campo
+      // "Ciclo (avanzado)" (edición); si ninguno, el backend auto-deriva el ciclo de la fecha.
+      ciclo: cicloSpilloverBody || cicloManualVal || ciclo,
+      ciclo_manual: (cicloSpilloverBody || cicloManualVal) ? 1 : 0,
       // El sufijo "Diferida a N cuotas" solo se añade al CREAR: en conversión lo pone su endpoint,
       // en reprogramación se sincroniza y en una edición normal de diferida no debe re-añadirse.
       notas: (!item && numCuotas > 1) ? (notas ? notas + ' | ' : '') + 'Diferida a ' + numCuotas + ' cuotas' : notas,
@@ -3799,6 +3825,10 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
   const descNorm = (descripcion || '').toLowerCase().trim();
   const intlHistMatch = descNorm.length >= 3 && intlDescripciones.some(d => d.includes(descNorm) || descNorm.includes(d));
   const showIntlHint = aplicaIntlForm && intlHistMatch && !esInternacional;
+  // Ciclo destino que verá una compra marcada como "canje retrasado" (spillover al corte siguiente):
+  // el ciclo siguiente al natural de la fecha (consciente del corte adelantado). Solo alimenta el hint
+  // del checkbox (que ya está gated a crear/1-cuota/no-dividida). null si falta la fecha o es edición.
+  const cicloSpilloverDestino = (!item && tarjeta && fecha) ? cicloSiguiente(cicloConCorteFront(fecha, tarjeta.dia_corte, tarjeta.cortes_custom || {})) : null;
 
   return e('form', { onSubmit: submit },
     // Confirmación de edición en ciclo cerrado (soft lock v4.7.5): MODAL NATIVO de la app (no
@@ -3833,6 +3863,22 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
           e('option', { value: '' }, 'Personal'),
           personas.map(p => e('option', { key: p.id, value: p.id }, p.nombre))
         )
+      )
+    ),
+    // Canje retrasado / spillover: checkbox opcional (SOLO al crear una compra individual de 1 cuota,
+    // no dividida) para cuando el banco factura una compra del último día del corte en el extracto del
+    // mes siguiente. Al marcarlo, la compra se registra en el ciclo destino (siguiente) conservando su
+    // fecha real → esquiva el candado del ciclo natural cerrado (el backend ya valida el ciclo destino).
+    !item && !dividir && (parseInt(numCuotas, 10) || 1) <= 1 && e('div', { className: 'form-group' },
+      e('label', { style: { cursor: 'pointer', fontSize: 13 } },
+        e('input', { type: 'checkbox', checked: facturaSiguienteCorte, onChange: ev => setFacturaSiguienteCorte(ev.target.checked), style: { marginRight: 6, cursor: 'pointer' } }),
+        'El banco facturó esta compra en el siguiente corte'
+      ),
+      facturaSiguienteCorte && cicloSpilloverDestino && e('div', { className: 'form-hint', style: { color: 'var(--warning)' } },
+        'Se registrará en el ciclo ' + cicloSpilloverDestino + ' (conserva su fecha real). Úsalo cuando compras cerca del cierre y el banco la factura en el extracto del mes siguiente.'
+      ),
+      facturaSiguienteCorte && !cicloSpilloverDestino && e('div', { className: 'form-hint', style: { color: 'var(--text-muted)' } },
+        'Ingresa la fecha de la compra para calcular el ciclo destino.'
       )
     ),
     e('div', { className: 'form-group' },

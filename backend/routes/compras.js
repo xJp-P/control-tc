@@ -150,12 +150,15 @@ module.exports = function(db, { logAction, tjNombre }) {
   // (case original preservado, ej. "APPLE.COM/US"), ordenados alfabéticamente. Alimenta el
   // <datalist> del CompraForm. Va aquí (con los GET de metadatos) antes de las rutas con :id.
   router.get('/nombres-unicos', (req, res) => {
-    const rows = db.prepare(`
-      SELECT DISTINCT descripcion
-      FROM compras
-      WHERE descripcion IS NOT NULL AND TRIM(descripcion) != ''
-      ORDER BY descripcion ASC
-    `).all();
+    // Aislamiento por tarjeta: con ?tarjeta_id solo se sugieren descripciones YA usadas en ESA tarjeta
+    // (evita mezclar el historial entre tarjetas, ej. estando en la Visa no sugerir nombres de la
+    // RappiCard). Sin tarjeta_id → histórico global (compatibilidad con cualquier otro consumidor).
+    const { tarjeta_id } = req.query;
+    let sql = "SELECT DISTINCT descripcion FROM compras WHERE descripcion IS NOT NULL AND TRIM(descripcion) != ''";
+    const params = [];
+    if (tarjeta_id) { sql += ' AND tarjeta_id = ?'; params.push(tarjeta_id); }
+    sql += ' ORDER BY descripcion ASC';
+    const rows = db.prepare(sql).all(...params);
     res.json(rows.map(r => r.descripcion));
   });
 
