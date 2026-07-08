@@ -4,7 +4,7 @@ const { hoyLocal, daysBetween, primerCorteAvance } = require('../helpers/dates')
 const { calcularAmortizacionDiferida } = require('../engine/amortizacion');
 const { nuOpts, aplicaIntInternacional } = require('../helpers/banco');
 const { compraTerceroConReembolso, objetivoBolsilloCop } = require('../helpers/bolsillo');
-const { getCortesCustomMap, cicloConCorte } = require('../helpers/cortes');
+const { getCortesCustomMap, cicloConCorte, corteDeCiclo } = require('../helpers/cortes');
 
 module.exports = function(db, { logAction, tjNombre }) {
   const router = Router();
@@ -257,7 +257,11 @@ module.exports = function(db, { logAction, tjNombre }) {
     if (current && current.diferida_id && (current.fecha !== fecha || current.tarjeta_id !== tarjeta_id)) {
       const tjRow = db.prepare('SELECT dia_corte FROM tarjetas WHERE id=?').get(tarjeta_id);
       const diaCorte = tjRow ? (tjRow.dia_corte || 30) : 30;
-      const fechaPrimerCorte = primerCorteAvance(fecha, diaCorte);
+      // Si la compra tiene ciclo MANUAL (ej. spillover / canje retrasado), su diferida debe seguir el
+      // ciclo FIJADO por el usuario (corteDeCiclo(ciclo)), NO el corte natural de la fecha — así las
+      // cuotas quedan alineadas con el ciclo de la compra tras editar la fecha/tarjeta. Sin ciclo manual,
+      // el corte natural de la fecha (comportamiento previo, intacto).
+      const fechaPrimerCorte = cicloManual ? corteDeCiclo(ciclo, diaCorte) : primerCorteAvance(fecha, diaCorte);
       db.prepare('UPDATE diferidas SET tarjeta_id=?, fecha_compra=?, fecha_primer_corte=? WHERE id=?')
         .run(tarjeta_id, fecha, fechaPrimerCorte, current.diferida_id);
       logAction('editar', tjNombre(tarjeta_id) + 'Diferida sincronizada con compra editada (fecha → ' + fecha + ', primer corte → ' + fechaPrimerCorte + ')');

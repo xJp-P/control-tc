@@ -7,7 +7,7 @@ const { calcularAmortizacionDiferida } = require('../engine/amortizacion');
 const { esNuBank, nuOpts, avanceOpts } = require('../helpers/banco');
 const { primerCorteAvance } = require('../helpers/dates');
 const { liberarBolsilloDiferida, liberarBolsilloAvance } = require('../helpers/bolsillo');
-const { getCortesCustomMap, cicloConCorte } = require('../helpers/cortes');
+const { getCortesCustomMap, cicloConCorte, corteDeCiclo } = require('../helpers/cortes');
 
 const DEFAULT_DB_DIR = path.join(require('os').homedir(), 'AppData', 'Roaming', 'CreditCardManager');
 const DB_CONFIG_FILE = path.join(DEFAULT_DB_DIR, 'db_location.json');
@@ -363,6 +363,7 @@ function syncData(db) {
   //     Este paso detecta y realinea cualquier desincronización existente.
   const desyncedRows = db.prepare(`
     SELECT c.id as compra_id, c.descripcion, c.fecha as compra_fecha, c.tarjeta_id as compra_tarjeta_id,
+           c.ciclo as compra_ciclo, COALESCE(c.ciclo_manual,0) as compra_ciclo_manual,
            d.id as dif_id, d.fecha_compra as dif_fecha, d.tarjeta_id as dif_tarjeta_id,
            t.dia_corte
     FROM compras c
@@ -372,7 +373,10 @@ function syncData(db) {
   `).all();
   desyncedRows.forEach(row => {
     const diaCorte = row.dia_corte || 30;
-    const nuevaFechaPrimerCorte = primerCorteAvance(row.compra_fecha, diaCorte);
+    // Con ciclo_manual (spillover / canje retrasado), el primer corte de la diferida sigue el ciclo
+    // FIJADO de la compra (corteDeCiclo), no el corte natural de la fecha — mantiene las cuotas alineadas
+    // con el ciclo de la compra (también auto-sana un desvío que se hubiera roto por un edit previo).
+    const nuevaFechaPrimerCorte = row.compra_ciclo_manual ? corteDeCiclo(row.compra_ciclo, diaCorte) : primerCorteAvance(row.compra_fecha, diaCorte);
     db.prepare('UPDATE diferidas SET tarjeta_id=?, fecha_compra=?, fecha_primer_corte=? WHERE id=?')
       .run(row.compra_tarjeta_id, row.compra_fecha, nuevaFechaPrimerCorte, row.dif_id);
     fixes++;

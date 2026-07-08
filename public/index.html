@@ -261,6 +261,10 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '5.0.0': [
+    'La casilla "El banco facturó esta compra en el siguiente corte" ahora funciona también con compras a cuotas (diferidas) y con compras divididas entre varias personas, no solo con las de una sola cuota. Igual que antes, la compra (y sus cuotas) quedan contadas en el corte correcto conservando su fecha real.',
+    'Arreglado: al editar una compra dividida que usa el canje retrasado, los cambios (por ejemplo la fecha) ahora sí se guardan. Antes la compra se quedaba congelada sin avisar de ningún error.'
+  ],
   '4.9.0': [
     'Nueva casilla al registrar una compra: "El banco facturó esta compra en el siguiente corte". Márcala cuando compras cerca del día de cierre y el banco la carga hasta el extracto del mes siguiente: la compra queda contada en el corte correcto conservando su fecha real, sin tener que cambiarle la fecha a mano. Disponible para compras de una sola cuota.',
     'El autocompletado del "Nombre en el Extracto" ahora está separado por tarjeta: al registrar una compra solo te sugiere comercios que ya habías usado en ESA tarjeta. Antes se mezclaban los de todas (por ejemplo, estando en la Visa te aparecían nombres de la RappiCard).'
@@ -1116,6 +1120,9 @@ function cicloSiguiente(ciclo) { var a = String(ciclo).split('-'); var y = Numbe
 // Si hay corte real para el ciclo teorico de la fecha y la compra es POSTERIOR a ese corte, salta al
 // siguiente ciclo (solo ADELANTO). cortesMap: { 'YYYY-MM': 'YYYY-MM-DD' } = tarjeta.cortes_custom.
 function cicloConCorteFront(fecha, diaCorte, cortesMap) { var teorico = calcCicloLocal(fecha, diaCorte); var corte = cortesMap && cortesMap[teorico]; return (corte && fecha > corte) ? cicloSiguiente(teorico) : teorico; }
+// Fecha de corte 'YYYY-MM-DD' de un ciclo 'YYYY-MM' dado el dia de corte (capado al ultimo dia del mes,
+// ej. feb -> 28/29). Se usa en el spillover de diferidas: la diferida arranca en el corte del ciclo DESTINO.
+function corteDeCiclo(ciclo, diaCorte) { var p = String(ciclo).split('-'); var y = Number(p[0]), m = Number(p[1]); var lastDay = new Date(y, m, 0).getDate(); var day = Math.min(diaCorte, lastDay); return new Date(y, m - 1, day).toISOString().slice(0, 10); }
 
 function CicloPicker({ value, onChange }) {
   function shift(delta) {
@@ -1831,7 +1838,13 @@ function CardResumen({ tarjeta, onDataChange }) {
     }
     // Edición de grupo existente
     if (compraData._editGrupo) {
-      handleEditGrupo(compraData).then(() => { setShowCompraModal(false); refreshAll(); toast('Compra dividida actualizada'); });
+      handleEditGrupo(compraData).then((resultados) => {
+        // Surface de errores: si algun PUT/POST fallo (ej. 403 de ciclo cerrado), avisa en vez de
+        // mostrar un exito falso (antes el .then corria siempre aunque las ops fallaran).
+        const conError = (resultados || []).find(r => r && r.error);
+        if (conError) { refreshAll(); toastErr(conError.error); return; }
+        setShowCompraModal(false); refreshAll(); toast('Compra dividida actualizada');
+      });
       return;
     }
     compraData.tarjeta_id = tarjeta.id;
@@ -1902,6 +1915,12 @@ function CardResumen({ tarjeta, onDataChange }) {
     const originalesByPersona = {};
     _partesOriginales.forEach(p => { originalesByPersona[p.persona_id != null ? p.persona_id : 'personal'] = p; });
     const intlFlag = es_internacional ? 1 : 0;
+    // Ciclo del grupo: todas las partes comparten ciclo/ciclo_manual (se crearon juntas). Se CONSERVA
+    // al editar para no perder un ciclo fijado a mano (ej. spillover / canje retrasado): sin esto el
+    // backend recalcularia el ciclo desde la nueva fecha y, si ese ciclo natural ya cerro, cada PUT
+    // fallaria con 403 y la edicion no se aplicaria. Para partes NUEVAS se usa el ciclo del grupo.
+    const grupoCiclo = _partesOriginales[0] ? _partesOriginales[0].ciclo : undefined;
+    const grupoCicloManual = _partesOriginales[0] ? (_partesOriginales[0].ciclo_manual || 0) : 0;
     const ops = [];
     const idsVisitados = new Set();
     for (const np of nuevasPartes) {
@@ -1914,7 +1933,8 @@ function CardResumen({ tarjeta, onDataChange }) {
           valor_cop: np.valor_cop,
           valor_usd: valor_usd || null, tasa_usd: tasa_usd || null,
           persona_id: orig.persona_id, estado: orig.estado, notas: orig.notas,
-          es_internacional: intlFlag
+          es_internacional: intlFlag,
+          ciclo: orig.ciclo, ciclo_manual: orig.ciclo_manual || 0
         }}));
       } else {
         // Nueva persona agregada al grupo
@@ -1923,7 +1943,8 @@ function CardResumen({ tarjeta, onDataChange }) {
           valor_cop: np.valor_cop,
           valor_usd: valor_usd || null, tasa_usd: tasa_usd || null,
           persona_id: np.persona_id, estado: 'pendiente', grupo_id: _grupoId,
-          es_internacional: intlFlag
+          es_internacional: intlFlag,
+          ciclo: grupoCiclo, ciclo_manual: grupoCicloManual
         }}));
       }
     }
@@ -1931,7 +1952,7 @@ function CardResumen({ tarjeta, onDataChange }) {
     for (const p of _partesOriginales) {
       if (!idsVisitados.has(p.id)) ops.push(api('/compras/' + p.id, { method: 'DELETE' }));
     }
-    await Promise.all(ops);
+    return Promise.all(ops);
   }
   function editGrupo(grupoItem) {
     // Todas las partes de un grupo comparten el mismo flag es_internacional
@@ -3582,10 +3603,11 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
     const tasaIntlNum = (esInternacional && tasaIntl !== '' && !isNaN(parseFloat(tasaIntl))) ? (parseFloat(tasaIntl) / 100) : null;
 
     // Spillover / "canje retrasado": ciclo destino cuando el banco factura la compra en el corte
-    // SIGUIENTE (checkbox, SOLO al crear una compra individual de 1 cuota, no dividida). Es el ciclo
+    // SIGUIENTE (checkbox, al CREAR — Fase 2: aplica a 1 cuota, DIFERIDAS y DIVIDIDAS). Es el ciclo
     // siguiente al natural de la fecha (consciente del corte adelantado). null si no aplica → el ciclo
-    // se auto-deriva de la fecha (comportamiento normal). Se reutiliza en la validación y en el payload.
-    const cicloSpilloverBody = (!item && facturaSiguienteCorte && !dividir && (parseInt(numCuotas, 10) || 1) <= 1 && tarjeta)
+    // se auto-deriva de la fecha (comportamiento normal). Se reutiliza en la validación, el payload de
+    // la compra (ciclo + ciclo_manual) y el fecha_primer_corte de las diferidas (corte del ciclo destino).
+    const cicloSpilloverBody = (!item && facturaSiguienteCorte && tarjeta)
       ? cicloSiguiente(cicloConCorteFront(fecha, tarjeta.dia_corte, tarjeta.cortes_custom || {}))
       : null;
 
@@ -3687,12 +3709,21 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
       const diferidaIds = {};
       if (isDiferida && tarjeta) {
         const diaCorte = tarjeta.dia_corte || 30;
-        const d = new Date(fecha + 'T12:00:00');
-        let year = d.getFullYear(), month = d.getMonth();
-        if (d.getDate() >= diaCorte) { month += 1; if (month > 11) { month = 0; year += 1; } }
-        const lastDay = new Date(year, month + 1, 0).getDate();
-        const day = Math.min(diaCorte, lastDay);
-        const fechaPrimerCorte = new Date(year, month, day).toISOString().slice(0, 10);
+        // Spillover Fase 2: si el banco factura en el corte SIGUIENTE, cada diferida arranca en el corte
+        // del ciclo DESTINO; si no, en el corte natural de la fecha. fecha_compra se conserva en la fecha
+        // real (abajo) para que syncData paso 11 no reajuste este primer corte (solo recalcula si
+        // fecha_compra != compra.fecha; aquí SIEMPRE coinciden → el desvío del spillover sobrevive).
+        let fechaPrimerCorte;
+        if (cicloSpilloverBody) {
+          fechaPrimerCorte = corteDeCiclo(cicloSpilloverBody, diaCorte);
+        } else {
+          const d = new Date(fecha + 'T12:00:00');
+          let year = d.getFullYear(), month = d.getMonth();
+          if (d.getDate() >= diaCorte) { month += 1; if (month > 11) { month = 0; year += 1; } }
+          const lastDay = new Date(year, month + 1, 0).getDate();
+          const day = Math.min(diaCorte, lastDay);
+          fechaPrimerCorte = new Date(year, month, day).toISOString().slice(0, 10);
+        }
 
         const allParts = splits.filter(sp => sp.persona_id && sp.persona_id !== 'personal' && parseFloat(sp.monto) > 0)
           .map(sp => ({ key: sp.persona_id, monto: Math.round(parseFloat(sp.monto)) }));
@@ -3710,7 +3741,10 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
         toast('Diferidas creadas a ' + numCuotas + ' cuotas' + (cobrarIntereses ? '' : ' (sin intereses)'));
       }
 
-      const base = { fecha, descripcion, valor_usd: usdNum, tasa_usd: tasaNum, estado: isDiferida ? 'diferida' : 'pendiente', ciclo, notas, nota_personal: notaPersonal || null, tasa_intl: tasaIntlNum, grupo_id: grupoId, es_internacional: esInternacional ? 1 : 0 };
+      // Spillover Fase 2: cada parte de la compra dividida se registra en el ciclo DESTINO (siguiente)
+      // con ciclo_manual=1 (para que syncData paso 5 no la re-derive de la fecha). El backend POST /compras
+      // respeta ciclo_manual+ciclo por compra. Sin spillover → ciclo natural, sin ciclo_manual (igual que antes).
+      const base = { fecha, descripcion, valor_usd: usdNum, tasa_usd: tasaNum, estado: isDiferida ? 'diferida' : 'pendiente', ciclo: cicloSpilloverBody || ciclo, ciclo_manual: cicloSpilloverBody ? 1 : 0, notas, nota_personal: notaPersonal || null, tasa_intl: tasaIntlNum, grupo_id: grupoId, es_internacional: esInternacional ? 1 : 0 };
       const compras = splits
         .filter(sp => sp.persona_id && sp.persona_id !== 'personal' && parseFloat(sp.monto) > 0)
         .map(sp => ({ ...base, persona_id: parseInt(sp.persona_id), valor_cop: Math.round(parseFloat(sp.monto)), diferida_id: diferidaIds[sp.persona_id] || null }));
@@ -3730,12 +3764,21 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
     let diferida_id = null;
     if (numCuotas > 1 && !item && tarjeta) {
       const diaCorte = tarjeta.dia_corte || 30;
-      const d = new Date(fecha + 'T12:00:00');
-      let year = d.getFullYear(), month = d.getMonth();
-      if (d.getDate() >= diaCorte) { month += 1; if (month > 11) { month = 0; year += 1; } }
-      const lastDay = new Date(year, month + 1, 0).getDate();
-      const day = Math.min(diaCorte, lastDay);
-      const fechaPrimerCorte = new Date(year, month, day).toISOString().slice(0, 10);
+      // Spillover Fase 2: si el banco factura en el corte SIGUIENTE, la diferida arranca en el corte del
+      // ciclo DESTINO; si no, en el corte natural de la fecha. fecha_compra se conserva en la fecha real
+      // (abajo) para que syncData paso 11 no reajuste este primer corte. La compra vinculada toma el ciclo
+      // destino via el payload (ciclo: cicloSpilloverBody || ... , ya existente).
+      let fechaPrimerCorte;
+      if (cicloSpilloverBody) {
+        fechaPrimerCorte = corteDeCiclo(cicloSpilloverBody, diaCorte);
+      } else {
+        const d = new Date(fecha + 'T12:00:00');
+        let year = d.getFullYear(), month = d.getMonth();
+        if (d.getDate() >= diaCorte) { month += 1; if (month > 11) { month = 0; year += 1; } }
+        const lastDay = new Date(year, month + 1, 0).getDate();
+        const day = Math.min(diaCorte, lastDay);
+        fechaPrimerCorte = new Date(year, month, day).toISOString().slice(0, 10);
+      }
       const dif = await api('/diferidas', { method: 'POST', body: {
         tarjeta_id: tarjeta.id,
         etiqueta: descripcion,
@@ -3865,11 +3908,11 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
         )
       )
     ),
-    // Canje retrasado / spillover: checkbox opcional (SOLO al crear una compra individual de 1 cuota,
-    // no dividida) para cuando el banco factura una compra del último día del corte en el extracto del
-    // mes siguiente. Al marcarlo, la compra se registra en el ciclo destino (siguiente) conservando su
-    // fecha real → esquiva el candado del ciclo natural cerrado (el backend ya valida el ciclo destino).
-    !item && !dividir && (parseInt(numCuotas, 10) || 1) <= 1 && e('div', { className: 'form-group' },
+    // Canje retrasado / spillover: checkbox opcional al CREAR (Fase 2: 1 cuota, DIFERIDAS y DIVIDIDAS)
+    // para cuando el banco factura una compra cercana al corte en el extracto del mes siguiente. Al
+    // marcarlo, la compra (y las cuotas de su diferida) se registran en el ciclo destino (siguiente)
+    // conservando su fecha real → esquiva el candado del ciclo natural cerrado (el backend valida el destino).
+    !item && e('div', { className: 'form-group' },
       e('label', { style: { cursor: 'pointer', fontSize: 13 } },
         e('input', { type: 'checkbox', checked: facturaSiguienteCorte, onChange: ev => setFacturaSiguienteCorte(ev.target.checked), style: { marginRight: 6, cursor: 'pointer' } }),
         'El banco facturó esta compra en el siguiente corte'

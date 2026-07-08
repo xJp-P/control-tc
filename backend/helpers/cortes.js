@@ -30,6 +30,19 @@ function cicloConCorte(fecha, diaCorte, cortesMap) {
   return cicloTeorico;
 }
 
+// Fecha de corte 'YYYY-MM-DD' de un ciclo 'YYYY-MM' dado el dia de corte, capada al ultimo dia del mes
+// (feb -> 28/29). Construccion por STRING (sin toISOString) para no depender de la zona horaria del
+// proceso. Espejo del helper corteDeCiclo del frontend (mismo output). Se usa para realinear el primer
+// corte de una diferida con el ciclo FIJADO MANUALMENTE de su compra (spillover / canje retrasado), en
+// vez del corte natural de la fecha, cuando se edita la fecha/tarjeta de esa compra.
+function corteDeCiclo(ciclo, diaCorte) {
+  const p = String(ciclo).split('-');
+  const y = Number(p[0]), m = Number(p[1]);
+  const lastDay = new Date(y, m, 0).getDate(); // ultimo dia del mes m (solo .getDate() -> sin zona horaria)
+  const day = Math.min(diaCorte || 30, lastDay);
+  return y + '-' + String(m).padStart(2, '0') + '-' + String(day).padStart(2, '0');
+}
+
 // Fecha de corte real de UN (tarjeta, ciclo), o null si no hay override.
 function getCorteCustom(db, tarjetaId, ciclo) {
   if (!db || !tarjetaId || !ciclo) return null;
@@ -47,4 +60,4 @@ function getCortesCustomMap(db, tarjetaId) {
   return map;
 }
 
-module.exports = { getCorteCustom, getCortesCustomMap, cicloConCorte, siguienteCiclo };
+module.exports = { getCorteCustom, getCortesCustomMap, cicloConCorte, siguienteCiclo, corteDeCiclo };
