@@ -4,7 +4,7 @@ const { hoyLocal, daysBetween, addDays } = require('../helpers/dates');
 const { calcularAmortizacionAvance } = require('../engine/amortizacion');
 const { calcularAmortizacionDiferida } = require('../engine/amortizacion');
 const { calcExtracto } = require('../engine/extracto');
-const { nuOpts, avanceOpts, isDualExtracto, aplicaIntInternacional } = require('../helpers/banco');
+const { nuOpts, nuOptsDif, avanceOpts, isDualExtracto, aplicaIntInternacional } = require('../helpers/banco');
 
 module.exports = function(db) {
   const router = Router();
@@ -78,7 +78,7 @@ module.exports = function(db) {
           ? db.prepare('SELECT * FROM diferidas WHERE id=?').get(c.diferida_id)
           : db.prepare('SELECT * FROM diferidas WHERE tarjeta_id=? AND etiqueta=? AND fecha_compra=?').get(c.tarjeta_id, c.descripcion, c.fecha);
         if (!dif) return;
-        const amort = calcularAmortizacionDiferida(c.valor_cop, dif.tasa_mv, dif.num_cuotas, dif.fecha_compra, dif.fecha_primer_corte, null, nuOpts(db, c.tarjeta_id));
+        const amort = calcularAmortizacionDiferida(c.valor_cop, dif.tasa_mv, dif.num_cuotas, dif.fecha_compra, dif.fecha_primer_corte, null, nuOptsDif(db, dif));
         const cuotasBase = amort.tabla.map(r => ({
           total: Math.round(r.totalPagar),
           pagada: r.fechaCorte < hoy
@@ -162,7 +162,7 @@ module.exports = function(db) {
 
     diferidasActivas.forEach(d => {
       const abonosDif = db.prepare('SELECT * FROM abonos_diferida WHERE diferida_id=? ORDER BY fecha').all(d.id);
-      const amort = calcularAmortizacionDiferida(d.monto, d.tasa_mv, d.num_cuotas, d.fecha_compra, d.fecha_primer_corte, abonosDif, nuOpts(db, d.tarjeta_id));
+      const amort = calcularAmortizacionDiferida(d.monto, d.tasa_mv, d.num_cuotas, d.fecha_compra, d.fecha_primer_corte, abonosDif, nuOptsDif(db, d));
       // Detección de moneda: una diferida es USD solo si es USD PURA (valor_cop=0). Una compra
       // internacional de Visa tiene valor_cop>0 (deuda real en pesos) + valor_usd informativo: NO
       // es USD. Antes se clasificaba por `valor_usd > 0` a secas, lo que mandaba el saldo COP de una
@@ -230,7 +230,7 @@ module.exports = function(db) {
       });
       diferidasActivas.filter(d => d.tarjeta_id === ext.tarjeta_id).forEach(d => {
         const abonosDif2 = db.prepare('SELECT * FROM abonos_diferida WHERE diferida_id=? ORDER BY fecha').all(d.id);
-        const amort2 = calcularAmortizacionDiferida(d.monto, d.tasa_mv, d.num_cuotas, d.fecha_compra, d.fecha_primer_corte, abonosDif2, nuOpts(db, d.tarjeta_id));
+        const amort2 = calcularAmortizacionDiferida(d.monto, d.tasa_mv, d.num_cuotas, d.fecha_compra, d.fecha_primer_corte, abonosDif2, nuOptsDif(db, d));
         const cuota2 = amort2.tabla.find(r => r.fechaCorte.slice(0, 7) === ext.ciclo);
         if (cuota2) deudaImpagaDiferidas += cuota2.cuotaCapital;
       });
@@ -544,7 +544,7 @@ module.exports = function(db) {
     comprasDifTercero.forEach(c => {
       const dif = db.prepare("SELECT * FROM diferidas WHERE id=? AND estado='activo'").get(c.diferida_id);
       if (!dif) return;
-      const amort = calcularAmortizacionDiferida(c.valor_cop, dif.tasa_mv, dif.num_cuotas, dif.fecha_compra, dif.fecha_primer_corte, [], nuOpts(db, dif.tarjeta_id));
+      const amort = calcularAmortizacionDiferida(c.valor_cop, dif.tasa_mv, dif.num_cuotas, dif.fecha_compra, dif.fecha_primer_corte, [], nuOptsDif(db, dif));
       const cuota = amort.tabla.find(r => r.fechaCorte.slice(0, 7) === cicloActual);
       if (!cuota) return;
       // Per-cuota bolsillo

@@ -4,7 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const { calcularAmortizacionAvance } = require('../engine/amortizacion');
 const { calcularAmortizacionDiferida } = require('../engine/amortizacion');
-const { esNuBank, nuOpts, avanceOpts } = require('../helpers/banco');
+const { esNuBank, nuOpts, nuOptsDif, avanceOpts } = require('../helpers/banco');
 const { primerCorteAvance } = require('../helpers/dates');
 const { liberarBolsilloDiferida, liberarBolsilloAvance } = require('../helpers/bolsillo');
 const { getCortesCustomMap, cicloConCorte, corteDeCiclo } = require('../helpers/cortes');
@@ -72,7 +72,7 @@ function syncData(db) {
   //    una cuota cuyo corte ya pasó puede estar pendiente de pago en el extracto.
   const diferidasActivas = db.prepare("SELECT * FROM diferidas WHERE estado='activo'").all();
   diferidasActivas.forEach(d => {
-    const amort = calcularAmortizacionDiferida(d.monto, d.tasa_mv, d.num_cuotas, d.fecha_compra, d.fecha_primer_corte, null, nuOpts(db, d.tarjeta_id));
+    const amort = calcularAmortizacionDiferida(d.monto, d.tasa_mv, d.num_cuotas, d.fecha_compra, d.fecha_primer_corte, null, nuOptsDif(db, d));
     if (amort.resumen.saldoActual > 0) return;
     const ciclos = [...new Set(amort.tabla.map(c => c.fechaCorte.slice(0, 7)))];
     const allPaid = ciclos.every(ciclo => {
@@ -138,7 +138,12 @@ function syncData(db) {
   if (bolsilloPagadoHuerfano.changes > 0) { fixes += bolsilloPagadoHuerfano.changes; console.log('[Sync] ' + bolsilloPagadoHuerfano.changes + ' compras personales pagadas con bolsillo residual limpiadas'); }
 
   // 7. Compras vinculadas a diferidas: marcar como 'diferida'
-  const comprasDiferidas = db.prepare("UPDATE compras SET estado='diferida' WHERE estado NOT IN ('pagado','diferida') AND notas LIKE '%Diferida a%cuotas%'").run();
+  // AND diferida_id IS NOT NULL: una compra legitimamente diferida SIEMPRE tiene diferida_id poblado
+  // (convertir-a-diferida, flujo de creacion, reprogramar-saldo). Sin este guard, una compra de 1 cuota
+  // cuyas notas contengan por accidente "Diferida a N cuotas" (ej. sufijo residual o texto del usuario en
+  // el campo legado) se re-marcaria 'diferida' SIN plan vinculado -> diferida huerfana cuya deuda
+  // desaparece del dashboard. Endurece tambien el camino de revertir-diferida.
+  const comprasDiferidas = db.prepare("UPDATE compras SET estado='diferida' WHERE estado NOT IN ('pagado','diferida') AND diferida_id IS NOT NULL AND notas LIKE '%Diferida a%cuotas%'").run();
   if (comprasDiferidas.changes > 0) { fixes += comprasDiferidas.changes; console.log('[Sync] ' + comprasDiferidas.changes + ' compras marcadas como diferidas'); }
 
   // 8. Compras huérfanas: persona_id que no existe en personas
@@ -174,8 +179,14 @@ function syncData(db) {
     let restante = pago.monto;
     const detalleNuevo = [];
 
+    // Exención de la reprogramación de saldo: las cuotas SELLADAS (registro histórico facturado) y las
+    // diferidas HIJA (sin_gracia_cuota1=1, con bolsillo fijado a propósito) se excluyen de esta
+    // redistribución automática — re-pagar una cuota facturada o auto-liberar el bolsillo de la hija en
+    // el arranque corrompería lo que la reprogramación acaba de sembrar. El abono MANUAL sí puede
+    // afectarlas (lo dispara el usuario). Radio: solo filas de reprogramación; el oldest-first del resto
+    // queda intacto.
     // Grupo 1: Compras nacionales
-    const comprasNacionales = db.prepare("SELECT id, fecha, descripcion, valor_cop, valor_usd, COALESCE(monto_abonado,0) as monto_abonado, created_at FROM compras WHERE tarjeta_id=? AND estado IN ('pendiente','bolsillo','bolsillo_parcial') AND (valor_cop - COALESCE(monto_abonado,0)) > 0 AND (valor_usd IS NULL OR valor_usd = 0) ORDER BY fecha ASC, created_at ASC").all(ab.tarjeta_id);
+    const comprasNacionales = db.prepare("SELECT id, fecha, descripcion, valor_cop, valor_usd, COALESCE(monto_abonado,0) as monto_abonado, created_at FROM compras WHERE tarjeta_id=? AND estado IN ('pendiente','bolsillo','bolsillo_parcial') AND (valor_cop - COALESCE(monto_abonado,0)) > 0 AND (valor_usd IS NULL OR valor_usd = 0) AND (notas IS NULL OR notas NOT LIKE '%sellada por reprogramacion%') ORDER BY fecha ASC, created_at ASC").all(ab.tarjeta_id);
     for (const c of comprasNacionales) {
       if (restante <= 0) break;
       const saldo = c.valor_cop - c.monto_abonado;
@@ -192,7 +203,7 @@ function syncData(db) {
 
     // Grupo 2: Compras internacionales
     if (restante > 0) {
-      const comprasIntl = db.prepare("SELECT id, fecha, descripcion, valor_cop, COALESCE(monto_abonado,0) as monto_abonado, created_at FROM compras WHERE tarjeta_id=? AND estado IN ('pendiente','bolsillo','bolsillo_parcial') AND (valor_cop - COALESCE(monto_abonado,0)) > 0 AND valor_usd IS NOT NULL AND valor_usd > 0 ORDER BY fecha ASC, created_at ASC").all(ab.tarjeta_id);
+      const comprasIntl = db.prepare("SELECT id, fecha, descripcion, valor_cop, COALESCE(monto_abonado,0) as monto_abonado, created_at FROM compras WHERE tarjeta_id=? AND estado IN ('pendiente','bolsillo','bolsillo_parcial') AND (valor_cop - COALESCE(monto_abonado,0)) > 0 AND valor_usd IS NOT NULL AND valor_usd > 0 AND (notas IS NULL OR notas NOT LIKE '%sellada por reprogramacion%') ORDER BY fecha ASC, created_at ASC").all(ab.tarjeta_id);
       for (const c of comprasIntl) {
         if (restante <= 0) break;
         const saldo = c.valor_cop - c.monto_abonado;
@@ -210,11 +221,11 @@ function syncData(db) {
 
     // Grupo 3: Diferidas
     if (restante > 0) {
-      const difs = db.prepare("SELECT * FROM diferidas WHERE tarjeta_id=? AND estado='activo' ORDER BY fecha_compra ASC, created_at ASC").all(ab.tarjeta_id);
+      const difs = db.prepare("SELECT * FROM diferidas WHERE tarjeta_id=? AND estado='activo' AND COALESCE(sin_gracia_cuota1,0)=0 ORDER BY fecha_compra ASC, created_at ASC").all(ab.tarjeta_id);
       for (const d of difs) {
         if (restante <= 0) break;
         const abonosDif = db.prepare('SELECT * FROM abonos_diferida WHERE diferida_id=? ORDER BY fecha').all(d.id);
-        const amort = calcularAmortizacionDiferida(d.monto, d.tasa_mv, d.num_cuotas, d.fecha_compra, d.fecha_primer_corte, abonosDif, nuOpts(db, d.tarjeta_id));
+        const amort = calcularAmortizacionDiferida(d.monto, d.tasa_mv, d.num_cuotas, d.fecha_compra, d.fecha_primer_corte, abonosDif, nuOptsDif(db, d));
         const saldo = amort.resumen.saldoActual;
         if (saldo <= 0) continue;
         const aplicar = Math.min(restante, saldo);
@@ -282,8 +293,10 @@ function syncData(db) {
     let restante = pago.monto;
     const detalleNuevo = [];
 
-    // Grupo 1: Nacionales
-    const comprasNac = db.prepare("SELECT id, fecha, descripcion, valor_cop, COALESCE(monto_abonado,0) as monto_abonado, persona_id, created_at FROM compras WHERE tarjeta_id=? AND estado IN ('pendiente','bolsillo','bolsillo_parcial') AND (valor_cop - COALESCE(monto_abonado,0)) > 0 AND (valor_usd IS NULL OR valor_usd = 0) ORDER BY fecha ASC, created_at ASC").all(pago.tarjeta_id);
+    // Grupo 1: Nacionales. (Excluye cuotas SELLADAS y, en Grupo 3, las diferidas HIJA de reprogramación
+    // —sin_gracia_cuota1=1—: no re-pagar una cuota facturada ni auto-liberar el bolsillo de la hija al
+    // arrancar. El abono MANUAL sí puede afectarlas. Radio: solo filas de reprogramación.)
+    const comprasNac = db.prepare("SELECT id, fecha, descripcion, valor_cop, COALESCE(monto_abonado,0) as monto_abonado, persona_id, created_at FROM compras WHERE tarjeta_id=? AND estado IN ('pendiente','bolsillo','bolsillo_parcial') AND (valor_cop - COALESCE(monto_abonado,0)) > 0 AND (valor_usd IS NULL OR valor_usd = 0) AND (notas IS NULL OR notas NOT LIKE '%sellada por reprogramacion%') ORDER BY fecha ASC, created_at ASC").all(pago.tarjeta_id);
     for (const c of comprasNac) {
       if (restante <= 0) break;
       const saldo = c.valor_cop - c.monto_abonado;
@@ -300,7 +313,7 @@ function syncData(db) {
 
     // Grupo 2: Internacionales
     if (restante > 0) {
-      const comprasIntl = db.prepare("SELECT id, fecha, descripcion, valor_cop, COALESCE(monto_abonado,0) as monto_abonado, created_at FROM compras WHERE tarjeta_id=? AND estado IN ('pendiente','bolsillo','bolsillo_parcial') AND (valor_cop - COALESCE(monto_abonado,0)) > 0 AND valor_usd IS NOT NULL AND valor_usd > 0 ORDER BY fecha ASC, created_at ASC").all(pago.tarjeta_id);
+      const comprasIntl = db.prepare("SELECT id, fecha, descripcion, valor_cop, COALESCE(monto_abonado,0) as monto_abonado, created_at FROM compras WHERE tarjeta_id=? AND estado IN ('pendiente','bolsillo','bolsillo_parcial') AND (valor_cop - COALESCE(monto_abonado,0)) > 0 AND valor_usd IS NOT NULL AND valor_usd > 0 AND (notas IS NULL OR notas NOT LIKE '%sellada por reprogramacion%') ORDER BY fecha ASC, created_at ASC").all(pago.tarjeta_id);
       for (const c of comprasIntl) {
         if (restante <= 0) break;
         const saldo = c.valor_cop - c.monto_abonado;
@@ -318,11 +331,11 @@ function syncData(db) {
 
     // Grupo 3: Diferidas
     if (restante > 0) {
-      const difs = db.prepare("SELECT * FROM diferidas WHERE tarjeta_id=? AND estado='activo' ORDER BY fecha_compra ASC").all(pago.tarjeta_id);
+      const difs = db.prepare("SELECT * FROM diferidas WHERE tarjeta_id=? AND estado='activo' AND COALESCE(sin_gracia_cuota1,0)=0 ORDER BY fecha_compra ASC").all(pago.tarjeta_id);
       for (const d of difs) {
         if (restante <= 0) break;
         const abonosDif = db.prepare('SELECT * FROM abonos_diferida WHERE diferida_id=? ORDER BY fecha').all(d.id);
-        const amort = calcularAmortizacionDiferida(d.monto, d.tasa_mv, d.num_cuotas, d.fecha_compra, d.fecha_primer_corte, abonosDif, nuOpts(db, d.tarjeta_id));
+        const amort = calcularAmortizacionDiferida(d.monto, d.tasa_mv, d.num_cuotas, d.fecha_compra, d.fecha_primer_corte, abonosDif, nuOptsDif(db, d));
         const saldo = amort.resumen.saldoActual;
         if (saldo <= 0) continue;
         const aplicar = Math.min(restante, saldo);
@@ -369,7 +382,12 @@ function syncData(db) {
     FROM compras c
     JOIN diferidas d ON c.diferida_id = d.id
     JOIN tarjetas t ON c.tarjeta_id = t.id
-    WHERE c.fecha != d.fecha_compra OR c.tarjeta_id != d.tarjeta_id
+    WHERE (c.fecha != d.fecha_compra OR c.tarjeta_id != d.tarjeta_id)
+      -- Excepcion: una diferida HIJA de reprogramacion de saldo (sin_gracia_cuota1=1) tiene su
+      -- fecha_compra fijada a proposito ~30 dias antes del corte del vigente (corte(V-1)) para que su
+      -- cuota 1 cobre ~1 mes de interes, NO la fecha real de la compra. Re-alinearla aqui reinflaria
+      -- ese interes cada arranque. Su fecha_primer_corte ya es correcto y no depende de este paso.
+      AND COALESCE(d.sin_gracia_cuota1,0) = 0
   `).all();
   desyncedRows.forEach(row => {
     const diaCorte = row.dia_corte || 30;
@@ -776,6 +794,15 @@ function initDb(dbPathOverride) {
 
   try { db.prepare('SELECT monto_bolsillo FROM diferidas LIMIT 1').get(); }
   catch (e) { db.exec('ALTER TABLE diferidas ADD COLUMN monto_bolsillo REAL DEFAULT 0'); }
+
+  // sin_gracia_cuota1=1: diferida nacida de una REPROGRAMACIÓN DE SALDO (endpoint
+  // /compras/:id/reprogramar-saldo). Su cuota 1 NO recibe la "gracia" de cuota 1 (Nu = cuota sin
+  // interés; Bancolombia difiere_intereses_cuota1 = interés diferido a la cuota 2), porque el banco
+  // NO re-otorga esa gracia sobre un saldo ya en curso — solo la da a compras nuevas. El helper
+  // nuOptsDif(db, dif) lo respeta al amortizar. DEFAULT 0 → toda diferida existente conserva su
+  // comportamiento (la gracia por-tarjeta vía nuOpts), sin regresión.
+  try { db.prepare('SELECT sin_gracia_cuota1 FROM diferidas LIMIT 1').get(); }
+  catch (e) { db.exec('ALTER TABLE diferidas ADD COLUMN sin_gracia_cuota1 INTEGER DEFAULT 0'); }
 
   // Intereses sobre compras internacionales: se persiste al cerrar el extracto
   // para que el historial mantenga el valor real cobrado por el banco aunque la

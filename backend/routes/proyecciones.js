@@ -3,7 +3,7 @@ const { Router } = require('express');
 const { hoyLocal, addMonths } = require('../helpers/dates');
 const { calcularAmortizacionAvance } = require('../engine/amortizacion');
 const { calcularAmortizacionDiferida } = require('../engine/amortizacion');
-const { nuOpts, avanceOpts } = require('../helpers/banco');
+const { nuOpts, nuOptsDif, avanceOpts } = require('../helpers/banco');
 
 module.exports = function(db) {
   const router = Router();
@@ -42,7 +42,7 @@ module.exports = function(db) {
       });
 
       diferidasActivas.forEach(d => {
-        const amort = calcularAmortizacionDiferida(d.monto, d.tasa_mv, d.num_cuotas, d.fecha_compra, d.fecha_primer_corte, null, nuOpts(db, d.tarjeta_id));
+        const amort = calcularAmortizacionDiferida(d.monto, d.tasa_mv, d.num_cuotas, d.fecha_compra, d.fecha_primer_corte, null, nuOptsDif(db, d));
         const cuota = amort.tabla.find(r => r.fechaCorte.slice(0, 7) === mesStr);
         if (cuota) { totalDiferidas += cuota.totalPagar; interesesDiferidas += cuota.interesTotal; }
       });

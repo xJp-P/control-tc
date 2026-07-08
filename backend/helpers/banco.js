@@ -67,6 +67,20 @@ function nuOpts(db, tarjetaOrId) {
 }
 
 /**
+ * opts de amortización para una DIFERIDA CONCRETA (recibe la fila de la diferida, no un id).
+ * Igual que nuOpts salvo por el "escape hatch" de la reprogramación de saldo: si la diferida trae
+ * la bandera `sin_gracia_cuota1` (nació de POST /compras/:id/reprogramar-saldo), se amortiza SIN la
+ * gracia de cuota 1 (ni Nu ni difiere_intereses_cuota1) → el banco no re-regala esa gracia sobre un
+ * saldo ya en curso. Con la bandera en 0/ausente devuelve EXACTAMENTE nuOpts(db, dif.tarjeta_id)
+ * (fallback idéntico → cero regresión en las diferidas existentes).
+ */
+function nuOptsDif(db, dif) {
+  if (dif && dif.sin_gracia_cuota1) return undefined;
+  const tid = (dif && typeof dif === 'object') ? dif.tarjeta_id : dif;
+  return nuOpts(db, tid);
+}
+
+/**
  * Returns opts object for calcularAmortizacionAvance.
  * Bancolombia usa modelo "saldo facturado" para intereses de avances:
  *   cycle N >= 2 cobra intereses sobre (saldoInicio + cuotaCapital), no sobre
@@ -115,4 +129,4 @@ function aplicaIntInternacional(banco, franquicia) {
   return !isDualExtracto(franquicia);
 }
 
-module.exports = { esNuBank, esBancolombiaBank, nuOpts, avanceOpts, clearBancoCache, isDualExtracto, aplicaIntInternacional };
+module.exports = { esNuBank, esBancolombiaBank, nuOpts, nuOptsDif, avanceOpts, clearBancoCache, isDualExtracto, aplicaIntInternacional };

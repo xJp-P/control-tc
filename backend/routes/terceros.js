@@ -2,7 +2,7 @@
 const { Router } = require('express');
 const { hoyLocal } = require('../helpers/dates');
 const { calcularAmortizacionDiferida } = require('../engine/amortizacion');
-const { nuOpts } = require('../helpers/banco');
+const { nuOpts, nuOptsDif } = require('../helpers/banco');
 
 module.exports = function(db, { logAction, tjNombre }) {
   const router = Router();
@@ -69,7 +69,7 @@ module.exports = function(db, { logAction, tjNombre }) {
         ? db.prepare('SELECT * FROM diferidas WHERE id=?').get(c.diferida_id)
         : db.prepare('SELECT * FROM diferidas WHERE tarjeta_id=? AND etiqueta=? AND fecha_compra=?').get(c.tarjeta_id, c.descripcion, c.fecha);
       if (!dif) return c;
-      const amort = calcularAmortizacionDiferida(c.valor_cop, dif.tasa_mv, dif.num_cuotas, dif.fecha_compra, dif.fecha_primer_corte, null, nuOpts(db, c.tarjeta_id));
+      const amort = calcularAmortizacionDiferida(c.valor_cop, dif.tasa_mv, dif.num_cuotas, dif.fecha_compra, dif.fecha_primer_corte, null, nuOptsDif(db, dif));
       const bolsillo = Math.round(c.monto_bolsillo || 0);
       const cuotasBase = amort.tabla.map(r => {
         // ciclo_pagado: el extracto del ciclo de ESTA cuota ya se pagó al banco (estado real "con el

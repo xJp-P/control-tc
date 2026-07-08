@@ -3,7 +3,7 @@ const { Router } = require('express');
 const { hoyLocal, calcCicloLocal } = require('../helpers/dates');
 const { cicloConCorte, getCortesCustomMap } = require('../helpers/cortes');
 const { calcularAmortizacionDiferida } = require('../engine/amortizacion');
-const { nuOpts } = require('../helpers/banco');
+const { nuOpts, nuOptsDif } = require('../helpers/banco');
 const { compraTerceroConReembolso } = require('../helpers/bolsillo');
 
 module.exports = function(db, { logAction, tjNombre }) {
@@ -18,7 +18,7 @@ module.exports = function(db, { logAction, tjNombre }) {
     const diferidas = db.prepare(sql).all(...params);
     const hoyDif = hoyLocal();
     const result = diferidas.map(d => {
-      const amort = calcularAmortizacionDiferida(d.monto, d.tasa_mv, d.num_cuotas, d.fecha_compra, d.fecha_primer_corte, null, nuOpts(db, d.tarjeta_id));
+      const amort = calcularAmortizacionDiferida(d.monto, d.tasa_mv, d.num_cuotas, d.fecha_compra, d.fecha_primer_corte, null, nuOptsDif(db, d));
       const cuotaCiclo = ciclo
         ? amort.tabla.find(r => r.fechaCorte.slice(0, 7) === ciclo)
         : amort.tabla.find(r => r.fechaCorte >= hoyDif);
@@ -59,8 +59,18 @@ module.exports = function(db, { logAction, tjNombre }) {
   router.get('/:id', (req, res) => {
     const d = db.prepare('SELECT * FROM diferidas WHERE id=?').get(req.params.id);
     if (!d) return res.status(404).json({ error: 'Diferida no encontrada' });
-    const amort = calcularAmortizacionDiferida(d.monto, d.tasa_mv, d.num_cuotas, d.fecha_compra, d.fecha_primer_corte, null, nuOpts(db, d.tarjeta_id));
-    res.json({ ...d, amortizacion: amort.tabla, resumen: amort.resumen });
+    const amort = calcularAmortizacionDiferida(d.monto, d.tasa_mv, d.num_cuotas, d.fecha_compra, d.fecha_primer_corte, null, nuOptsDif(db, d));
+    // Info de la compra vinculada para la UI de "Reprogramar Cuotas" (necesita el compra_id para el
+    // POST /compras/:id/reprogramar-saldo y saber si es elegible: no grupo, no tercero, no USD pura).
+    const compraVinc = db.prepare('SELECT id, grupo_id, persona_id, valor_cop, valor_usd, monto_abonado FROM compras WHERE diferida_id=? ORDER BY id LIMIT 1').get(d.id);
+    res.json({
+      ...d, amortizacion: amort.tabla, resumen: amort.resumen,
+      compra_id: compraVinc ? compraVinc.id : null,
+      grupo_id: compraVinc ? compraVinc.grupo_id : null,
+      es_de_tercero: !!(compraVinc && compraVinc.persona_id),
+      es_usd_pura: !!(compraVinc && compraVinc.valor_usd > 0 && !(compraVinc.valor_cop > 0)),
+      tiene_abono_parcial: !!(compraVinc && (compraVinc.monto_abonado || 0) > 0)
+    });
   });
 
   router.post('/', (req, res) => {
@@ -156,7 +166,7 @@ module.exports = function(db, { logAction, tjNombre }) {
       }
     }
 
-    const amortPrev = calcularAmortizacionDiferida(d.monto, d.tasa_mv, d.num_cuotas, d.fecha_compra, d.fecha_primer_corte, null, nuOpts(db, d.tarjeta_id));
+    const amortPrev = calcularAmortizacionDiferida(d.monto, d.tasa_mv, d.num_cuotas, d.fecha_compra, d.fecha_primer_corte, null, nuOptsDif(db, d));
     const ciclosPagados = [...new Set(amortPrev.tabla.map(c => c.fechaCorte.slice(0, 7)))].filter(ci => {
       const ext = db.prepare("SELECT estado FROM extractos WHERE tarjeta_id=? AND ciclo=?").get(d.tarjeta_id, ci);
       return ext && ext.estado === 'pagado';
@@ -182,7 +192,7 @@ module.exports = function(db, { logAction, tjNombre }) {
       }
     });
 
-    const nuevaAmort = calcularAmortizacionDiferida(d.monto, d.tasa_mv, nuevoN, d.fecha_compra, nuevaFPC, null, nuOpts(db, d.tarjeta_id));
+    const nuevaAmort = calcularAmortizacionDiferida(d.monto, d.tasa_mv, nuevoN, d.fecha_compra, nuevaFPC, null, nuOptsDif(db, d));
     logAction('editar', tjNombre(d.tarjeta_id) + 'Diferida reprogramada: ' + d.etiqueta + ' (' + d.num_cuotas + ' -> ' + nuevoN + ' cuotas)');
     res.json({ ok: true, num_cuotas: nuevoN, amortizacion: nuevaAmort.tabla, resumen: nuevaAmort.resumen });
   });

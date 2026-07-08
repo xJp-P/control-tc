@@ -2,7 +2,7 @@
 const { Router } = require('express');
 const { hoyLocal, daysBetween, primerCorteAvance } = require('../helpers/dates');
 const { calcularAmortizacionDiferida } = require('../engine/amortizacion');
-const { nuOpts, aplicaIntInternacional } = require('../helpers/banco');
+const { nuOpts, nuOptsDif, aplicaIntInternacional } = require('../helpers/banco');
 const { compraTerceroConReembolso, objetivoBolsilloCop } = require('../helpers/bolsillo');
 const { getCortesCustomMap, cicloConCorte, corteDeCiclo } = require('../helpers/cortes');
 
@@ -89,7 +89,7 @@ module.exports = function(db, { logAction, tjNombre }) {
       }
       const dif = db.prepare('SELECT * FROM diferidas WHERE id=?').get(c.diferida_id);
       if (!dif) return { ...stripTj(c), interes_intl };
-      const amort = calcularAmortizacionDiferida(c.valor_cop, dif.tasa_mv, dif.num_cuotas, dif.fecha_compra, dif.fecha_primer_corte, null, nuOpts(db, c.tarjeta_id));
+      const amort = calcularAmortizacionDiferida(c.valor_cop, dif.tasa_mv, dif.num_cuotas, dif.fecha_compra, dif.fecha_primer_corte, null, nuOptsDif(db, dif));
       const proxima = ciclo
         ? amort.tabla.find(r => r.fechaCorte.slice(0, 7) === ciclo)
         : amort.tabla.find(r => r.fechaCorte >= hoy);
@@ -282,7 +282,7 @@ module.exports = function(db, { logAction, tjNombre }) {
       const dif = c.diferida_id ? db.prepare('SELECT * FROM diferidas WHERE id=?').get(c.diferida_id) : null;
       if (!dif) return null; // sin diferida vinculada no podemos calcular el tope → no cap-eamos
       if (monedaPago === 'USD') return Math.round(((c.valor_usd || 0) / dif.num_cuotas) * 100) / 100;
-      const amort = calcularAmortizacionDiferida(c.valor_cop, dif.tasa_mv, dif.num_cuotas, dif.fecha_compra, dif.fecha_primer_corte, null, nuOpts(db, c.tarjeta_id));
+      const amort = calcularAmortizacionDiferida(c.valor_cop, dif.tasa_mv, dif.num_cuotas, dif.fecha_compra, dif.fecha_primer_corte, null, nuOptsDif(db, dif));
       const cuotaObj = amort.tabla.find(r => r.numCuota === cuotaNum);
       return cuotaObj ? Math.round(cuotaObj.totalPagar) : null;
     }
@@ -713,7 +713,7 @@ module.exports = function(db, { logAction, tjNombre }) {
     }
     // Inmutabilidad: ninguna cuota puede haber caído ya en un ciclo con extracto pagado (revertir
     // reescribiría un cierre real) — mismo criterio que la reprogramación. Incluye el ciclo de la compra.
-    const amortRev = calcularAmortizacionDiferida(d.monto, d.tasa_mv, d.num_cuotas, d.fecha_compra, d.fecha_primer_corte, null, nuOpts(db, d.tarjeta_id));
+    const amortRev = calcularAmortizacionDiferida(d.monto, d.tasa_mv, d.num_cuotas, d.fecha_compra, d.fecha_primer_corte, null, nuOptsDif(db, d));
     const ciclosRev = [...new Set(amortRev.tabla.map(q => q.fechaCorte.slice(0, 7)).concat([c.ciclo]))];
     const cicloPagadoRev = ciclosRev.find(ci => { const e2 = db.prepare("SELECT estado FROM extractos WHERE tarjeta_id=? AND ciclo=?").get(c.tarjeta_id, ci); return e2 && e2.estado === 'pagado'; });
     if (cicloPagadoRev) return res.status(403).json({ error: 'No se puede revertir: la diferida ya tiene cuotas facturadas en el ciclo pagado ' + cicloPagadoRev + '.' });
@@ -739,6 +739,210 @@ module.exports = function(db, { logAction, tjNombre }) {
     revertir();
     logAction('editar', tjNombre(c.tarjeta_id) + 'Diferida revertida a 1 cuota: ' + c.descripcion + ' (' + d.num_cuotas + ' -> 1)');
     res.json({ ok: true, estado: nuevoEstado, bolsillo_consolidado: mb, capped, tope });
+  });
+
+  // ── Reprogramación RETROACTIVA de saldo: "Sellar y Renacer" ─────────────────────────────────────
+  // POST /:id/reprogramar-saldo  Body: { num_cuotas_nuevas (M = total del banco), tasa_mv?, cobrar_intereses? }
+  //
+  // Modela que el banco reprogramó el PLAN de una diferida DESPUÉS de facturar algunas cuotas (ej.
+  // APPLE 12→2 tras el corte de junio). La amortización es MONOLÍTICA/PURA, así que NO se modifica la
+  // diferida en el aire (evaporaría las cuotas pasadas). En su lugar:
+  //   1) SELLAR el pasado: cada cuota YA facturada (ciclo < vigente) se congela como una compra de 1
+  //      cuota (valor_cop = SU capital, ciclo_manual=1, diferida_id=NULL) — 'pagado' si el extracto de
+  //      ese ciclo ya se pagó (la tríada del blindaje ya está: extracto pagado + su abono → syncData
+  //      paso 10 la exime), 'pendiente' si el ciclo cerró impago (inmune al paso 10, monto_abonado=0).
+  //      Registro histórico intocable que sigue cruzando por capital en la conciliación.
+  //   2) RENACER el futuro: el saldo restante (capital puro) nace como diferida HIJA a `remanente`
+  //      cuotas (sin_gracia_cuota1=1 → el banco NO re-otorga la gracia de cuota 1 sobre un saldo en
+  //      curso). La compra ORIGINAL se re-destina a ese saldo vivo (conserva id/fecha/created_at →
+  //      prelación oldest-first) y arranca en el ciclo vigente. Si remanente==1 se reusa la compra
+  //      como 1 sola cuota (diferida_id=NULL), patrón exacto de la APPLE reprogramada 36→2.
+  //   3) BORRAR la diferida original — tras re-vincular/nulificar la compra (orden FK, foreign_keys=ON).
+  //
+  // INVARIANTE: Σ(capital sellado) + saldoRestante == monto original (capital puro) → la deuda global
+  // NO cambia, solo se re-reparte el calendario futuro. El GUARD DE DESTINO (extracto del ciclo VIGENTE
+  // pagado → 403) aplica SIEMPRE; el ciclo ORIGEN cerrado es ESPERADO (por eso no hay candado de cerrado).
+  // Alcance v1 (mismos guards que convertir/revertir): sin grupos, USD pura, abono parcial, tercero con
+  // reembolso ni abonos_diferida. La calibración FINA del interés del saldo queda pendiente de un
+  // extracto real reprogramado → tasa por defecto conservadora (hereda la del plan; editable en la UI).
+  router.post('/:id/reprogramar-saldo', (req, res) => {
+    const { num_cuotas_nuevas, tasa_mv, cobrar_intereses } = req.body || {};
+    const M = parseInt(num_cuotas_nuevas, 10);
+    if (!M || M < 1 || M > 120) return res.status(400).json({ error: 'El número total de cuotas debe ser un entero entre 1 y 120.' });
+    const c = db.prepare('SELECT * FROM compras WHERE id=?').get(req.params.id);
+    if (!c) return res.status(404).json({ error: 'Compra no encontrada' });
+    if (!(c.estado === 'diferida' || c.diferida_id)) return res.status(400).json({ error: 'La compra no es una diferida; no hay plan de cuotas que reprogramar.' });
+    if (!c.diferida_id) return res.status(400).json({ error: 'La compra no tiene un plan de cuotas vinculado.' });
+    if (c.grupo_id) return res.status(403).json({ error: 'Esta compra es parte de una compra dividida; reprograma cada parte por separado.' });
+    if ((c.monto_abonado || 0) > 0) return res.status(400).json({ error: 'La compra tiene un abono parcial registrado; no se puede reprogramar el saldo.' });
+    // Solo se rechaza la compra USD PURA (sin valor en pesos): la amortización de la hija corre sobre el
+    // COP. Una internacional de Visa (valor_cop>0 + USD informativo) SÍ se reprograma.
+    if (c.valor_usd && c.valor_usd > 0 && (!c.valor_cop || c.valor_cop <= 0)) return res.status(400).json({ error: 'Reprogramar compras solo en dólares (sin valor en pesos) no está soportado.' });
+    if (compraTerceroConReembolso(db, c.id)) {
+      return res.status(403).json({ error: 'No se puede reprogramar: esta compra es de un tercero y ya tiene reembolsos registrados. Gestiona o retira esos abonos desde la pestaña Terceros antes de reprogramar.' });
+    }
+    const d = db.prepare('SELECT * FROM diferidas WHERE id=?').get(c.diferida_id);
+    if (!d) return res.status(404).json({ error: 'No se encontró el plan de cuotas vinculado.' });
+    const abonosDif = db.prepare('SELECT COUNT(*) n FROM abonos_diferida WHERE diferida_id=?').get(d.id);
+    if (abonosDif && abonosDif.n > 0) return res.status(400).json({ error: 'El plan de cuotas tiene abonos a capital registrados; no se puede reprogramar el saldo.' });
+
+    const tj = db.prepare('SELECT dia_corte, tasa_mv_diferidas FROM tarjetas WHERE id=?').get(c.tarjeta_id);
+    const diaCorte = (tj && tj.dia_corte) || 30;
+    const cortesMap = getCortesCustomMap(db, c.tarjeta_id);
+    // Ciclo VIGENTE (consciente del corte adelantado) = destino del saldo reprogramado.
+    const V = cicloConCorte(hoyLocal(), diaCorte, cortesMap);
+    // GUARD DE DESTINO (SIEMPRE, ni la IA lo exime): no se inyecta el saldo vivo en un ciclo cuyo
+    // extracto ya se cerró como total pagado.
+    const extV = db.prepare("SELECT estado FROM extractos WHERE tarjeta_id=? AND ciclo=?").get(c.tarjeta_id, V);
+    if (extV && extV.estado === 'pagado') {
+      return res.status(403).json({ error: 'No se puede reprogramar: el extracto del ciclo vigente ' + V + ' ya está pagado.' });
+    }
+    // Idempotencia: si la diferida vinculada YA es un saldo reprogramado anclado al vigente (nació con
+    // sin_gracia_cuota1=1 y su primer corte en V), un 2º POST (doble clic/reintento) crearía un "nieto" y
+    // reemplazaría en silencio el plan recién creado. Se rechaza. Una reprogramación legítima futura tendrá
+    // el vigente avanzado → su primer corte ya no será corte(V) actual → no se bloquea.
+    if (d.sin_gracia_cuota1 && d.fecha_primer_corte === corteDeCiclo(V, diaCorte)) {
+      return res.status(409).json({ error: 'Esta diferida ya es un saldo reprogramado al ciclo vigente ' + V + '. Para cambiarla de nuevo, revierte primero o espera al próximo ciclo.' });
+    }
+
+    // Amortizar la diferida ORIGINAL INTACTA (respeta su propia gracia de cuota 1 vía nuOptsDif).
+    const amortOrig = calcularAmortizacionDiferida(d.monto, d.tasa_mv, d.num_cuotas, d.fecha_compra, d.fecha_primer_corte, null, nuOptsDif(db, d));
+    const tabla = amortOrig.tabla;
+    // k = cuotas ya FACTURADAS (fechaCorte en un ciclo estrictamente anterior al vigente). El corte del
+    // vigente aún no llegó → su cuota NO se sella (es parte del saldo/hija).
+    const k = tabla.filter(q => q.fechaCorte.slice(0, 7) < V).length;
+    if (M <= k) return res.status(400).json({ error: 'El nuevo total (' + M + ') debe ser mayor que las ' + k + ' cuota(s) ya facturadas antes del ciclo vigente ' + V + '.' });
+    const remanente = M - k;
+    // Capital de cada cuota sellada (entero) + saldo restante EXACTO = monto − Σsellado. Así la
+    // invariante Σ(sellado) + saldoRestante == monto se cumple AL PESO (sin drift de redondeo).
+    const sealCapitals = tabla.slice(0, k).map(q => Math.round(q.cuotaCapital));
+    const sumSellado = sealCapitals.reduce((s, x) => s + x, 0);
+    const montoR = Math.round(d.monto * 100) / 100;
+    const saldoRestante = Math.round((montoR - sumSellado) * 100) / 100;
+    if (!(saldoRestante > 0.01)) return res.status(400).json({ error: 'No queda saldo por reprogramar en esta diferida.' });
+
+    // Tasa de la HIJA: por defecto HEREDA la del plan; cobrar_intereses=false la anula (0%); tasa_mv
+    // explícita la sobreescribe (ej. la del extracto reprogramado real).
+    let tasaHija;
+    if (cobrar_intereses === false) tasaHija = 0;
+    else if (tasa_mv != null && tasa_mv !== '') tasaHija = Number(tasa_mv);
+    else tasaHija = d.tasa_mv;
+    if (!(tasaHija >= 0) || tasaHija >= 1) return res.status(400).json({ error: 'La tasa mensual debe ser un decimal entre 0 y 1 (ej. 0.021285).' });
+
+    // Fechas de la HIJA: fecha_primer_corte = corte del vigente (la cuota 1 cae en V). fecha_compra =
+    // ~30 días antes (corte del ciclo ANTERIOR a V) para que la cuota 1 cobre UN mes de interés, NO
+    // (k+1) meses: la fecha REAL de la compra queda k+1 ciclos atrás → inflaría el interés de la cuota 1
+    // sobre TODO el saldo. syncData paso 11 exime a las hijas (sin_gracia_cuota1=1) de re-alinear su
+    // fecha_compra a la de la compra → este anclaje es estable en cada arranque.
+    const fechaPrimerCorteHija = corteDeCiclo(V, diaCorte);
+    let _vy = Number(V.split('-')[0]), _vm = Number(V.split('-')[1]) - 1;
+    if (_vm < 1) { _vm = 12; _vy -= 1; }
+    const fechaCompraHija = corteDeCiclo(_vy + '-' + String(_vm).padStart(2, '0'), diaCorte);
+    // opts de la hija = SIN gracia de cuota 1 (nace con sin_gracia_cuota1=1).
+    const optsHija = nuOptsDif(db, { tarjeta_id: c.tarjeta_id, sin_gracia_cuota1: 1 });
+    // Notas base: quitar el sufijo "Diferida a N cuotas" del plan VIEJO. Sin esto, syncData paso 7
+    // (marca 'diferida' toda compra con "Diferida a N cuotas" en notas) re-marcaría la compra reusada
+    // de 1 cuota como 'diferida' al arrancar → quedaría 'diferida' sin plan y su deuda desaparecería.
+    const notasBase = String(c.notas || '').replace(/\s*\|\s*Diferida a \d+ cuotas/g, '').replace(/^\s*Diferida a \d+ cuotas\s*(\|\s*)?/, '').trim();
+
+    // Bolsillo per-cuota original (COP) por número de cuota.
+    const bolMap = {};
+    db.prepare("SELECT cuota_num, monto FROM bolsillo_cuotas WHERE compra_id=? AND COALESCE(moneda,'COP')='COP'").all(c.id)
+      .forEach(b => { bolMap[b.cuota_num] = Math.round(b.monto); });
+
+    const cicloPagado = (ci) => { const e = db.prepare("SELECT estado FROM extractos WHERE tarjeta_id=? AND ciclo=?").get(c.tarjeta_id, ci); return !!(e && e.estado === 'pagado'); };
+    const esIntl = c.es_internacional ? 1 : 0;
+    const tasaIntl = (c.tasa_intl != null) ? c.tasa_intl : null;
+    let hijaId = null, rollForward = 0, bolsilloLiberado = 0;
+    const sellados = [];
+
+    const reprogramar = db.transaction(() => {
+      // ── 1) SELLAR EL PASADO: k compras de 1 cuota congeladas (mecánica dividir-cuotas) ──
+      for (let i = 0; i < k; i++) {
+        const q = tabla[i];
+        const ciCuota = q.fechaCorte.slice(0, 7);
+        const capital = sealCapitals[i];
+        let estadoSello, abonado = 0, bolSello = 0;
+        if (cicloPagado(ciCuota)) {
+          // Ese extracto ya se pagó → 'pagado' + monto_abonado=capital (tríada completa; el bolsillo de
+          // esa cuota se consumió al pagar). No se roda (la plata fue al banco).
+          estadoSello = 'pagado'; abonado = capital;
+        } else {
+          // Ciclo cerrado IMPAGO → conserva su bolsillo (cap al capital); el exceso (si cubría interés)
+          // se roda al saldo futuro para no perder un peso.
+          const b = bolMap[i + 1] || 0;
+          bolSello = Math.min(b, capital);
+          if (b > bolSello) rollForward += (b - bolSello);
+          estadoSello = (bolSello >= capital && capital > 0) ? 'bolsillo' : (bolSello > 0 ? 'bolsillo_parcial' : 'pendiente');
+        }
+        const r = db.prepare(`INSERT INTO compras (tarjeta_id, fecha, descripcion, valor_cop, persona_id, estado, ciclo, notas, nota_personal, es_internacional, ciclo_manual, tasa_intl, monto_abonado, monto_bolsillo)
+                              VALUES (?,?,?,?,?,?,?,?,?,?,1,?,?,?)`)
+          .run(c.tarjeta_id, c.fecha, c.descripcion + ' (cuota ' + (i + 1) + '/' + M + ')', capital, c.persona_id || null, estadoSello, ciCuota,
+               'Cuota ' + (i + 1) + '/' + M + ' sellada por reprogramacion de saldo (' + d.num_cuotas + '->' + M + ')', c.nota_personal || null, esIntl, tasaIntl, abonado, bolSello);
+        sellados.push(r.lastInsertRowid);
+      }
+
+      // Limpiar el bolsillo per-cuota original de la compra que se reusará para el saldo vivo.
+      db.prepare('DELETE FROM bolsillo_cuotas WHERE compra_id=?').run(c.id);
+
+      if (remanente >= 2) {
+        // ── 2a) RENACER: diferida HIJA a `remanente` cuotas ──
+        const rDif = db.prepare(`INSERT INTO diferidas (tarjeta_id, etiqueta, monto, tasa_mv, num_cuotas, fecha_compra, fecha_primer_corte, estado, notas, sin_gracia_cuota1)
+                                 VALUES (?,?,?,?,?,?,?,?,?,1)`)
+          .run(c.tarjeta_id, c.descripcion, saldoRestante, tasaHija, remanente, fechaCompraHija, fechaPrimerCorteHija, 'activo', 'Saldo reprogramado (' + d.num_cuotas + '->' + M + ')');
+        hijaId = rDif.lastInsertRowid;
+        // Re-vincular la compra ORIGINAL al saldo vivo del vigente (conserva id/fecha/created_at).
+        // valor_usd/tasa_usd=NULL → el saldo es COP puro; evita que syncData paso 1 lo reviva a
+        // ROUND(valor_usd*tasa_usd) en tarjetas no duales. es_internacional/tasa_intl se conservan.
+        db.prepare(`UPDATE compras SET estado='diferida', valor_cop=?, valor_usd=NULL, tasa_usd=NULL, ciclo=?, ciclo_manual=1, diferida_id=?, monto_bolsillo=0, monto_bolsillo_usd=0, notas=? WHERE id=?`)
+          .run(saldoRestante, V, hijaId, (notasBase ? notasBase + ' | ' : '') + 'Diferida a ' + remanente + ' cuotas | Saldo reprogramado ' + d.num_cuotas + '->' + M, c.id);
+        // Trasladar el bolsillo FUTURO (cuotas k+1..N originales) a la hija, re-indexado + rollForward,
+        // cap por cuota (totalPagar), residuo a la última — sin perder un peso.
+        const amortHija = calcularAmortizacionDiferida(saldoRestante, tasaHija, remanente, fechaCompraHija, fechaPrimerCorteHija, null, optsHija);
+        // TODO el bolsillo FUTURO de la diferida original (cuotas k+1..N) + el excedente rodado del pasado.
+        let restante = rollForward;
+        for (let j = k + 1; j <= d.num_cuotas; j++) restante += (bolMap[j] || 0);
+        // Tope global: nunca reservar más que el costo total de la hija (convención "bolsillo <= costo").
+        // Si se fondearon más cuotas de las que quedan (reprogramación a MENOS cuotas), el excedente se
+        // LIBERA (efectivo libre), no se sobre-reserva en la última cuota ni se descarta en silencio.
+        const capacidadHija = amortHija.tabla.reduce((s, q) => s + Math.round(q.totalPagar), 0);
+        if (restante > capacidadHija) { bolsilloLiberado += (restante - capacidadHija); restante = capacidadHija; }
+        for (const qh of amortHija.tabla) {
+          if (restante <= 0) break;
+          const cap = Math.round(qh.totalPagar);
+          const monto = Math.min(restante, cap);
+          if (monto <= 0) continue;
+          db.prepare("INSERT INTO bolsillo_cuotas (compra_id, cuota_num, monto, moneda) VALUES (?,?,?,'COP') ON CONFLICT(compra_id, cuota_num) DO UPDATE SET monto=excluded.monto").run(c.id, qh.numCuota, monto);
+          restante -= monto;
+        }
+        if (restante > 0 && amortHija.tabla.length) {
+          const ult = amortHija.tabla[amortHija.tabla.length - 1].numCuota;
+          db.prepare('UPDATE bolsillo_cuotas SET monto = monto + ? WHERE compra_id=? AND cuota_num=?').run(restante, c.id, ult);
+        }
+        const sum = db.prepare("SELECT COALESCE(SUM(monto),0) t FROM bolsillo_cuotas WHERE compra_id=? AND COALESCE(moneda,'COP')='COP'").get(c.id);
+        db.prepare('UPDATE compras SET monto_bolsillo=? WHERE id=?').run(sum.t, c.id);
+      } else {
+        // ── 2b) RENACER: remanente==1 → reusar la compra original como 1 compra de 1 cuota ──
+        const cReuse = { valor_cop: saldoRestante, es_internacional: esIntl, ciclo: V, fecha: c.fecha, tarjeta_id: c.tarjeta_id, tasa_intl: tasaIntl };
+        const tope = objetivoBolsilloCop(db, cReuse);
+        // TODO el bolsillo futuro (cuotas k+1..N originales) + el excedente rodado → una sola cuota.
+        let bol = rollForward;
+        for (let j = k + 1; j <= d.num_cuotas; j++) bol += (bolMap[j] || 0);
+        // Mismo cap que la rama hija: el excedente sobre el costo real se LIBERA (no se descarta callado).
+        if (tope != null && bol > tope) { bolsilloLiberado += (bol - tope); bol = tope; }
+        const estadoReuse = (tope != null && tope > 0 && bol >= tope) ? 'bolsillo' : (bol > 0 ? 'bolsillo_parcial' : 'pendiente');
+        db.prepare(`UPDATE compras SET estado=?, valor_cop=?, valor_usd=NULL, tasa_usd=NULL, ciclo=?, ciclo_manual=1, diferida_id=NULL, monto_bolsillo=?, monto_bolsillo_usd=0, notas=? WHERE id=?`)
+          .run(estadoReuse, saldoRestante, V, Math.round(bol), (notasBase ? notasBase + ' | ' : '') + 'Saldo reprogramado (cuota ' + M + '/' + M + ')', c.id);
+      }
+
+      // ── 3) Borrar la diferida ORIGINAL (nadie la referencia: la compra se re-vinculó a la hija o se
+      //       nulificó; las selladas nacieron con diferida_id=NULL). Orden FK. ──
+      db.prepare('DELETE FROM diferidas WHERE id=?').run(d.id);
+    });
+    reprogramar();
+
+    logAction('editar', tjNombre(c.tarjeta_id) + 'Reprogramacion de saldo: ' + c.descripcion + ' (' + d.num_cuotas + ' -> ' + M + '; ' + k + ' selladas, saldo ' + Math.round(saldoRestante) + ' a ' + remanente + ')');
+    res.json({ ok: true, k, remanente, saldo_restante: Math.round(saldoRestante), hija_id: hijaId, sellados, ciclo_vigente: V, tasa_hija: tasaHija, bolsillo_liberado: Math.round(bolsilloLiberado) });
   });
 
   // POST /api/compras/aplicar-tasa-intl — acción 1-clic del Asistente de Conciliación IA.

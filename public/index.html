@@ -261,6 +261,10 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '5.1.0': [
+    'Nueva opcion "Reprogramar" en las compras a cuotas: cuando el banco te cambia el numero de cuotas de una compra despues de haberte facturado alguna (por ejemplo, pasarla de 12 a 3 cuotas), ahora la app lo refleja con un clic. Las cuotas que ya te facturaron quedan como estan (tu historial no se toca) y el saldo restante se reparte en las cuotas nuevas. Abrela desde el detalle de la compra a cuotas; incluye una vista previa de como queda y una confirmacion antes de aplicar.',
+    'La reprogramacion respeta el dinero que ya tenias apartado (bolsillo): lo traslada a las cuotas nuevas y, si el plan nuevo cuesta menos, te libera el excedente para que quede disponible.'
+  ],
   '5.0.0': [
     'La casilla "El banco facturó esta compra en el siguiente corte" ahora funciona también con compras a cuotas (diferidas) y con compras divididas entre varias personas, no solo con las de una sola cuota. Igual que antes, la compra (y sus cuotas) quedan contadas en el corte correcto conservando su fecha real.',
     'Arreglado: al editar una compra dividida que usa el canje retrasado, los cambios (por ejemplo la fecha) ahora sí se guardan. Antes la compra se quedaba congelada sin avisar de ningún error.'
@@ -1767,6 +1771,8 @@ function CardResumen({ tarjeta, onDataChange }) {
   const [editAvance, setEditAvance] = useState(null);
   const [showDiferidaModal, setShowDiferidaModal] = useState(false);
   const [editDiferida, setEditDiferida] = useState(null);
+  const [showReprogramarModal, setShowReprogramarModal] = useState(false);
+  const [reproDiferida, setReproDiferida] = useState(null);
   const [showAbonoModal, setShowAbonoModal] = useState(false);
   const [movType, setMovType] = useState('compra');
   const [showAbonoCapitalModal, setShowAbonoCapitalModal] = useState(false);
@@ -2111,6 +2117,20 @@ function CardResumen({ tarjeta, onDataChange }) {
   async function removeDiferida(id) {
     if (!await confirmDialog('Eliminar esta diferida?', { confirmText: 'Eliminar' })) return;
     api('/diferidas/' + id, { method: 'DELETE' }).then(() => { refreshAll(); setSelectedDiferida(null); setDiferidaDetail(null); toast('Diferida eliminada'); });
+  }
+  // Reprogramacion RETROACTIVA de saldo (Sellar y Renacer): opera sobre la COMPRA vinculada.
+  function saveReprograma(data) {
+    const cid = reproDiferida && reproDiferida.compra_id;
+    if (!cid) { toastErr('Esta diferida no tiene una compra vinculada para reprogramar.'); return; }
+    api('/compras/' + cid + '/reprogramar-saldo', { method: 'POST', body: data }).then(r => {
+      if (r && r.error) { toastErr(r.error); return; }
+      setShowReprogramarModal(false); setReproDiferida(null);
+      setSelectedDiferida(null); setDiferidaDetail(null);
+      refreshAll();
+      let msg = 'Saldo reprogramado: ' + r.k + ' cuota(s) sellada(s), saldo a ' + r.remanente + ' cuota(s).';
+      if (r.bolsillo_liberado > 0) msg += ' Se liberaron ' + fmtCOP(r.bolsillo_liberado) + ' del bolsillo.';
+      toast(msg);
+    });
   }
   function loadAvanceDetail(id) {
     if (selectedAvance === id) { setSelectedAvance(null); setAvanceDetail(null); return; }
@@ -3029,6 +3049,11 @@ function CardResumen({ tarjeta, onDataChange }) {
         e('div', { className: 'toolbar' },
           e('div', { className: 'section-title', style: { margin: 0 } }, e(Ico, { name: 'clipboard', size: 18, color: 'var(--accent)' }), ' Amortizacion: ' + diferidaDetail.etiqueta),
           e('div', { className: 'toolbar-spacer' }),
+          (() => {
+            const dd = diferidaDetail;
+            const noElegible = !dd.compra_id ? 'Sin compra vinculada' : dd.grupo_id ? 'Compra dividida: reprograma cada parte por separado' : dd.es_de_tercero ? 'Compra de tercero: gestionala desde Terceros' : dd.es_usd_pura ? 'Compra solo en dolares (no soportado)' : dd.tiene_abono_parcial ? 'Tiene un abono parcial registrado' : null;
+            return e('button', { className: 'btn btn-sm', disabled: !!noElegible, title: noElegible || 'Reprogramar el saldo restante a un nuevo numero de cuotas', style: noElegible ? { opacity: 0.5, cursor: 'not-allowed', marginRight: 6 } : { marginRight: 6 }, onClick: () => { if (noElegible) return; setReproDiferida(dd); setShowReprogramarModal(true); } }, e(Ico, { name: 'refresh', size: 14, color: 'currentColor' }), ' Reprogramar');
+          })(),
           e('button', { className: 'btn btn-sm', onClick: () => { setSelectedDiferida(null); setDiferidaDetail(null); }, style: { fontSize: 18, padding: '4px 10px' } }, '\u{2715}')
         ),
         e('div', { className: 'table-wrap', style: { maxHeight: 500, overflowY: 'auto' } },
@@ -3219,6 +3244,10 @@ function CardResumen({ tarjeta, onDataChange }) {
     // Edit diferida modal
     e(Modal, { show: showDiferidaModal, onClose: () => setShowDiferidaModal(false), title: 'Editar Detalles de Diferida' },
       e(DiferidaForm, { item: editDiferida, tarjeta, onSave: saveDiferida, onCancel: () => setShowDiferidaModal(false) })
+    ),
+    // Reprogramar saldo modal (Sellar y Renacer)
+    e(Modal, { show: showReprogramarModal, onClose: () => { setShowReprogramarModal(false); setReproDiferida(null); }, title: 'Reprogramar Cuotas (saldo restante)' },
+      reproDiferida && e(ReprogramarForm, { item: reproDiferida, tarjeta, onSave: saveReprograma, onCancel: () => { setShowReprogramarModal(false); setReproDiferida(null); } })
     ),
     // Abono a avance modal
     e(Modal, { show: showAbonoModal, onClose: () => setShowAbonoModal(false), title: 'Registrar Abono a Avance' },
@@ -4355,6 +4384,98 @@ function DiferidaForm({ item, tarjeta, onSave, onCancel }) {
     e('div', { className: 'modal-actions' },
       e('button', { type: 'button', className: 'btn', onClick: onCancel }, 'Cancelar'),
       e('button', { type: 'submit', className: 'btn btn-primary' }, 'Guardar')
+    )
+  );
+}
+
+// Reprogramacion RETROACTIVA de saldo ("Sellar y Renacer"). item = diferidaDetail (trae amortizacion,
+// monto, num_cuotas, tasa_mv, etiqueta, compra_id). El preview se calcula en el cliente desde la
+// amortizacion ya cargada + el ciclo vigente de la tarjeta (el POST del backend es la fuente de verdad).
+function ReprogramarForm({ item, tarjeta, onSave, onCancel }) {
+  const vigente = tarjeta.ciclo_vigente || cicloVigente(tarjeta.dia_corte);
+  const tabla = item.amortizacion || [];
+  // k = cuotas ya facturadas (fechaCorte en un ciclo anterior al vigente). Saldo = monto - Σ capital(k).
+  const k = tabla.filter(q => q.fechaCorte.slice(0, 7) < vigente).length;
+  let sumSellado = 0;
+  for (let i = 0; i < k; i++) sumSellado += Math.round(tabla[i].cuotaCapital);
+  const montoR = Math.round((item.monto || 0) * 100) / 100;
+  const saldoRestante = Math.round((montoR - sumSellado) * 100) / 100;
+
+  const [numCuotas, setNumCuotas] = useState(item.num_cuotas || (k + 1));
+  const [cobrarInt, setCobrarInt] = useState(true);
+  const [tasaMv, setTasaMv] = useState(((item.tasa_mv || 0) * 100).toFixed(4)); // hereda la tasa del plan
+  const [confirmando, setConfirmando] = useState(false);
+
+  const M = parseInt(numCuotas, 10);
+  const remanente = (M && M > k) ? (M - k) : 0;
+  const tasaNum = cobrarInt ? (parseFloat(tasaMv) / 100) : 0;
+  const cuotaCapitalAprox = remanente > 0 ? Math.round(saldoRestante / remanente) : 0;
+  const interesPrimerMes = Math.round(saldoRestante * (tasaNum || 0)); // ~1 mes sobre el saldo (aprox)
+
+  let err = null;
+  if (!M || M < 1 || M > 120) err = 'Indica un total de cuotas entre 1 y 120.';
+  else if (M <= k) err = 'El nuevo total debe ser MAYOR que las ' + k + ' cuota(s) ya facturada(s).';
+  else if (!(saldoRestante > 0)) err = 'No queda saldo por reprogramar en esta diferida.';
+  else if (cobrarInt && !(tasaNum >= 0 && tasaNum < 1)) err = 'Tasa invalida (entre 0 y 100% MV).';
+  const valido = !err;
+
+  function aplicar() { onSave({ num_cuotas_nuevas: M, tasa_mv: tasaNum, cobrar_intereses: cobrarInt }); }
+
+  if (confirmando && valido) {
+    return e('div', null,
+      e('div', { style: { fontSize: 13.5, color: 'var(--text-secondary)', lineHeight: 1.6, marginBottom: 16 } },
+        e('div', { style: { display: 'inline-flex', alignItems: 'center', gap: 8, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 8 } },
+          e(Ico, { name: 'alert', size: 18, color: 'var(--warning)' }), 'Confirmar reprogramacion'),
+        e('div', null, item.etiqueta, ':'),
+        e('ul', { style: { margin: '10px 0', paddingLeft: 18 } },
+          e('li', null, 'Se sellaran ', e('strong', null, String(k)), ' cuota(s) ya facturada(s) como registro historico (intocables).'),
+          e('li', null, 'El saldo de ', e('strong', null, fmtCOP(saldoRestante)), ' se reprograma a ', e('strong', null, String(remanente)), ' cuota(s)', cobrarInt ? (' al ' + parseFloat(tasaMv).toFixed(4) + '% MV.') : ' sin intereses.'),
+          e('li', { style: { color: 'var(--text-muted)' } }, 'Crea un plan nuevo y elimina el actual. No es facilmente reversible.')
+        )
+      ),
+      e('div', { className: 'modal-actions' },
+        e('button', { type: 'button', className: 'btn', onClick: () => setConfirmando(false) }, 'Volver'),
+        e('button', { type: 'button', className: 'btn btn-primary', onClick: aplicar }, 'Confirmar reprogramacion')
+      )
+    );
+  }
+
+  return e('form', { onSubmit: (ev) => { ev.preventDefault(); if (valido) setConfirmando(true); } },
+    e('div', { style: { fontSize: 13, color: 'var(--text-muted)', marginBottom: 12, lineHeight: 1.5 } },
+      'Plan actual: ' + (item.num_cuotas || '?') + ' cuotas. Ya facturadas (se sellaran): ' + k + '. Saldo a reprogramar: ' + fmtCOP(saldoRestante) + '.'),
+    e('div', { className: 'form-row' },
+      e('div', { className: 'form-group' },
+        e('label', { className: 'form-label' }, 'Nuevo total de cuotas'),
+        e('input', { type: 'number', className: 'form-input', min: k + 1, max: 120, value: numCuotas, onChange: ev => setNumCuotas(ev.target.value), required: true }),
+        e('div', { style: { fontSize: 11, color: 'var(--text-muted)', marginTop: 3 } }, 'Incluye las ' + k + ' ya facturada(s). Ej: banco 12->2 con 1 facturada => escribe 2.')
+      ),
+      e('div', { className: 'form-group' },
+        e('label', { className: 'form-label' }, 'Tasa Mensual (MV %)'),
+        e('input', { type: 'number', step: '0.0001', className: 'form-input', value: tasaMv, onChange: ev => setTasaMv(ev.target.value), disabled: !cobrarInt, style: !cobrarInt ? { opacity: 0.6, cursor: 'not-allowed' } : {} })
+      )
+    ),
+    e('div', { className: 'form-group' },
+      e('label', { style: { display: 'flex', alignItems: 'center', gap: 8, fontSize: 13.5, cursor: 'pointer' } },
+        e('input', { type: 'checkbox', checked: cobrarInt, onChange: ev => setCobrarInt(ev.target.checked) }),
+        'Cobrar intereses sobre el saldo reprogramado')
+    ),
+    (() => {
+      if (err) return e('div', { style: { marginTop: 4, padding: '10px 12px', background: 'var(--danger-bg)', color: 'var(--danger)', borderRadius: 8, fontSize: 13, lineHeight: 1.4 } }, err);
+      return e('div', { style: { marginTop: 4, padding: '12px', background: 'var(--bg-tertiary)', borderRadius: 8, fontSize: 13, lineHeight: 1.7 } },
+        e('div', { style: { fontWeight: 600, marginBottom: 6 } }, 'Vista previa'),
+        e('div', null, 'Cuotas selladas (facturadas): ', e('strong', null, String(k))),
+        e('div', null, 'Saldo a reprogramar: ', e('strong', null, fmtCOP(saldoRestante))),
+        e('div', null, 'Nuevas cuotas del saldo: ', e('strong', null, String(remanente)), ' de ~', e('strong', null, fmtCOP(cuotaCapitalAprox)), ' de capital c/u'),
+        cobrarInt
+          ? e('div', { style: { color: 'var(--text-muted)' } }, 'Interes 1a cuota (~1 mes, aprox): ~' + fmtCOP(interesPrimerMes) + '. El detalle exacto se calcula al aplicar.')
+          : e('div', { style: { color: 'var(--text-muted)' } }, 'Sin intereses (0%).')
+      );
+    })(),
+    e('div', { style: { fontSize: 11.5, color: 'var(--text-muted)', marginTop: 10, lineHeight: 1.5 } },
+      'El interes que reliquida el banco puede variar; ajusta la tasa con tu extracto reprogramado real cuando llegue.'),
+    e('div', { className: 'modal-actions' },
+      e('button', { type: 'button', className: 'btn', onClick: onCancel }, 'Cancelar'),
+      e('button', { type: 'submit', className: 'btn btn-primary', disabled: !valido }, 'Reprogramar')
     )
   );
 }

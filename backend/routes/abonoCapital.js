@@ -3,7 +3,7 @@ const { Router } = require('express');
 const { hoyLocal } = require('../helpers/dates');
 const { calcularAmortizacionAvance } = require('../engine/amortizacion');
 const { calcularAmortizacionDiferida } = require('../engine/amortizacion');
-const { nuOpts, avanceOpts } = require('../helpers/banco');
+const { nuOpts, nuOptsDif, avanceOpts } = require('../helpers/banco');
 const { liberarBolsilloDiferida, liberarBolsilloAvance } = require('../helpers/bolsillo');
 
 module.exports = function(db, { logAction, tjNombre }) {
@@ -25,7 +25,7 @@ module.exports = function(db, { logAction, tjNombre }) {
       .sort((a, b) => a.fecha_compra.localeCompare(b.fecha_compra) || (a.created_at || '').localeCompare(b.created_at || ''))
       .forEach(d => {
         const abonosDif = db.prepare('SELECT * FROM abonos_diferida WHERE diferida_id=? ORDER BY fecha').all(d.id);
-        const amort = calcularAmortizacionDiferida(d.monto, d.tasa_mv, d.num_cuotas, d.fecha_compra, d.fecha_primer_corte, abonosDif, nuOpts(db, d.tarjeta_id));
+        const amort = calcularAmortizacionDiferida(d.monto, d.tasa_mv, d.num_cuotas, d.fecha_compra, d.fecha_primer_corte, abonosDif, nuOptsDif(db, d));
         const saldo = amort.resumen.saldoActual;
         if (saldo > 0) {
           const bolDif = db.prepare('SELECT COALESCE(SUM(COALESCE(monto_bolsillo,0)),0) AS t FROM compras WHERE diferida_id=? AND persona_id IS NULL').get(d.id);

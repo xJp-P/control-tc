@@ -2,7 +2,7 @@
 const { Router } = require('express');
 const { hoyLocal } = require('../helpers/dates');
 const { calcularAmortizacionAvance, calcularAmortizacionDiferida } = require('../engine/amortizacion');
-const { nuOpts, avanceOpts } = require('../helpers/banco');
+const { nuOpts, nuOptsDif, avanceOpts } = require('../helpers/banco');
 const { calcExtracto } = require('../engine/extracto');
 
 module.exports = function(db, { logAction, tjNombre }) {
@@ -28,7 +28,7 @@ module.exports = function(db, { logAction, tjNombre }) {
 
     const diferidasAll = db.prepare("SELECT * FROM diferidas WHERE tarjeta_id=? AND estado='activo'").all(tarjeta_id);
     diferidasAll.forEach(d => {
-      const amort = calcularAmortizacionDiferida(d.monto, d.tasa_mv, d.num_cuotas, d.fecha_compra, d.fecha_primer_corte, null, nuOpts(db, d.tarjeta_id));
+      const amort = calcularAmortizacionDiferida(d.monto, d.tasa_mv, d.num_cuotas, d.fecha_compra, d.fecha_primer_corte, null, nuOptsDif(db, d));
       amort.tabla.forEach(r => ciclosConDeuda.add(r.fechaCorte.slice(0, 7)));
     });
 

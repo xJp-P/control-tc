@@ -5,7 +5,7 @@
 // Conciliación (services/movimientos.js). Recibe `db` explícitamente.
 const { daysBetween, addDays } = require('../helpers/dates');
 const { calcularAmortizacionAvance, calcularAmortizacionDiferida } = require('./amortizacion');
-const { esNuBank, nuOpts, avanceOpts, isDualExtracto, aplicaIntInternacional } = require('../helpers/banco');
+const { esNuBank, nuOpts, nuOptsDif, avanceOpts, isDualExtracto, aplicaIntInternacional } = require('../helpers/banco');
 
 function calcExtracto(db, tarjetaId, cicloStr, incluirPagadas) {
   const tj = db.prepare('SELECT * FROM tarjetas WHERE id=?').get(tarjetaId);
@@ -71,7 +71,7 @@ function calcExtracto(db, tarjetaId, cicloStr, incluirPagadas) {
   const diferidasActivas = db.prepare(diferidasQuery).all(tarjetaId);
   diferidasActivas.forEach(d => {
     const abonosDif = db.prepare('SELECT * FROM abonos_diferida WHERE diferida_id=? ORDER BY fecha').all(d.id);
-    const amort = calcularAmortizacionDiferida(d.monto, d.tasa_mv, d.num_cuotas, d.fecha_compra, d.fecha_primer_corte, abonosDif, nuOpts(db, d.tarjeta_id));
+    const amort = calcularAmortizacionDiferida(d.monto, d.tasa_mv, d.num_cuotas, d.fecha_compra, d.fecha_primer_corte, abonosDif, nuOptsDif(db, d));
     const cuotaIdx = amort.tabla.findIndex(r => r.fechaCorte.slice(0, 7) >= cicloStr);
     if (cuotaIdx !== -1) {
       saldoTotalDiferidas += (cuotaIdx > 0 ? Math.max(0, amort.tabla[cuotaIdx - 1].saldoInicial - amort.tabla[cuotaIdx - 1].cuotaCapital) : d.monto);
