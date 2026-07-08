@@ -261,6 +261,11 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '5.2.0': [
+    'El Asistente IA ahora reconoce las compras a cuotas que te faltaba registrar: cuando el extracto muestra una cuota tipo "2 de 36" de una compra a cuotas que no tienes en la app, te la propone como una diferida COMPLETA para crearla con un clic — calculando por ti el valor total de la compra, el numero de cuotas y el mes en que empezo. Antes la registraba mal, como una compra suelta por el valor de una sola cuota y en el mes equivocado.',
+    'Ese mismo asistente evita crear duplicados: si la compra a cuotas ya existe en la app (aunque este saldada o sus cuotas caigan en otro mes), no te la vuelve a proponer.',
+    'En el modo Demo del Asistente, las acciones de ejemplo ya no se aplican a tus datos: antes, darle "Aplicar" a un resultado de ejemplo podia modificar tu informacion real.'
+  ],
   '5.1.0': [
     'Nueva opcion "Reprogramar" en las compras a cuotas: cuando el banco te cambia el numero de cuotas de una compra despues de haberte facturado alguna (por ejemplo, pasarla de 12 a 3 cuotas), ahora la app lo refleja con un clic. Las cuotas que ya te facturaron quedan como estan (tu historial no se toca) y el saldo restante se reparte en las cuotas nuevas. Abrela desde el detalle de la compra a cuotas; incluye una vista previa de como queda y una confirmacion antes de aplicar.',
     'La reprogramacion respeta el dinero que ya tenias apartado (bolsillo): lo traslada a las cuotas nuevas y, si el plan nuevo cuesta menos, te libera el excedente para que quede disponible.'
@@ -5952,7 +5957,7 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
     api('/compras?tarjeta_id=' + Number(tarjetaId)).then(l => setComprasTj(Array.isArray(l) ? l : [])).catch(() => setComprasTj([]));
   }, [tarjetaId]);
   // Operaciones que la app puede aplicar automaticamente (mapean a endpoints existentes).
-  const AUTO = { crear_compra: 1, editar_valor: 1, mover_ciclo: 1, reprogramar_cuotas: 1, convertir_a_diferida: 1, actualizar_tasa_intl: 1, actualizar_fecha_pago: 1, reversar_compra: 1 };
+  const AUTO = { crear_compra: 1, editar_valor: 1, mover_ciclo: 1, reprogramar_cuotas: 1, convertir_a_diferida: 1, crear_diferida_omitida: 1, actualizar_tasa_intl: 1, actualizar_fecha_pago: 1, reversar_compra: 1 };
 
   // Formatea una tasa mensual decimal a porcentaje colombiano (0.020849 -> "2,0849%").
   const fmtPct = (x) => (x == null || x === '') ? '—' : (Number(x) * 100).toFixed(4).replace('.', ',') + '%';
@@ -5964,7 +5969,7 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
       compra_omitida: 'Compra omitida', monto_erroneo: 'Monto erróneo',
       clasificacion_incorrecta: 'Clasificación incorrecta', cuota_reprogramada: 'Cuota reprogramada',
       tasa_intl_incorrecta: 'Tasa internacional incorrecta', fecha_pago_movida: 'Fecha de pago movida',
-      reverso_detectado: 'Reverso detectado', mover_ciclo: 'Mover de ciclo', otro: 'Otra discrepancia'
+      reverso_detectado: 'Reverso detectado', mover_ciclo: 'Mover de ciclo', diferida_omitida: 'Diferida omitida', otro: 'Otra discrepancia'
     };
     if (map[tipo]) return map[tipo];
     const s = String(tipo).replace(/_/g, ' ').trim();
@@ -5977,7 +5982,7 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
       crear_compra: 'Crear compra', editar_valor: 'Editar valor', mover_ciclo: 'Mover de ciclo',
       reprogramar_cuotas: 'Reprogramar cuotas', actualizar_tasa_intl: 'Actualizar tasa internacional',
       actualizar_fecha_pago: 'Actualizar fecha de pago', fecha_corte_movida: 'Aplicar corte adelantado',
-      convertir_a_diferida: 'Convertir a diferida', reversar_compra: 'Reversar compra', ninguna: 'Sin acción'
+      convertir_a_diferida: 'Convertir a diferida', crear_diferida_omitida: 'Crear diferida omitida', reversar_compra: 'Reversar compra', ninguna: 'Sin acción'
     };
     if (map[op]) return map[op];
     const s = String(op).replace(/_/g, ' ').trim();
@@ -5989,6 +5994,11 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
   // distinta y no hay un id único (la IA a veces devuelve compra_id null → PUT /api/compras/null).
   // Detección: (a) la compra objetivo tiene grupo_id, o (b) su descripción cruza con compras agrupadas.
   function afectaGrupo(d) {
+    // Las acciones que CREAN un recurso nuevo (no operan sobre una compra existente por id) nunca
+    // afectan un grupo: crear_diferida_omitida (diferida standalone) y crear_compra (compra nueva). Sin
+    // este corte, la rama por descripción bloquearía de más si el nombre coincide con un grupo de otro ciclo.
+    const opAG = d.accion_sugerida ? d.accion_sugerida.operacion : '';
+    if (opAG === 'crear_diferida_omitida' || opAG === 'crear_compra') return false;
     const p = paramsDe(d);
     const cid = p.compra_id != null ? p.compra_id : d.compra_id;
     if (cid != null && String(cid) !== 'null') {
@@ -6037,6 +6047,21 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
       if (rv.es_tercero) filas.push(['Saldo a favor', 'se crea ' + fmtCOP(rv.reembolso) + ' a favor del tercero (ya te había reembolsado)']);
       return { titulo: 'Reversar compra (devolución del banco)', endpoint: 'POST /api/compras/' + cid + '/reversar', filas };
     }
+    if (op === 'crear_diferida_omitida') {
+      const M = Number(p.num_cuotas) || 0, N = Number(p.cuota_actual) || 1, cap = Number(p.capital) || 0;
+      const total = Math.round(cap * M);
+      // Ciclo de origen = ciclo conciliado - (N-1) meses (solo para el preview; el backend re-deriva).
+      let co = ciclo;
+      try { const pr = String(ciclo).split('-'); let y = Number(pr[0]), mm = Number(pr[1]) - (N - 1); while (mm < 1) { mm += 12; y -= 1; } co = y + '-' + String(mm).padStart(2, '0'); } catch (e) {}
+      return { titulo: 'Crear diferida omitida (compra a cuotas que la app no tiene)', endpoint: 'POST /api/diferidas/crear-omitida', filas: [
+        ['Descripcion', p.descripcion || d.descripcion || ''],
+        ['Capital por cuota (extracto)', fmtCOP(cap)],
+        ['Numero de cuotas', String(M)],
+        ['Valor total (capital x cuotas)', fmtCOP(total)],
+        ['Ciclo de origen (calculado)', co],
+        ['Cobra intereses', (p.cobrar_intereses === false ? 'no' : 'si')]
+      ] };
+    }
     return { titulo: op, endpoint: '', filas: [] };
   }
 
@@ -6045,6 +6070,9 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
     const d = accionSel.d, idx = accionSel.idx;
     const op = d.accion_sugerida ? d.accion_sugerida.operacion : '';
     const p = paramsDe(d);
+    // Modo Demo: el análisis es un EJEMPLO fabricado (mock, sin API key). NUNCA escribir en la BD real
+    // aunque el usuario confirme (evita sembrar datos de ejemplo como "SUSCRIPCION DEMO" en su tarjeta).
+    if (isMock) { toast('Modo Demo: este es un resultado de ejemplo; las acciones no se aplican.'); setAccionSel(null); return; }
     setAplicando(true); setErrAplicar('');
     try {
       if (!tarjetaId) throw new Error('No hay tarjeta seleccionada.');
@@ -6119,6 +6147,15 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
         const cid = p.compra_id != null ? p.compra_id : d.compra_id;
         if (!cid) throw new Error('No se identifico la compra a reversar.');
         const r = await api('/compras/' + cid + '/reversar', { method: 'POST' });
+        if (r && r.error) throw new Error(r.error);
+      } else if (op === 'crear_diferida_omitida') {
+        // Diferida OMITIDA: crea una diferida standalone. El backend deriva total (capital x cuotas),
+        // ciclo y fechas de origen; desde_conciliacion por consistencia (no hay candado que eximir).
+        const cap = Number(p.capital);
+        if (!(Number(p.num_cuotas) >= 2)) throw new Error('Falta el numero de cuotas (2 o mas).');
+        if (!(Number(p.cuota_actual) >= 1)) throw new Error('Falta la cuota actual (N de M).');
+        if (!(cap > 0)) throw new Error('Falta el capital de la cuota.');
+        const r = await api('/diferidas/crear-omitida', { method: 'POST', body: { tarjeta_id: Number(tarjetaId), descripcion: p.descripcion || d.descripcion || 'Diferida (conciliacion)', capital: cap, num_cuotas: Number(p.num_cuotas), cuota_actual: Number(p.cuota_actual), ciclo: ciclo, cobrar_intereses: p.cobrar_intereses !== false, desde_conciliacion: true } });
         if (r && r.error) throw new Error(r.error);
       } else {
         throw new Error('Operacion no aplicable automaticamente.');

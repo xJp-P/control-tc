@@ -99,6 +99,7 @@ function construirPrompt(movimientos, textoExtracto, bancoDoc, contextoUsuario, 
     '4b. Para una compra a cuotas (diferida) que el banco reprogramó a un número distinto de cuotas (ej. de 36 a 2), usa tipo="cuota_reprogramada" y accion_sugerida.operacion="reprogramar_cuotas" con parametros { compra_id, num_cuotas } si las cuotas quedan uniformes, o { compra_id, cuotas: [{ ciclo: "YYYY-MM", monto: 0 }] } si quedan irregulares (montos o fechas distintos).',
     '4c. Para una compra que en la app figura de CONTADO (1 cuota) pero el extracto la muestra DIFERIDA a N cuotas (ej. "1 de 36"), usa tipo="cuota_reprogramada" y accion_sugerida.operacion="convertir_a_diferida" con parametros { compra_id, num_cuotas: N, cobrar_intereses: true } (cobrar_intereses=false solo si el extracto factura su cuota de este mes con interes $0). NO uses crear_compra: la compra ya existe, solo cambia su plan de cuotas.',
     '4d. FECHAS DEL EXTRACTO: lee la FECHA DE CORTE (cierre del periodo) y la FECHA LIMITE DE PAGO impresas en el extracto y devuelvelas en los campos raiz "fecha_corte_extracto" y "fecha_pago_extracto" (formato YYYY-MM-DD; null si no las ves claras). Los movimientos que recibes ya traen la fecha_corte y fecha_pago que CALCULO la app: si la del extracto no coincide, explicalo en la conciliacion. Si la fecha de corte real es ANTERIOR a la calculada, razona que las compras hechas DESPUES del corte real quedaron fuera de este extracto y entran al del proximo mes. NO inventes fechas: el backend hara la comparacion exacta y armara las acciones.',
+    '4e. DIFERIDA OMITIDA (una compra a CUOTAS que la app NO tiene): si el extracto muestra una linea de cuota con patron "N de M" (ej. "2 de 36", "3/12") de una compra que NO aparece en NINGUN movimiento de la app (ni en "compras" ni en "diferidas" hay una con esa descripcion), NO la reportes como compra_omitida con crear_compra — eso crearia una compra de UNA sola cuota por el valor de una cuota, en el ciclo equivocado. En su lugar usa tipo="diferida_omitida" y accion_sugerida.operacion="crear_diferida_omitida" con parametros { descripcion, capital: <el valor de ESA linea del extracto, que es el capital de UNA cuota>, num_cuotas: M, cuota_actual: N, cobrar_intereses: true }. El backend calculara el valor TOTAL (capital x M) y el ciclo/fechas de ORIGEN de la compra, y creara la diferida COMPLETA. IMPORTANTE: usa esto SOLO cuando la compra a cuotas es 100% inexistente en la app. Si la compra YA existe (aunque figure de contado o con otro valor) usa monto_erroneo / convertir_a_diferida / reprogramar_cuotas segun corresponda; NUNCA propongas crear_diferida_omitida para algo que la app ya tiene (crearia un duplicado).',
     ...reglasEspecificas,
     '5. Devuelve EXCLUSIVAMENTE un objeto JSON valido con EXACTAMENTE esta forma, sin texto adicional:',
     JSON.stringify({
@@ -107,7 +108,7 @@ function construirPrompt(movimientos, textoExtracto, bancoDoc, contextoUsuario, 
       fecha_corte_extracto: 'YYYY-MM-DD',
       fecha_pago_extracto: 'YYYY-MM-DD',
       pagos_detectados: [{ fecha: 'YYYY-MM-DD', monto: 0, etiqueta_extracto: 'string', coincide_con_pago_app: true }],
-      discrepancias: [{ tipo: 'compra_omitida|monto_erroneo|clasificacion_incorrecta|cuota_reprogramada|otro', descripcion: 'string', valor_extracto: 0, valor_app: 0, compra_id: null, severidad: 'alta|media|baja', accion_sugerida: { operacion: 'crear_compra|editar_valor|convertir_a_diferida|reprogramar_cuotas|mover_ciclo|reversar_compra|ninguna', parametros: {} } }]
+      discrepancias: [{ tipo: 'compra_omitida|monto_erroneo|clasificacion_incorrecta|cuota_reprogramada|diferida_omitida|otro', descripcion: 'string', valor_extracto: 0, valor_app: 0, compra_id: null, severidad: 'alta|media|baja', accion_sugerida: { operacion: 'crear_compra|editar_valor|convertir_a_diferida|reprogramar_cuotas|crear_diferida_omitida|mover_ciclo|reversar_compra|ninguna', parametros: {} } }]
     })
   ];
   if (contextoUsuario && String(contextoUsuario).trim()) {
@@ -322,6 +323,42 @@ module.exports = function(db, ctx) {
             }
           }
         });
+      }
+      // ── Guard anti-DUPLICADO de 'diferida_omitida' (candado determinista) ──────────────────────────
+      // crear_diferida_omitida solo debe crear una diferida 100% inexistente. Si la app YA tiene una
+      // diferida (misma descripcion difusa + capital de cuota ±$2) o una compra del mismo comercio cuyo
+      // total cuadra con la cuota o con capital×M, la propuesta es un FALSO POSITIVO (seria un duplicado):
+      // ese caso es monto_erroneo / convertir_a_diferida / reprogramar_cuotas. Se descarta aunque el LLM
+      // la haya propuesto → nunca se crea un duplicado por esta via.
+      if (Array.isArray(resu.discrepancias) && mv && mv.tarjeta && mv.tarjeta.id) {
+        // Candado ROBUSTO: consulta TODAS las diferidas de la tarjeta (activas Y liquidadas, de CUALQUIER
+        // ciclo) — no solo las cuotas del ciclo conciliado — para no dejar pasar un duplicado de una
+        // diferida ya existente que este liquidada o cuya cuota de este mes quedo bucketeada en un ciclo
+        // vecino (corte adelantado / mover_ciclo). comprasMv2 (compras del ciclo) cubre las compras sueltas.
+        const difsCard = db.prepare("SELECT etiqueta, monto, num_cuotas FROM diferidas WHERE tarjeta_id=? AND estado IN ('activo','liquidado')").all(mv.tarjeta.id);
+        const comprasMv2 = (mv && Array.isArray(mv.compras)) ? mv.compras : [];
+        let descartadasDup = 0;
+        resu.discrepancias = resu.discrepancias.filter(d => {
+          if (!d || d.tipo !== 'diferida_omitida') return true;
+          const p = (d.accion_sugerida && d.accion_sugerida.parametros) || {};
+          const desc = normalizarDesc(String(p.descripcion || d.descripcion || ''));
+          const capP = Number(p.capital);
+          if (!desc || !(capP > 0)) return true; // sin datos para verificar → se deja (el endpoint valida)
+          const M2 = Number(p.num_cuotas) || 1;
+          const total = Math.round(capP * M2); // valor total que tendria la diferida propuesta
+          // Duplicado si ya existe una diferida del mismo comercio (Dice≥0.55) cuyo monto TOTAL cuadra
+          // (== capital×M) o cuya cuota (monto/num_cuotas) cuadra con el capital de la linea (±$2).
+          const dupDif = difsCard.some(x => dice(normalizarDesc(String(x.etiqueta || '')), desc) >= 0.55 &&
+            (Math.abs(Number(x.monto) - total) <= 2 || (x.num_cuotas > 0 && Math.abs(Number(x.monto) / x.num_cuotas - capP) <= 2)));
+          // O una compra del mismo comercio cuyo TOTAL == el total de la diferida propuesta (es el MISMO
+          // movimiento ya registrado → seria convertir_a_diferida, no un duplicado). NO se compara contra
+          // el capital de UNA cuota (rama debil): descartaria una diferida nueva legitima de un comercio
+          // recurrente cuyo valor por cuota coincida con una compra suelta del mismo comercio.
+          const dupCompra = comprasMv2.some(x => Math.abs(Number(x.total) - total) <= 2 && dice(normalizarDesc(String(x.descripcion || '')), desc) >= 0.55);
+          if (dupDif || dupCompra) { descartadasDup++; return false; }
+          return true;
+        });
+        if (descartadasDup > 0) resu.diferidas_omitidas_descartadas = descartadasDup;
       }
       // ── Discrepancia de TASA INTERNACIONAL (cruce determinista, MULTI-MES / split del día 1°) ──
       // La Tasa de Usura cambia el 1° de cada mes: un ciclo que abarca dos meses puede traer DOS tasas.

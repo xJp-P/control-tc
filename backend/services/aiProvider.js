@@ -77,7 +77,7 @@ function mockResultado(mockContexto) {
     pagos_detectados: [
       { fecha: mv.fecha_corte || '', monto: pmApp, etiqueta_extracto: 'ABONO SUCURSAL VIRTUAL', coincide_con_pago_app: true }
     ],
-    discrepancias: ej ? [{
+    discrepancias: (ej ? [{
       tipo: 'monto_erroneo',
       descripcion: 'Demo: la compra "' + (ej.descripcion || 'EJEMPLO') + '" aparece con un valor distinto en el extracto.',
       valor_extracto: Math.round((ej.total || 0) * 1.05),
@@ -85,7 +85,17 @@ function mockResultado(mockContexto) {
       compra_id: ej.id || null,
       severidad: 'media',
       accion_sugerida: { operacion: 'editar_valor', parametros: { compra_id: ej.id || null, valor_cop: Math.round((ej.total || 0) * 1.05) } }
-    }] : []
+    }] : []).concat([{
+      // Demo de una DIFERIDA OMITIDA: el extracto trae una cuota "N de M" de una compra a cuotas que la
+      // app no tiene. La app calculara el total (capital x M) y el ciclo/fechas de origen al aplicar.
+      tipo: 'diferida_omitida',
+      descripcion: 'Demo: el extracto muestra una compra a cuotas "SUSCRIPCION DEMO (2 de 12)" que la app no tiene registrada.',
+      valor_extracto: 50000,
+      valor_app: null,
+      compra_id: null,
+      severidad: 'media',
+      accion_sugerida: { operacion: 'crear_diferida_omitida', parametros: { descripcion: 'SUSCRIPCION DEMO', capital: 50000, num_cuotas: 12, cuota_actual: 2, cobrar_intereses: true } }
+    }])
   };
 }
 

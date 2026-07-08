@@ -1,7 +1,7 @@
 // backend/routes/diferidas.js — CRUD /api/diferidas
 const { Router } = require('express');
 const { hoyLocal, calcCicloLocal } = require('../helpers/dates');
-const { cicloConCorte, getCortesCustomMap } = require('../helpers/cortes');
+const { cicloConCorte, getCortesCustomMap, corteDeCiclo } = require('../helpers/cortes');
 const { calcularAmortizacionDiferida } = require('../engine/amortizacion');
 const { nuOpts, nuOptsDif } = require('../helpers/banco');
 const { compraTerceroConReembolso } = require('../helpers/bolsillo');
@@ -83,13 +83,58 @@ module.exports = function(db, { logAction, tjNombre }) {
     res.json({ id: r.lastInsertRowid });
   });
 
+  // POST /crear-omitida — crea una diferida OMITIDA como STANDALONE (sin compra vinculada, estilo
+  // RappiCard) a partir de una CUOTA "N de M" que el Asistente IA detectó en el extracto y la app NO
+  // tenía. Deriva de forma DETERMINISTA el valor TOTAL y el ciclo/fechas de ORIGEN de la compra a partir
+  // de { capital (el de la línea = 1 cuota), num_cuotas M, cuota_actual N, ciclo conciliado }. Al ser
+  // standalone NO siembra ninguna compra en ciclos pasados/pagados: solo PROYECTA (el dashboard la cuenta
+  // vía saldoActual + deudaImpaga, que excluyen las cuotas ya facturadas) → seguro aunque su origen sea un
+  // ciclo pagado; no toca ningún extracto. Por eso NO lleva candado de ciclo. desde_conciliacion se acepta
+  // por consistencia con las demás acciones IA (aquí no hay candado que eximir).
+  router.post('/crear-omitida', (req, res) => {
+    const { tarjeta_id, descripcion, capital, num_cuotas, cuota_actual, ciclo, cobrar_intereses } = req.body || {};
+    const M = parseInt(num_cuotas, 10);
+    const N = parseInt(cuota_actual, 10);
+    const cap = Number(capital);
+    if (!tarjeta_id) return res.status(400).json({ error: 'Falta tarjeta_id.' });
+    if (!descripcion || !String(descripcion).trim()) return res.status(400).json({ error: 'Falta la descripción.' });
+    if (!M || M < 2 || M > 120) return res.status(400).json({ error: 'El número de cuotas debe ser un entero entre 2 y 120.' });
+    if (!N || N < 1 || N > M) return res.status(400).json({ error: 'La cuota actual debe estar entre 1 y ' + M + '.' });
+    if (!(cap > 0)) return res.status(400).json({ error: 'El capital de la cuota debe ser mayor que 0.' });
+    if (!ciclo || !/^\d{4}-\d{2}$/.test(String(ciclo))) return res.status(400).json({ error: 'Falta el ciclo conciliado (YYYY-MM).' });
+    const tj = db.prepare('SELECT dia_corte, tasa_mv_diferidas FROM tarjetas WHERE id=?').get(tarjeta_id);
+    if (!tj) return res.status(404).json({ error: 'Tarjeta no encontrada.' });
+    const diaCorte = tj.dia_corte || 30;
+    // Aritmética de ciclos (YYYY-MM) sin Date. Ciclo de ORIGEN = ciclo conciliado − (N−1) meses:
+    // la cuota N se factura N−1 meses después de la cuota 1.
+    const restarMeses = (cic, n) => { const p = String(cic).split('-'); let y = Number(p[0]), m = Number(p[1]) - n; while (m < 1) { m += 12; y -= 1; } return y + '-' + String(m).padStart(2, '0'); };
+    const cicloOrigen = restarMeses(ciclo, N - 1);
+    const fechaPrimerCorte = corteDeCiclo(cicloOrigen, diaCorte);
+    // fecha_compra ~30 días antes del primer corte (corte del ciclo anterior al de origen) → la cuota 1
+    // cobra ~1 mes de interés, no un período inflado (mismo criterio que la hija de reprogramar-saldo).
+    const fechaCompra = corteDeCiclo(restarMeses(cicloOrigen, 1), diaCorte);
+    const total = Math.round(cap * M);
+    const tasaMv = cobrar_intereses ? ((tj.tasa_mv_diferidas) || 0) : 0;
+    const notas = 'Diferida omitida (conciliación): detectada en la cuota ' + N + '/' + M + ' del ciclo ' + ciclo + '; origen ' + cicloOrigen + '.';
+    const r = db.prepare(`INSERT INTO diferidas (tarjeta_id, etiqueta, monto, tasa_mv, num_cuotas, fecha_compra, fecha_primer_corte, estado, notas)
+                          VALUES (?,?,?,?,?,?,?,?,?)`)
+      .run(tarjeta_id, String(descripcion).trim(), total, tasaMv, M, fechaCompra, fechaPrimerCorte, 'activo', notas);
+    const fmt = new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(total);
+    logAction('crear', tjNombre(tarjeta_id) + 'Diferida omitida creada (conciliación): ' + descripcion + ' por ' + fmt + ' a ' + M + ' cuotas (origen ' + cicloOrigen + ')');
+    res.json({ ok: true, id: r.lastInsertRowid, total, num_cuotas: M, ciclo_origen: cicloOrigen, fecha_compra: fechaCompra, fecha_primer_corte: fechaPrimerCorte, tasa_mv: tasaMv });
+  });
+
   // Helper: chequear inmutabilidad de una diferida.
   // Bloquea si el extracto del ciclo de origen (fecha_compra) está pagado.
   function validateDiferidaMutable(difRow) {
     if (!difRow) return null;
     const tj = db.prepare('SELECT dia_corte FROM tarjetas WHERE id=?').get(difRow.tarjeta_id);
     const diaCorte = tj ? tj.dia_corte : 30;
-    const cicloOrigen = calcCicloLocal(difRow.fecha_compra, diaCorte);
+    // Ciclo de ORIGEN = el del PRIMER CORTE (donde se factura la cuota 1). Se deriva de fecha_primer_corte
+    // (siempre cae dentro del ciclo de origen), NO de fecha_compra: en las diferidas OMITIDAS la fecha_compra
+    // se fija ~30 dias antes (corte del mes anterior), y calcCicloLocal la ubicaria un mes antes del origen
+    // real → el candado inspeccionaria el extracto equivocado. Fallback a fecha_compra si no hay primer corte.
+    const cicloOrigen = difRow.fecha_primer_corte ? String(difRow.fecha_primer_corte).slice(0, 7) : calcCicloLocal(difRow.fecha_compra, diaCorte);
     const ext = db.prepare("SELECT estado FROM extractos WHERE tarjeta_id=? AND ciclo=?").get(difRow.tarjeta_id, cicloOrigen);
     if (ext && ext.estado === 'pagado') {
       return 'No se puede modificar: el extracto del ciclo ' + cicloOrigen + ' (origen de la diferida) ya está pagado.';
@@ -210,7 +255,7 @@ module.exports = function(db, { logAction, tjNombre }) {
   });
 
   router.delete('/:id', (req, res) => {
-    const d = db.prepare('SELECT etiqueta, tarjeta_id, fecha_compra FROM diferidas WHERE id=?').get(req.params.id);
+    const d = db.prepare('SELECT etiqueta, tarjeta_id, fecha_compra, fecha_primer_corte FROM diferidas WHERE id=?').get(req.params.id);
     const err = validateDiferidaMutable(d);
     if (err) return res.status(403).json({ error: err });
     db.prepare('DELETE FROM diferidas WHERE id=?').run(req.params.id);
