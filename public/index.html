@@ -261,6 +261,10 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '5.3.0': [
+    'El Asistente IA ahora detecta los PAGOS de tu tarjeta que aparecen en el extracto pero que olvidaste registrar en la app. Cuando el extracto muestra un pago (tipo "ABONO SUCURSAL VIRTUAL") que salda el extracto del mes ANTERIOR y la app no lo tiene, te lo propone para registrarlo con un clic: marca ese mes como pagado y lo suma al historial de Pagos.',
+    'Solo te propone los pagos que cuadran con el pago minimo o el pago total del mes anterior (los que de verdad saldan la factura). Los abonos sueltos a la deuda quedan solo como informativos, sin boton, para que tu los revises con calma.'
+  ],
   '5.2.0': [
     'El Asistente IA ahora reconoce las compras a cuotas que te faltaba registrar: cuando el extracto muestra una cuota tipo "2 de 36" de una compra a cuotas que no tienes en la app, te la propone como una diferida COMPLETA para crearla con un clic — calculando por ti el valor total de la compra, el numero de cuotas y el mes en que empezo. Antes la registraba mal, como una compra suelta por el valor de una sola cuota y en el mes equivocado.',
     'Ese mismo asistente evita crear duplicados: si la compra a cuotas ya existe en la app (aunque este saldada o sus cuotas caigan en otro mes), no te la vuelve a proponer.',
@@ -5957,7 +5961,7 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
     api('/compras?tarjeta_id=' + Number(tarjetaId)).then(l => setComprasTj(Array.isArray(l) ? l : [])).catch(() => setComprasTj([]));
   }, [tarjetaId]);
   // Operaciones que la app puede aplicar automaticamente (mapean a endpoints existentes).
-  const AUTO = { crear_compra: 1, editar_valor: 1, mover_ciclo: 1, reprogramar_cuotas: 1, convertir_a_diferida: 1, crear_diferida_omitida: 1, actualizar_tasa_intl: 1, actualizar_fecha_pago: 1, reversar_compra: 1 };
+  const AUTO = { crear_compra: 1, editar_valor: 1, mover_ciclo: 1, reprogramar_cuotas: 1, convertir_a_diferida: 1, crear_diferida_omitida: 1, actualizar_tasa_intl: 1, actualizar_fecha_pago: 1, reversar_compra: 1, registrar_pago: 1 };
 
   // Formatea una tasa mensual decimal a porcentaje colombiano (0.020849 -> "2,0849%").
   const fmtPct = (x) => (x == null || x === '') ? '—' : (Number(x) * 100).toFixed(4).replace('.', ',') + '%';
@@ -5969,7 +5973,8 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
       compra_omitida: 'Compra omitida', monto_erroneo: 'Monto erróneo',
       clasificacion_incorrecta: 'Clasificación incorrecta', cuota_reprogramada: 'Cuota reprogramada',
       tasa_intl_incorrecta: 'Tasa internacional incorrecta', fecha_pago_movida: 'Fecha de pago movida',
-      reverso_detectado: 'Reverso detectado', mover_ciclo: 'Mover de ciclo', diferida_omitida: 'Diferida omitida', otro: 'Otra discrepancia'
+      reverso_detectado: 'Reverso detectado', mover_ciclo: 'Mover de ciclo', diferida_omitida: 'Diferida omitida',
+      pago_omitido: 'Pago no registrado', otro: 'Otra discrepancia'
     };
     if (map[tipo]) return map[tipo];
     const s = String(tipo).replace(/_/g, ' ').trim();
@@ -5982,7 +5987,8 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
       crear_compra: 'Crear compra', editar_valor: 'Editar valor', mover_ciclo: 'Mover de ciclo',
       reprogramar_cuotas: 'Reprogramar cuotas', actualizar_tasa_intl: 'Actualizar tasa internacional',
       actualizar_fecha_pago: 'Actualizar fecha de pago', fecha_corte_movida: 'Aplicar corte adelantado',
-      convertir_a_diferida: 'Convertir a diferida', crear_diferida_omitida: 'Crear diferida omitida', reversar_compra: 'Reversar compra', ninguna: 'Sin acción'
+      convertir_a_diferida: 'Convertir a diferida', crear_diferida_omitida: 'Crear diferida omitida', reversar_compra: 'Reversar compra',
+      registrar_pago: 'Registrar pago', ninguna: 'Sin acción'
     };
     if (map[op]) return map[op];
     const s = String(op).replace(/_/g, ' ').trim();
@@ -5998,7 +6004,7 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
     // afectan un grupo: crear_diferida_omitida (diferida standalone) y crear_compra (compra nueva). Sin
     // este corte, la rama por descripción bloquearía de más si el nombre coincide con un grupo de otro ciclo.
     const opAG = d.accion_sugerida ? d.accion_sugerida.operacion : '';
-    if (opAG === 'crear_diferida_omitida' || opAG === 'crear_compra') return false;
+    if (opAG === 'crear_diferida_omitida' || opAG === 'crear_compra' || opAG === 'registrar_pago') return false;
     const p = paramsDe(d);
     const cid = p.compra_id != null ? p.compra_id : d.compra_id;
     if (cid != null && String(cid) !== 'null') {
@@ -6060,6 +6066,17 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
         ['Valor total (capital x cuotas)', fmtCOP(total)],
         ['Ciclo de origen (calculado)', co],
         ['Cobra intereses', (p.cobrar_intereses === false ? 'no' : 'si')]
+      ] };
+    }
+    if (op === 'registrar_pago') {
+      const pg = d.pago || {};
+      const mo = p.monto != null ? p.monto : pg.monto;
+      return { titulo: 'Registrar el pago del extracto anterior', endpoint: 'POST /api/extractos/registrar-pago', filas: [
+        ['Ciclo que se salda', p.ciclo || pg.ciclo || ''],
+        ['Monto del pago', fmtCOP(mo)],
+        ['Tipo', pg.tipo_pago === 'total' ? 'Pago total' : 'Pago minimo'],
+        ['Fecha', p.fecha || pg.fecha || 'hoy'],
+        ['Efecto', 'marca ese extracto como pagado y lo asienta en el historial de Pagos']
       ] };
     }
     return { titulo: op, endpoint: '', filas: [] };
@@ -6156,6 +6173,17 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
         if (!(Number(p.cuota_actual) >= 1)) throw new Error('Falta la cuota actual (N de M).');
         if (!(cap > 0)) throw new Error('Falta el capital de la cuota.');
         const r = await api('/diferidas/crear-omitida', { method: 'POST', body: { tarjeta_id: Number(tarjetaId), descripcion: p.descripcion || d.descripcion || 'Diferida (conciliacion)', capital: cap, num_cuotas: Number(p.num_cuotas), cuota_actual: Number(p.cuota_actual), ciclo: ciclo, cobrar_intereses: p.cobrar_intereses !== false, desde_conciliacion: true } });
+        if (r && r.error) throw new Error(r.error);
+      } else if (op === 'registrar_pago') {
+        // Registra el pago que saldó el extracto ANTERIOR (detectado en el PDF). El endpoint resuelve/crea
+        // ese extracto y es idempotente (409 si ya está registrado). No usa desde_conciliacion: crea un
+        // registro de pago nuevo, no edita una compra con candado de ciclo cerrado.
+        const pg = d.pago || {};
+        const mo = p.monto != null ? p.monto : pg.monto;
+        const cicloPago = p.ciclo || pg.ciclo;
+        if (!(Number(mo) > 0)) throw new Error('No hay un monto de pago valido.');
+        if (!cicloPago) throw new Error('No se identifico el ciclo del pago.');
+        const r = await api('/extractos/registrar-pago', { method: 'POST', body: { tarjeta_id: Number(tarjetaId), ciclo: cicloPago, monto: Number(mo), fecha: (p.fecha || pg.fecha || null), moneda: (p.moneda || 'COP') } });
         if (r && r.error) throw new Error(r.error);
       } else {
         throw new Error('Operacion no aplicable automaticamente.');

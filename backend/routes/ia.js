@@ -6,6 +6,8 @@ const { construirMovimientos, leerBancoDoc } = require('../services/movimientos'
 const { analizar: analizarIA } = require('../services/aiProvider');
 const { cruzar, parseMontoCol, dice, normalizarDesc } = require('../services/extracto/motorCruce');
 const { getEstrategiaExtracto } = require('../services/extracto');
+const { calcExtracto } = require('../engine/extracto');
+const { addMonths } = require('../helpers/dates');
 
 // ── Detección determinista de REVERSOS (devoluciones/refunds) ──────────────────
 // Un reverso aparece en el extracto como un movimiento de valor NEGATIVO cuyo concepto es un
@@ -73,6 +75,80 @@ function detectarReversos(db, texto, tarjetaId) {
   return out;
 }
 
+// ── Detección determinista de PAGOS-DE-FACTURA omitidos ────────────────────────
+// Un "ABONO SUCURSAL VIRTUAL" (negativo) suele ser el pago que saldó el extracto ANTERIOR (regla 1).
+// Este detector reconoce esas líneas (mismo parser que reversos, pero quedándose con los conceptos de
+// PAGO/ABONO en vez de excluirlos) y las clasifica de forma DETERMINISTA: si el monto de una línea —o
+// la suma de varias líneas fraccionadas— cuadra (~1%) con el pago mínimo o el pago total que la app
+// calcula para el ciclo anterior, es un PAGO-DE-FACTURA; si ese extracto aún NO está registrado en la
+// app, propone la acción registrar_pago (marca ese ciclo como pagado vía POST /extractos/registrar-pago).
+// La tolerancia es ~1% (no ±$2) porque el mínimo/total que calcula la app diverge del real del banco por
+// el interés revolvente no modelado (ver "Limitaciones Conocidas"): 1% cubre esa divergencia (~0,7%
+// observada) y aún separa limpiamente un abono-a-capital, que es un orden de magnitud menor. Los pagos
+// que NO cuadran (abonos a capital, remanentes, parciales) NO se auto-registran: quedan informativos en
+// "pagos_detectados" por la ambigüedad de "liquidación dirigida" (documentada). Alcance v1: COP.
+function detectarPagosOmitidos(db, texto, tarjetaId, ciclo) {
+  if (!texto || !tarjetaId || !ciclo) return [];
+  const fmt = (n) => '$' + Math.round(n).toLocaleString('es-CO');
+  // Conceptos de PAGO/ABONO (subconjunto del esPago de reversos, SIN "NU"): las líneas que toma este
+  // detector son justo las que reversos excluye → ninguna línea la procesan ambos.
+  const esPago = (c) => /\b(ABONO|PAGO|SU PAGO|SALDO A FAVOR|A FAVOR)\b/i.test(c);
+  const reNeg = /(\d{1,2}\/\d{1,2}\/\d{2,4})\s+(.+?)\s+\$\s*-\s*([\d][\d.]*(?:,\d{1,2})?)/;
+  const aISO = (s) => { const m = String(s).match(/(\d{1,2})\/(\d{1,2})\/(\d{2,4})/); if (!m) return null; let y = m[3]; if (y.length === 2) y = '20' + y; return y + '-' + String(m[2]).padStart(2, '0') + '-' + String(m[1]).padStart(2, '0'); };
+  const lineas = [];
+  String(texto).split(/\r?\n/).forEach(raw => {
+    const linea = raw.trim();
+    const m = linea.match(reNeg);
+    if (!m) return;
+    const concepto = m[2].replace(/\s{2,}/g, ' ').trim();
+    if (!concepto || !esPago(concepto)) return;
+    const monto = parseMontoCol(m[3]);
+    if (!(monto > 0)) return;
+    lineas.push({ concepto, monto: Math.round(monto), fecha: aISO(m[1]) });
+  });
+  if (!lineas.length) return [];
+
+  // Ciclo anterior: el pago del extracto se aplica al mes previo (regla 1).
+  const cicloPrev = addMonths(ciclo + '-01', -1).slice(0, 7);
+  const extPrev = db.prepare('SELECT id, estado, COALESCE(monto_pagado,0) mp FROM extractos WHERE tarjeta_id=? AND ciclo=?').get(tarjetaId, cicloPrev);
+  // Si el extracto anterior ya está pagado o tiene algún abono registrado, el pago YA está reflejado en
+  // la app → nada que proponer (evita duplicar el pago del usuario). Belt-and-suspenders con el endpoint.
+  if (extPrev && (extPrev.estado === 'pagado' || extPrev.mp > 0)) return [];
+  const pagosReg = db.prepare("SELECT 1 FROM pagos WHERE tarjeta_id=? AND ciclo=? AND tipo='abono_extracto' AND (moneda='COP' OR moneda IS NULL) LIMIT 1").get(tarjetaId, cicloPrev);
+  if (pagosReg) return []; // ya hay un pago de factura registrado para ese ciclo
+
+  let pmPrev = 0, ptPrev = 0;
+  try { const calc = calcExtracto(db, tarjetaId, cicloPrev, false); if (calc) { pmPrev = Math.round(calc.pagoMinimo || 0); ptPrev = Math.round(calc.pagoTotal || 0); } } catch (e) { return []; }
+  if (!(pmPrev > 0) && !(ptPrev > 0)) return [];
+
+  const cuadra = (monto, ancla) => ancla > 0 && Math.abs(monto - ancla) <= Math.max(5, Math.round(ancla * 0.01));
+  const clasif = (monto) => cuadra(monto, ptPrev) ? 'total' : (cuadra(monto, pmPrev) ? 'minimo' : null);
+  const mkDisc = (monto, fecha, tipoPago, descripcion) => ({
+    tipo: 'pago_omitido',
+    descripcion,
+    severidad: 'media',
+    pago: { ciclo: cicloPrev, monto, tipo_pago: tipoPago, fecha: fecha || null },
+    accion_sugerida: { operacion: 'registrar_pago', parametros: { tarjeta_id: tarjetaId, ciclo: cicloPrev, monto, fecha: fecha || null, moneda: 'COP' } }
+  });
+  const txt = (monto, tipoPago, concepto) => 'El extracto muestra un pago de ' + fmt(monto) + ' ("' + concepto + '") que salda el extracto del ciclo ' + cicloPrev + ' (' + (tipoPago === 'total' ? 'pago total' : 'pago minimo') + '). La app aun no lo tiene registrado.';
+
+  // Caso 1: una línea individual cuadra con el mínimo o el total.
+  const matched = lineas.map(l => ({ l, tp: clasif(l.monto) })).filter(x => x.tp);
+  if (matched.length) {
+    return matched.map(x => mkDisc(x.l.monto, x.l.fecha, x.tp, txt(x.l.monto, x.tp, x.l.concepto)));
+  }
+  // Caso 2: pago fraccionado — ninguna línea cuadra sola, pero la SUMA sí (ej. mínimo pagado en varios abonos).
+  if (lineas.length >= 2) {
+    const suma = lineas.reduce((s, l) => s + l.monto, 0);
+    const tp = clasif(suma);
+    if (tp) {
+      const fecha = lineas[lineas.length - 1].fecha;
+      return [mkDisc(suma, fecha, tp, 'El extracto muestra ' + lineas.length + ' abonos que suman ' + fmt(suma) + ' y saldan el extracto del ciclo ' + cicloPrev + ' (' + (tp === 'total' ? 'pago total' : 'pago minimo') + '). La app aun no lo tiene registrado.')];
+    }
+  }
+  return [];
+}
+
 // Arma el system + user prompt para la conciliación (esquema JSON estricto).
 function construirPrompt(movimientos, textoExtracto, bancoDoc, contextoUsuario, cruce, estrategia) {
   const tj = movimientos.tarjeta || {};
@@ -86,7 +162,7 @@ function construirPrompt(movimientos, textoExtracto, bancoDoc, contextoUsuario, 
     'Eres un conciliador experto de extractos de tarjeta de credito en Colombia. Respondes SIEMPRE en espanol.',
     'Objetivo central: CONCILIAR EL PAGO MINIMO: comparar el pago minimo del extracto del banco con el calculado por la app y atribuir la diferencia a causas concretas.',
     'REGLAS:',
-    '1. Los movimientos tipo "ABONO SUCURSAL VIRTUAL" o similares NO son compras faltantes: por defecto son el pago del extracto anterior (a veces fraccionado). Reportalos en "pagos_detectados", nunca como discrepancia accionable.',
+    '1. Los movimientos tipo "ABONO SUCURSAL VIRTUAL" o similares NO son compras faltantes: por defecto son el pago del extracto anterior (a veces fraccionado). Reportalos en "pagos_detectados", nunca como discrepancia accionable. El backend los cruza AUTOMATICAMENTE contra el pago minimo/total del ciclo anterior y, si el pago falta por registrar, arma la accion; tu solo listalos.',
     '1b. Los movimientos con valor NEGATIVO cuyo concepto es un COMERCIO (NO "ABONO"/"PAGO"), ej. "LATAM AIR $ -138.920", son REVERSOS (devoluciones) de una compra existente. El backend los detecta y cruza AUTOMATICAMENTE contra el historial; NO los reportes ni como discrepancia ni como pago.',
     '2. Si una parte de la diferencia no se explica con los datos, reportala en "residual_no_explicado"; NO inventes cargos.',
     '2b. La app trabaja en PESOS ENTEROS: si el monto del extracto y el de la app coinciden al redondear (diferencia < $1) NO es discrepancia y NO la incluyas en el array. Tampoco incluyas compras que el usuario divide entre varias personas (en la app son varias filas que SUMAN el monto del extracto): si la suma coincide, NO es discrepancia.',
@@ -631,6 +707,26 @@ module.exports = function(db, ctx) {
         }
       } catch (e) { console.log('[ia/analizar] deteccion de reversos:', e && e.message); }
 
+      // ── Detección determinista de PAGOS-DE-FACTURA omitidos ──
+      // Un "ABONO SUCURSAL VIRTUAL" (negativo) suele ser el pago que saldó el extracto ANTERIOR. Si su
+      // monto (o la suma de varios fraccionados) cuadra (~1%) con el pago mínimo/total que la app calcula
+      // para ese ciclo y la app aún NO lo tiene registrado, se propone registrar_pago. Los abonos/
+      // remanentes que NO cuadran quedan informativos (pagos_detectados), por la ambigüedad de
+      // "liquidación dirigida". El detector solo devuelve acciones (registrar_pago); si ya está reflejado
+      // no devuelve nada. Se quitan de pagos_detectados los montos ya accionables (evita doble muestra).
+      try {
+        const pagosOm = detectarPagosOmitidos(db, texto_redactado, mv && mv.tarjeta && mv.tarjeta.id, mv && mv.ciclo);
+        if (pagosOm.length) {
+          if (!Array.isArray(resu.discrepancias)) resu.discrepancias = [];
+          resu.discrepancias.push(...pagosOm);
+          resu.pagos_omitidos_detectados = pagosOm.length;
+          if (Array.isArray(resu.pagos_detectados)) {
+            const montosAcc = new Set(pagosOm.map(p => Math.round((p.pago && p.pago.monto) || 0)));
+            resu.pagos_detectados = resu.pagos_detectados.filter(pd => !montosAcc.has(Math.round(Number(pd.monto) || 0)));
+          }
+        }
+      } catch (e) { console.log('[ia/analizar] deteccion de pagos omitidos:', e && e.message); }
+
       // Transparencia para la UI: cuántas concilió la capa determinista y qué quedó sin cruzar.
       resu.cruce_determinista = {
         conciliadas: cruce.matches.length,
@@ -650,5 +746,6 @@ module.exports = function(db, ctx) {
   return router;
 };
 
-// Export auxiliar para pruebas unitarias del detector de reversos (no afecta el factory por defecto).
+// Export auxiliar para pruebas unitarias de los detectores deterministas (no afecta el factory).
 module.exports.detectarReversos = detectarReversos;
+module.exports.detectarPagosOmitidos = detectarPagosOmitidos;

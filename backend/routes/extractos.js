@@ -114,25 +114,35 @@ module.exports = function(db, { logAction, tjNombre }) {
     res.json(filtered);
   });
 
-  router.put('/:id/pagar', (req, res) => {
-    const { monto_pagado, fecha_pagado, tipo, moneda } = req.body;
-    const ext = db.prepare('SELECT * FROM extractos WHERE id=?').get(req.params.id);
-    if (!ext) return res.status(404).json({ error: 'Extracto no encontrado' });
-
+  // Núcleo de registro de pago/abono a un extracto (COP o USD). Lo comparten PUT /:id/pagar y
+  // POST /registrar-pago. Recibe la fila del extracto ya resuelta y devuelve el objeto de respuesta
+  // (el caller hace res.json). Efecto: acumula monto_pagado; al alcanzar el mínimo sella el extracto
+  // (marca las compras del ciclo como pagadas, limpia bolsillo personal y congela tasa intl).
+  function pagarExtracto(ext, body) {
+    const { monto_pagado, fecha_pagado, tipo, moneda } = body || {};
     const monedaPago = (moneda === 'USD') ? 'USD' : 'COP';
     const fechaPagado = fecha_pagado || hoyLocal();
     const tipoPago = tipo || 'abono_extracto';
+    // sellar: fuerza el cierre del extracto aunque el monto quede levemente por debajo del pago_minimo
+    // que CALCULA la app. Lo usa POST /registrar-pago: el detector determinista ya confirmo que la linea
+    // es un pago-de-factura (cuadra ~1% con el minimo/total real del banco), y el minimo de la app puede
+    // SOBREESTIMAR el real (interes revolvente / diferidas balloon modeladas uniformes). Sin esto, un pago
+    // dentro de la banda pero < al minimo calculado quedaria como abono PARCIAL (no sella, no forma la
+    // triada del blindaje) y el reintento se auto-bloquearia (409 + detector devuelve []). Se registra el
+    // monto REAL del PDF (no se infla el ledger). PUT /:id/pagar NO lo envia -> los abonos parciales
+    // manuales siguen sin sellar.
+    const sellarFactura = !!(body && body.sellar);
 
     if (monedaPago === 'COP') {
       const montoAbono = parseFloat(monto_pagado) || ext.pago_minimo;
       const nuevoMontoPagado = (ext.monto_pagado || 0) + montoAbono;
-      const pagadoCompleto = nuevoMontoPagado >= ext.pago_minimo;
+      const pagadoCompleto = (nuevoMontoPagado >= ext.pago_minimo) || sellarFactura;
 
       if (pagadoCompleto) {
         const calcCierre = calcExtracto(db, ext.tarjeta_id, ext.ciclo, false);
         const interesesIntlFinal = calcCierre ? (calcCierre.interesesComprasIntl || 0) : (ext.intereses_intl || 0);
         db.prepare("UPDATE extractos SET estado='pagado', monto_pagado=?, fecha_pagado=?, intereses_intl=? WHERE id=?")
-          .run(nuevoMontoPagado, fechaPagado, interesesIntlFinal, req.params.id);
+          .run(nuevoMontoPagado, fechaPagado, interesesIntlFinal, ext.id);
         // Solo marca como pagadas las compras COP del ciclo (sin USD). Las compras
         // USD se marcan cuando se cierre la porción USD.
         db.prepare(`UPDATE compras SET estado='pagado', monto_abonado=valor_cop
@@ -157,7 +167,7 @@ module.exports = function(db, { logAction, tjNombre }) {
         }
       } else {
         db.prepare("UPDATE extractos SET monto_pagado=?, fecha_pagado=? WHERE id=?")
-          .run(nuevoMontoPagado, fechaPagado, req.params.id);
+          .run(nuevoMontoPagado, fechaPagado, ext.id);
       }
 
       db.prepare("INSERT INTO pagos (tarjeta_id, fecha, monto, tipo, ciclo, notas, moneda) VALUES (?,?,?,?,?,?,'COP')")
@@ -166,17 +176,17 @@ module.exports = function(db, { logAction, tjNombre }) {
 
       const fmt = new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',maximumFractionDigits:0}).format(montoAbono);
       logAction('pago', tjNombre(ext.tarjeta_id) + (pagadoCompleto ? 'Extracto pagado COP: ' : 'Abono a extracto COP: ') + ext.ciclo + ' por ' + fmt);
-      return res.json({ ok: true, pagadoCompleto, nuevoMontoPagado, moneda: 'COP' });
+      return { ok: true, pagadoCompleto, nuevoMontoPagado, moneda: 'COP' };
     }
 
     // moneda === 'USD'
     const montoAbonoUsd = parseFloat(monto_pagado) || ext.pago_minimo_usd || 0;
     const nuevoMontoPagadoUsd = (ext.monto_pagado_usd || 0) + montoAbonoUsd;
-    const pagadoCompletoUsd = nuevoMontoPagadoUsd >= (ext.pago_minimo_usd || 0);
+    const pagadoCompletoUsd = (nuevoMontoPagadoUsd >= (ext.pago_minimo_usd || 0)) || sellarFactura;
 
     if (pagadoCompletoUsd) {
       db.prepare("UPDATE extractos SET estado_usd='pagado', monto_pagado_usd=?, fecha_pagado_usd=? WHERE id=?")
-        .run(nuevoMontoPagadoUsd, fechaPagado, req.params.id);
+        .run(nuevoMontoPagadoUsd, fechaPagado, ext.id);
       // Solo marca como pagadas las compras USD del ciclo.
       db.prepare(`UPDATE compras SET estado='pagado', monto_abonado=valor_cop
         WHERE tarjeta_id=? AND ciclo=? AND estado NOT IN ('pagado','diferida')
@@ -189,7 +199,7 @@ module.exports = function(db, { logAction, tjNombre }) {
         .run(ext.tarjeta_id, ext.ciclo);
     } else {
       db.prepare("UPDATE extractos SET monto_pagado_usd=?, fecha_pagado_usd=? WHERE id=?")
-        .run(nuevoMontoPagadoUsd, fechaPagado, req.params.id);
+        .run(nuevoMontoPagadoUsd, fechaPagado, ext.id);
     }
 
     db.prepare("INSERT INTO pagos (tarjeta_id, fecha, monto, tipo, ciclo, notas, moneda) VALUES (?,?,?,?,?,?,'USD')")
@@ -198,7 +208,13 @@ module.exports = function(db, { logAction, tjNombre }) {
 
     const fmtUsd = 'USD $' + new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(montoAbonoUsd);
     logAction('pago', tjNombre(ext.tarjeta_id) + (pagadoCompletoUsd ? 'Extracto pagado USD: ' : 'Abono a extracto USD: ') + ext.ciclo + ' por ' + fmtUsd);
-    return res.json({ ok: true, pagadoCompleto: pagadoCompletoUsd, nuevoMontoPagado: nuevoMontoPagadoUsd, moneda: 'USD' });
+    return { ok: true, pagadoCompleto: pagadoCompletoUsd, nuevoMontoPagado: nuevoMontoPagadoUsd, moneda: 'USD' };
+  }
+
+  router.put('/:id/pagar', (req, res) => {
+    const ext = db.prepare('SELECT * FROM extractos WHERE id=?').get(req.params.id);
+    if (!ext) return res.status(404).json({ error: 'Extracto no encontrado' });
+    return res.json(pagarExtracto(ext, req.body));
   });
 
   // ── Override manual de fecha de pago por ciclo ──────────────────────
@@ -219,6 +235,48 @@ module.exports = function(db, { logAction, tjNombre }) {
       logAction('editar', tjNombre(tarjeta_id) + 'Override de fecha de pago eliminado para ' + ciclo);
       res.json({ ok: true, fecha_pago: null, esManual: false });
     }
+  });
+
+  // ── Registrar el pago que saldó un extracto (conciliación IA: acción registrar_pago) ──────────
+  // POST /api/extractos/registrar-pago   Body: { tarjeta_id, ciclo, monto, fecha?, moneda? }
+  // Resuelve-o-crea el extracto del ciclo (típicamente el ANTERIOR al que se concilia) y registra el
+  // pago reusando la MISMA lógica de PUT /:id/pagar (pagarExtracto). Idempotente: 409 si ese extracto ya
+  // está pagado o ya tiene un abono registrado (no duplica el pago del usuario). El detector determinista
+  // de ia.js solo propone esta acción para pagos-de-factura que cuadran con el mínimo/total del ciclo.
+  router.post('/registrar-pago', (req, res) => {
+    const { tarjeta_id, ciclo, monto, fecha, moneda } = req.body || {};
+    if (!tarjeta_id || !ciclo) return res.status(400).json({ error: 'tarjeta_id y ciclo son requeridos' });
+    const montoNum = parseFloat(monto);
+    if (!(montoNum > 0)) return res.status(400).json({ error: 'monto invalido' });
+    const monedaPago = (moneda === 'USD') ? 'USD' : 'COP';
+
+    // Resolver o crear el extracto del ciclo (mismo patrón de siembra que GET /: usa calcExtracto).
+    let ext = db.prepare('SELECT * FROM extractos WHERE tarjeta_id=? AND ciclo=?').get(tarjeta_id, ciclo);
+    if (!ext) {
+      const calc = calcExtracto(db, tarjeta_id, ciclo);
+      if (!calc || (!(calc.pagoTotal > 0) && !(calc.pagoMinimo > 0))) {
+        return res.status(400).json({ error: 'No hay un extracto con saldo para el ciclo ' + ciclo + '.' });
+      }
+      db.prepare('INSERT OR IGNORE INTO extractos (tarjeta_id, ciclo, fecha_corte, fecha_pago, pago_minimo, pago_total, intereses_intl) VALUES (?,?,?,?,?,?,?)')
+        .run(tarjeta_id, ciclo, calc.fechaCorte, calc.fechaPago, calc.pagoMinimo, calc.pagoTotal, calc.interesesComprasIntl || 0);
+      ext = db.prepare('SELECT * FROM extractos WHERE tarjeta_id=? AND ciclo=?').get(tarjeta_id, ciclo);
+    }
+    if (!ext) return res.status(500).json({ error: 'No se pudo resolver el extracto del ciclo.' });
+
+    // Idempotencia: no re-registrar si ese extracto (en la moneda dada) ya está pagado, ya tiene algún
+    // abono acumulado, o ya existe una fila de pago abono_extracto del ciclo.
+    const yaPagado = monedaPago === 'USD' ? (ext.estado_usd === 'pagado') : (ext.estado === 'pagado');
+    const mpPrev = monedaPago === 'USD' ? (ext.monto_pagado_usd || 0) : (ext.monto_pagado || 0);
+    const dup = db.prepare("SELECT COUNT(*) n FROM pagos WHERE tarjeta_id=? AND ciclo=? AND tipo='abono_extracto' AND (moneda = ? OR (? = 'COP' AND moneda IS NULL))")
+      .get(tarjeta_id, ciclo, monedaPago, monedaPago);
+    if (yaPagado || mpPrev > 0 || (dup && dup.n > 0)) {
+      return res.status(409).json({ error: 'El pago del ciclo ' + ciclo + ' ya esta registrado en la app.', ya_registrado: true });
+    }
+
+    // sellar: true → el detector ya confirmo que es un pago-de-factura (cuadra con el minimo/total).
+    // Cierra el extracto registrando el monto REAL aunque quede levemente bajo el minimo calculado.
+    const out = pagarExtracto(ext, { monto_pagado: montoNum, fecha_pagado: fecha, tipo: 'abono_extracto', moneda: monedaPago, sellar: true });
+    return res.json(Object.assign({ ok: true, ciclo }, out));
   });
 
   return router;
