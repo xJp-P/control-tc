@@ -68,6 +68,10 @@ module.exports = function(db, { logAction, tjNombre }) {
       compra_id: compraVinc ? compraVinc.id : null,
       grupo_id: compraVinc ? compraVinc.grupo_id : null,
       es_de_tercero: !!(compraVinc && compraVinc.persona_id),
+      // tercero_con_reembolso: SOLO bloquea reprogramar cuando el tercero YA reembolsó algo (bolsillo,
+      // abono directo, marcado pagado, o bolsillo per-cuota). Un tercero SIN reembolso SÍ es elegible:
+      // el "Sellar y Renacer" hereda su persona_id en las selladas y la renacida (deuda preservada).
+      tercero_con_reembolso: !!(compraVinc && compraTerceroConReembolso(db, compraVinc.id)),
       es_usd_pura: !!(compraVinc && compraVinc.valor_usd > 0 && !(compraVinc.valor_cop > 0)),
       tiene_abono_parcial: !!(compraVinc && (compraVinc.monto_abonado || 0) > 0)
     });

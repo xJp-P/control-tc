@@ -261,6 +261,10 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '5.5.0': [
+    'Ahora puedes reprogramar el numero de cuotas de una compra que tiene un responsable (un tercero), siempre que esa persona AUN no te haya reembolsado nada de esa compra. Antes el boton "Reprogramar" estaba deshabilitado para las compras con responsable; ahora funciona igual que con tus compras personales: las cuotas que ya te facturaron quedan como estan y el saldo restante se reparte en las cuotas nuevas, manteniendo a esa persona como responsable de la deuda.',
+    'Si el tercero ya te habia reembolsado algo de esa compra, el boton sigue bloqueado a proposito (para no descuadrar esa cuenta): en ese caso, gestionala desde la pestana Terceros.'
+  ],
   '5.4.0': [
     'La tabla de Compras ahora se reordena al instante: cuando registras una compra nueva o editas una existente, la fila salta de inmediato al primer lugar de su dia, sin recargar ni cerrar la vista. Asi ves el cambio en vivo apenas guardas.',
     'El criterio es: primero por fecha (las mas recientes arriba) y, dentro del mismo dia, la que acabas de crear o editar queda de primera. Esto solo pasa por tus ediciones manuales; las correcciones automaticas del Asistente IA y los pagos no te reordenan la tabla.'
@@ -3071,7 +3075,7 @@ function CardResumen({ tarjeta, onDataChange }) {
           e('div', { className: 'toolbar-spacer' }),
           (() => {
             const dd = diferidaDetail;
-            const noElegible = !dd.compra_id ? 'Sin compra vinculada' : dd.grupo_id ? 'Compra dividida: reprograma cada parte por separado' : dd.es_de_tercero ? 'Compra de tercero: gestionala desde Terceros' : dd.es_usd_pura ? 'Compra solo en dolares (no soportado)' : dd.tiene_abono_parcial ? 'Tiene un abono parcial registrado' : null;
+            const noElegible = !dd.compra_id ? 'Sin compra vinculada' : dd.grupo_id ? 'Compra dividida: reprograma cada parte por separado' : dd.tercero_con_reembolso ? 'Compra de tercero con reembolsos: gestionala desde Terceros' : dd.es_usd_pura ? 'Compra solo en dolares (no soportado)' : dd.tiene_abono_parcial ? 'Tiene un abono parcial registrado' : null;
             return e('button', { className: 'btn btn-sm', disabled: !!noElegible, title: noElegible || 'Reprogramar el saldo restante a un nuevo numero de cuotas', style: noElegible ? { opacity: 0.5, cursor: 'not-allowed', marginRight: 6 } : { marginRight: 6 }, onClick: () => { if (noElegible) return; setReproDiferida(dd); setShowReprogramarModal(true); } }, e(Ico, { name: 'refresh', size: 14, color: 'currentColor' }), ' Reprogramar');
           })(),
           e('button', { className: 'btn btn-sm', onClick: () => { setSelectedDiferida(null); setDiferidaDetail(null); }, style: { fontSize: 18, padding: '4px 10px' } }, '\u{2715}')
