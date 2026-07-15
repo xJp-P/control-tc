@@ -49,7 +49,10 @@ module.exports = function(db, { logAction, tjNombre }) {
     const params = [];
     if (tarjeta_id) { sql += ' AND c.tarjeta_id = ?'; params.push(tarjeta_id); }
     if (ciclo) { sql += ' AND c.ciclo = ?'; params.push(ciclo); }
-    sql += ' ORDER BY c.fecha DESC, c.id DESC';
+    // Orden de display: fecha DESC; ante misma fecha, última EDICIÓN MANUAL primero (updated_at DESC,
+    // COALESCE con created_at para filas viejas); id DESC como desempate determinista final. El frontend
+    // (purchaseRows) replica exactamente este criterio para reordenar EN VIVO al guardar sin recargar.
+    sql += ' ORDER BY c.fecha DESC, COALESCE(c.updated_at, c.created_at) DESC, c.id DESC';
     const compras = db.prepare(sql).all(...params);
     const hoy = hoyLocal();
 
@@ -192,8 +195,9 @@ module.exports = function(db, { logAction, tjNombre }) {
         tasaIntlFinal = tjRate.tasa_mv_avances;
       }
     }
-    const r = db.prepare(`INSERT INTO compras (tarjeta_id, fecha, descripcion, valor_cop, valor_usd, tasa_usd, persona_id, estado, ciclo, notas, nota_personal, diferida_id, grupo_id, es_internacional, ciclo_manual, tasa_intl)
-                          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+    // updated_at = ahora al crear: una compra nueva es lo más reciente de su día en la tabla (display).
+    const r = db.prepare(`INSERT INTO compras (tarjeta_id, fecha, descripcion, valor_cop, valor_usd, tasa_usd, persona_id, estado, ciclo, notas, nota_personal, diferida_id, grupo_id, es_internacional, ciclo_manual, tasa_intl, updated_at)
+                          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now','localtime'))`)
       .run(tarjeta_id || null, fecha, descripcion, valor_cop, valor_usd || null, tasa_usd || null, persona_id || null, estado || 'pendiente', ciclo, notas || null, nota_personal || null, diferida_id || null, grupo_id || null, es_internacional ? 1 : 0, cicloManual, tasaIntlFinal);
     const fmt = new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',maximumFractionDigits:0}).format(valor_cop);
     logAction('crear', tjNombre(tarjeta_id) + 'Compra registrada: ' + descripcion + ' por ' + fmt);
@@ -247,7 +251,14 @@ module.exports = function(db, { logAction, tjNombre }) {
         finalEstado = (topeEdit > 0 && finalBolsillo >= topeEdit) ? 'bolsillo' : (finalBolsillo > 0 ? 'bolsillo_parcial' : 'pendiente');
       }
     }
-    db.prepare(`UPDATE compras SET tarjeta_id=?, fecha=?, descripcion=?, valor_cop=?, valor_usd=?, tasa_usd=?, persona_id=?, estado=?, ciclo=?, notas=?, nota_personal=?, tasa_intl=?, monto_bolsillo=?, es_internacional=?, ciclo_manual=? WHERE id=?`)
+    // updated_at=ahora: BUMP de display — la compra editada por el usuario en el FORMULARIO salta al
+    // primer lugar de su día en la tabla de Compras. Se GATEA por desde_conciliacion: las acciones de la
+    // IA de conciliación (mover_ciclo / editar_valor) reusan ESTE mismo PUT con ese flag y NO deben
+    // reordenar la tabla (son correcciones de extractos pasados, no una edición manual). La edición manual
+    // del formulario (saveCompra / edición de grupo dividido) nunca envía el flag → sí bumpea. El POST de
+    // crear SÍ bumpea siempre (aunque crear_compra de la IA lo envíe: una compra nueva es lo más reciente).
+    const bumpUpdated = !(req.body && req.body.desde_conciliacion);
+    db.prepare(`UPDATE compras SET tarjeta_id=?, fecha=?, descripcion=?, valor_cop=?, valor_usd=?, tasa_usd=?, persona_id=?, estado=?, ciclo=?, notas=?, nota_personal=?, tasa_intl=?, monto_bolsillo=?, es_internacional=?, ciclo_manual=?${bumpUpdated ? ", updated_at=datetime('now','localtime')" : ''} WHERE id=?`)
       .run(tarjeta_id, fecha, descripcion, valor_cop, valor_usd, tasa_usd, persona_id, finalEstado, ciclo, notas, finalNota, finalTasaIntl, finalBolsillo, finalIntl, cicloManual, req.params.id);
 
     // SINCRONIZAR diferida vinculada: si la compra tiene diferida_id, mantener

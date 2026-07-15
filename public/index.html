@@ -261,6 +261,10 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '5.4.0': [
+    'La tabla de Compras ahora se reordena al instante: cuando registras una compra nueva o editas una existente, la fila salta de inmediato al primer lugar de su dia, sin recargar ni cerrar la vista. Asi ves el cambio en vivo apenas guardas.',
+    'El criterio es: primero por fecha (las mas recientes arriba) y, dentro del mismo dia, la que acabas de crear o editar queda de primera. Esto solo pasa por tus ediciones manuales; las correcciones automaticas del Asistente IA y los pagos no te reordenan la tabla.'
+  ],
   '5.3.0': [
     'El Asistente IA ahora detecta los PAGOS de tu tarjeta que aparecen en el extracto pero que olvidaste registrar en la app. Cuando el extracto muestra un pago (tipo "ABONO SUCURSAL VIRTUAL") que salda el extracto del mes ANTERIOR y la app no lo tiene, te lo propone para registrarlo con un clic: marca ese mes como pagado y lo suma al historial de Pagos.',
     'Solo te propone los pagos que cuadran con el pago minimo o el pago total del mes anterior (los que de verdad saldan la factura). Los abonos sueltos a la deuda quedan solo como informativos, sin boton, para que tu los revises con calma.'
@@ -2212,22 +2216,29 @@ function CardResumen({ tarjeta, onDataChange }) {
         cuota_num: esDiferida ? items[0].cuota_num : null,
         cuotas_total: esDiferida ? items[0].cuotas_total : null,
         total,
-        // id de orden del grupo = el menor id de sus partes (momento en que nació la compra
-        // dividida). Sirve de desempate cuando dos filas comparten fecha, igual que el id de
-        // un single. Estable ante ediciones (agregar una parte nueva no "sube" el grupo).
+        // id de orden del grupo = el menor id de sus partes (nacimiento de la compra dividida) —
+        // desempate determinista FINAL ante misma fecha + misma última edición.
         _ordenId: Math.min(...items.map(c => c.id)),
+        // Timestamp de orden del grupo = la updated_at MÁS RECIENTE de sus partes: el grupo salta si
+        // editas cualquier parte (mismo criterio que un single). Desempate primario ante misma fecha.
+        _ordenTs: items.reduce((m, c) => { const t = c.updated_at || c.created_at || ''; return t > m ? t : m; }, ''),
         partes: items.sort((a, b) => (a.persona_id ? 1 : 0) - (b.persona_id ? 1 : 0))
       });
     });
-    // Orden de la tabla: fecha DESC y, ante misma fecha, id DESC (la compra registrada más
-    // recientemente primero) — mismo criterio que el ORDER BY del backend. Sin el desempate,
-    // el sort (estable) dejaba TODOS los singles antes que TODOS los grupos: una compra
-    // dividida nueva caía debajo de un single más viejo de la misma fecha.
+    // Orden de la tabla (mismo criterio que el ORDER BY del backend, para reordenar EN VIVO al guardar):
+    // 1) fecha DESC; 2) última EDICIÓN MANUAL (updated_at) DESC → la compra recién editada sube al primer
+    // lugar de su día; 3) id DESC como desempate determinista final. Para grupos se usa la updated_at más
+    // reciente de sus partes (_ordenTs) y el menor id (_ordenId). Sin desempate, el sort estable dejaba
+    // todos los singles antes que todos los grupos (una dividida nueva caía bajo un single más viejo).
     result.sort((a, b) => {
       const fa = a.tipo === 'grupo' ? a.fecha : a.data.fecha;
       const fb = b.tipo === 'grupo' ? b.fecha : b.data.fecha;
       const byFecha = fb.localeCompare(fa);
       if (byFecha !== 0) return byFecha;
+      const ta = a.tipo === 'grupo' ? a._ordenTs : (a.data.updated_at || a.data.created_at || '');
+      const tb = b.tipo === 'grupo' ? b._ordenTs : (b.data.updated_at || b.data.created_at || '');
+      const byTs = String(tb).localeCompare(String(ta));
+      if (byTs !== 0) return byTs;
       const ia = a.tipo === 'grupo' ? a._ordenId : a.data.id;
       const ib = b.tipo === 'grupo' ? b._ordenId : b.data.id;
       return ib - ia;

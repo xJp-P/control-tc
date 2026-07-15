@@ -769,6 +769,18 @@ function initDb(dbPathOverride) {
             "(SELECT origen_compra_id FROM saldos_favor_tercero WHERE origen_tipo='reverso' AND origen_compra_id IS NOT NULL)");
   } catch (e) {}
 
+  // updated_at: timestamp de la ÚLTIMA edición MANUAL de la compra (POST al crear, PUT del formulario
+  // al editar). Es SOLO para el ordenamiento de DISPLAY de la tabla de Compras (desempate ante misma
+  // fecha: la compra recién editada sube al primer lugar de su día). NO lo tocan las operaciones
+  // internas (sellar extracto, abono a capital, bolsillo, reverso, corte) ni afecta la prelación de
+  // abonos (esa usa created_at, deuda más vieja primero — inamovible). Backfill: updated_at = created_at
+  // para las filas existentes → el orden actual (por recencia de registro) se conserva para lo no editado.
+  try { db.prepare('SELECT updated_at FROM compras LIMIT 1').get(); }
+  catch (e) {
+    db.exec('ALTER TABLE compras ADD COLUMN updated_at TEXT');
+    db.exec('UPDATE compras SET updated_at = created_at WHERE updated_at IS NULL');
+  }
+
   // Retroactively assign grupo_id to existing split compras
   (() => {
     const splitGroups = db.prepare(`
