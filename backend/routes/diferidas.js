@@ -225,7 +225,10 @@ module.exports = function(db, { logAction, tjNombre }) {
     }
 
     const nuevaFPC = fecha_primer_corte || d.fecha_primer_corte;
-    db.prepare('UPDATE diferidas SET num_cuotas=?, fecha_primer_corte=? WHERE id=?').run(nuevoN, nuevaFPC, req.params.id);
+    // reprog_total=NULL: una reprogramacion UNIFORME (N->M) es un plan NUEVO -> el badge debe caer a la
+    // numeracion local i/num_cuotas. Si esta diferida era una HIJA de reprogramacion-de-saldo (reprog_total=M
+    // viejo), dejarlo obsoleto romperia el badge (la formula asume reprog_total - num_cuotas == cuotas selladas).
+    db.prepare('UPDATE diferidas SET num_cuotas=?, fecha_primer_corte=?, reprog_total=NULL WHERE id=?').run(nuevoN, nuevaFPC, req.params.id);
 
     // Limpiar bolsillo per-cuota huérfano (cuota_num > nuevoN) de las compras vinculadas y recachear.
     const comprasVinc = db.prepare('SELECT id, notas FROM compras WHERE diferida_id=?').all(req.params.id);

@@ -261,6 +261,9 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '5.5.1': [
+    'Cuando reprogramas una compra a cuotas y queda una sola cuota pendiente, esa cuota ahora vive en la seccion de Diferidas (con su tabla de amortizacion), etiquetada correctamente como la ultima del plan (ej. "Cuota 2/2"), en vez de aparecer suelta como una compra corriente. Asi toda deuda que viene de una reprogramacion se gestiona siempre desde Diferidas.'
+  ],
   '5.5.0': [
     'Ahora puedes reprogramar el numero de cuotas de una compra que tiene un responsable (un tercero), siempre que esa persona AUN no te haya reembolsado nada de esa compra. Antes el boton "Reprogramar" estaba deshabilitado para las compras con responsable; ahora funciona igual que con tus compras personales: las cuotas que ya te facturaron quedan como estan y el saldo restante se reparte en las cuotas nuevas, manteniendo a esa persona como responsable de la deuda.',
     'Si el tercero ya te habia reembolsado algo de esa compra, el boton sigue bloqueado a proposito (para no descuadrar esa cuenta): en ese caso, gestionala desde la pestana Terceros.'
@@ -932,6 +935,16 @@ function fmtCOP(n) {
   const abs = Math.abs(Math.round(n));
   const s = abs.toLocaleString('es-CO');
   return (n < 0 ? '-' : '') + '$' + s;
+}
+
+// Etiqueta de numeracion de cuota para el badge. Una diferida HIJA de reprogramacion de saldo lleva
+// reprog_total = M (total del plan nuevo del banco); su cuota local i se muestra como continuacion del
+// plan: (i + (M - num_cuotas)) / M. Ej. Temu 36->2, k=1: hija num_cuotas=1, reprog_total=2, local=1 => "2/2".
+// Diferida normal (reprogTotal nulo) cae a la numeracion local "local/num_cuotas". Solo DISPLAY: nunca
+// altera cuota_num (la clave real de bolsillo_cuotas que se envia al backend).
+function badgeCuotaLabel(cuotaLocal, numCuotas, reprogTotal) {
+  if (reprogTotal && numCuotas) return (cuotaLocal + (reprogTotal - numCuotas)) + '/' + reprogTotal;
+  return cuotaLocal + '/' + numCuotas;
 }
 
 // Format number with thousand separators for input display (supports decimals with comma)
@@ -2648,7 +2661,7 @@ function CardResumen({ tarjeta, onDataChange }) {
                 e('span', null, c.descripcion),
                 c.nota_personal && e('span', { style: { fontSize: 11, color: 'var(--text-muted)' } }, c.nota_personal),
                 // El valor USD vive en su propia columna; el responsable también.
-                isDif && c.cuota_num && e('span', { style: { fontSize: 10, color: 'var(--accent)' } }, 'Cuota ' + c.cuota_num + '/' + c.cuotas_total),
+                isDif && c.cuota_num && e('span', { style: { fontSize: 10, color: 'var(--accent)' } }, 'Cuota ' + badgeCuotaLabel(c.cuota_num, c.cuotas_total, c.reprog_total)),
                 tieneParcial && e('span', { className: 'badge badge-active', style: { fontSize: 10 } }, esReverso ? 'reverso' : 'abono parcial')
               )
             ),
@@ -2969,7 +2982,7 @@ function CardResumen({ tarjeta, onDataChange }) {
                               onClick: (ev) => {
                                 ev.stopPropagation();
                                 if (d.compra_id) {
-                                  openBolsilloModal({ id: d.compra_id, persona_id: d.persona_id || null, descripcion: d.etiqueta + (d.es_de_tercero ? ' (' + d.persona_nombre + ')' : ''), estado: 'diferida', valor_cop: target, cuotaCorte: target, monto_bolsillo: bol, _bolsilloTarget: target, cuota_num: cn, cuotas_total: d.num_cuotas });
+                                  openBolsilloModal({ id: d.compra_id, persona_id: d.persona_id || null, descripcion: d.etiqueta + (d.es_de_tercero ? ' (' + d.persona_nombre + ')' : ''), estado: 'diferida', valor_cop: target, cuotaCorte: target, monto_bolsillo: bol, _bolsilloTarget: target, cuota_num: cn, cuotas_total: d.num_cuotas, reprog_total: d.reprog_total || null });
                                 } else { openBolsilloDiferidaModal(d); }
                               },
                               title: d.es_de_tercero ? 'Gestionar abono desde la pestaña Terceros' : 'Clic para gestionar bolsillo (cuota del corte)',
@@ -2998,7 +3011,7 @@ function CardResumen({ tarjeta, onDataChange }) {
                           : e('span', { style: { color: 'var(--text-muted)' } }, '—')
                       ),
                       e('td', { className: 'text-right text-mono', style: { fontWeight: 700, color: cicloPagadoDif ? 'var(--success)' : 'var(--danger)' } }, fmtCOP(d.cuotaCorte)),
-                      e('td', null, (d.ciclos ? d.ciclos.indexOf(ciclo) + 1 : (d.num_cuotas - d.cuotasRestantes + 1)) + '/' + d.num_cuotas),
+                      e('td', null, badgeCuotaLabel((d.ciclos ? d.ciclos.indexOf(ciclo) + 1 : (d.num_cuotas - d.cuotasRestantes + 1)), d.num_cuotas, d.reprog_total)),
                       e('td', { className: 'text-mono' }, (d.tasa_mv * 100).toFixed(2) + '%'),
                       e('td', { className: 'text-right text-mono', style: { fontWeight: 700, color: d.saldoActual > 0 ? 'var(--danger)' : 'var(--success)' } }, fmtCOP(d.saldoActual)),
                       bolsilloCellDif(d),
@@ -3390,7 +3403,7 @@ function CardResumen({ tarjeta, onDataChange }) {
           e('div', { style: { marginBottom: 16, padding: '12px 16px', background: 'var(--bg-tertiary)', borderRadius: 8 } },
             e('div', { style: { fontSize: 13, color: 'var(--text-secondary)', marginBottom: 4 } }, bolsilloCompra.descripcion),
             isAvance && bolsilloCompra.cuota_num && e('div', { style: { fontSize: 12, color: 'var(--accent)', marginBottom: 4 } }, 'Cuota ' + bolsilloCompra.cuota_num + '/' + (bolsilloCompra.cuotas_total || '?')),
-            isDif && bolsilloCompra.cuota_num && e('div', { style: { fontSize: 12, color: 'var(--accent)', marginBottom: 4 } }, 'Cuota ' + bolsilloCompra.cuota_num + '/' + bolsilloCompra.cuotas_total),
+            isDif && bolsilloCompra.cuota_num && e('div', { style: { fontSize: 12, color: 'var(--accent)', marginBottom: 4 } }, 'Cuota ' + badgeCuotaLabel(bolsilloCompra.cuota_num, bolsilloCompra.cuotas_total, bolsilloCompra.reprog_total)),
             isDif && bolsilloCompra.persona_id && e('div', { style: { fontSize: 12, color: 'var(--text-muted)', marginBottom: 4 } }, 'Parte de: ' + (bolsilloCompra.persona_nombre || 'Tercero')),
             e('div', { style: { fontSize: 18, fontWeight: 700, color: esUsdBol ? '#4FC3F7' : undefined } }, (isCuotaTarget ? 'Cuota: ' : 'Total: '), fmtBol(target)),
             isDif && !esUsdBol && target !== bolsilloCompra.valor_cop && e('div', { style: { fontSize: 11, color: 'var(--text-muted)', marginTop: 2 } }, 'Valor total compra: ' + fmtCOP(bolsilloCompra.valor_cop)),
@@ -6984,7 +6997,7 @@ function Terceros({ tarjeta }) {
                             e('td', { style: { fontWeight: 600 } },
                               c.descripcion,
                               // Contador de cuota como mini "pastilla" sutil (tema oscuro), no texto plano.
-                              e('span', { className: 'badge', style: { marginLeft: 8, fontSize: 10, fontWeight: 600, background: 'var(--bg-tertiary)', color: 'var(--text-muted)', padding: '2px 6px', borderRadius: 4 } }, 'Cuota ' + q.num + '/' + c.cuotas.length)
+                              e('span', { className: 'badge', style: { marginLeft: 8, fontSize: 10, fontWeight: 600, background: 'var(--bg-tertiary)', color: 'var(--text-muted)', padding: '2px 6px', borderRadius: 4 } }, 'Cuota ' + badgeCuotaLabel(q.num, c.cuotas.length, c.reprog_total))
                             ),
                             e('td', { className: 'text-right text-mono', style: { fontWeight: 600, color: hecha ? 'var(--success)' : undefined } },
                               (c.valor_usd && c.valor_usd > 0 && !q.total)

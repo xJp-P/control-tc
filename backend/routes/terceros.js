@@ -105,7 +105,7 @@ module.exports = function(db, { logAction, tjNombre }) {
       const valor_usd_pendiente = (c.valor_usd && c.valor_usd > 0)
         ? Math.round((c.valor_usd / dif.num_cuotas) * pendientesCount * 100) / 100
         : 0;
-      return { ...c, es_diferida: true, cuotas, valor_pendiente: Math.round(pendiente), valor_usd_pendiente };
+      return { ...c, es_diferida: true, cuotas, valor_pendiente: Math.round(pendiente), valor_usd_pendiente, reprog_total: dif.reprog_total || null };
     });
 
     res.json(result);

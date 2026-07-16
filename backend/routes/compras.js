@@ -104,6 +104,7 @@ module.exports = function(db, { logAction, tjNombre }) {
         cuotaCorte: proxima ? Math.round(proxima.totalPagar) : 0,
         cuota_num: cuotaNum,
         cuotas_total: dif.num_cuotas,
+        reprog_total: dif.reprog_total || null,
         monto_bolsillo_cuota: bolCuota ? Math.round(bolCuota.monto) : 0
       };
     });
@@ -896,11 +897,13 @@ module.exports = function(db, { logAction, tjNombre }) {
       // Limpiar el bolsillo per-cuota original de la compra que se reusará para el saldo vivo.
       db.prepare('DELETE FROM bolsillo_cuotas WHERE compra_id=?').run(c.id);
 
-      if (remanente >= 2) {
-        // ── 2a) RENACER: diferida HIJA a `remanente` cuotas ──
-        const rDif = db.prepare(`INSERT INTO diferidas (tarjeta_id, etiqueta, monto, tasa_mv, num_cuotas, fecha_compra, fecha_primer_corte, estado, notas, sin_gracia_cuota1)
-                                 VALUES (?,?,?,?,?,?,?,?,?,1)`)
-          .run(c.tarjeta_id, c.descripcion, saldoRestante, tasaHija, remanente, fechaCompraHija, fechaPrimerCorteHija, 'activo', 'Saldo reprogramado (' + d.num_cuotas + '->' + M + ')');
+      { // ── 2) RENACER (Opcion A): SIEMPRE una diferida HIJA a `remanente` cuotas — incluso remanente==1
+        //     (num_cuotas=1). Antes remanente==1 se reusaba como compra de CONTADO (diferida_id=NULL); ahora
+        //     TODA deuda reprogramada vive en Diferidas con su amortizacion. reprog_total=M (total del plan
+        //     nuevo del banco) -> el badge muestra la numeracion del plan "(k+1)/M" (ej. 2/2), no la local 1/1.
+        const rDif = db.prepare(`INSERT INTO diferidas (tarjeta_id, etiqueta, monto, tasa_mv, num_cuotas, fecha_compra, fecha_primer_corte, estado, notas, sin_gracia_cuota1, reprog_total)
+                                 VALUES (?,?,?,?,?,?,?,?,?,1,?)`)
+          .run(c.tarjeta_id, c.descripcion, saldoRestante, tasaHija, remanente, fechaCompraHija, fechaPrimerCorteHija, 'activo', 'Saldo reprogramado (' + d.num_cuotas + '->' + M + ')', M);
         hijaId = rDif.lastInsertRowid;
         // Re-vincular la compra ORIGINAL al saldo vivo del vigente (conserva id/fecha/created_at).
         // valor_usd/tasa_usd=NULL → el saldo es COP puro; evita que syncData paso 1 lo reviva a
@@ -932,18 +935,6 @@ module.exports = function(db, { logAction, tjNombre }) {
         }
         const sum = db.prepare("SELECT COALESCE(SUM(monto),0) t FROM bolsillo_cuotas WHERE compra_id=? AND COALESCE(moneda,'COP')='COP'").get(c.id);
         db.prepare('UPDATE compras SET monto_bolsillo=? WHERE id=?').run(sum.t, c.id);
-      } else {
-        // ── 2b) RENACER: remanente==1 → reusar la compra original como 1 compra de 1 cuota ──
-        const cReuse = { valor_cop: saldoRestante, es_internacional: esIntl, ciclo: V, fecha: c.fecha, tarjeta_id: c.tarjeta_id, tasa_intl: tasaIntl };
-        const tope = objetivoBolsilloCop(db, cReuse);
-        // TODO el bolsillo futuro (cuotas k+1..N originales) + el excedente rodado → una sola cuota.
-        let bol = rollForward;
-        for (let j = k + 1; j <= d.num_cuotas; j++) bol += (bolMap[j] || 0);
-        // Mismo cap que la rama hija: el excedente sobre el costo real se LIBERA (no se descarta callado).
-        if (tope != null && bol > tope) { bolsilloLiberado += (bol - tope); bol = tope; }
-        const estadoReuse = (tope != null && tope > 0 && bol >= tope) ? 'bolsillo' : (bol > 0 ? 'bolsillo_parcial' : 'pendiente');
-        db.prepare(`UPDATE compras SET estado=?, valor_cop=?, valor_usd=NULL, tasa_usd=NULL, ciclo=?, ciclo_manual=1, diferida_id=NULL, monto_bolsillo=?, monto_bolsillo_usd=0, notas=? WHERE id=?`)
-          .run(estadoReuse, saldoRestante, V, Math.round(bol), (notasBase ? notasBase + ' | ' : '') + 'Saldo reprogramado (cuota ' + M + '/' + M + ')', c.id);
       }
 
       // ── 3) Borrar la diferida ORIGINAL (nadie la referencia: la compra se re-vinculó a la hija o se

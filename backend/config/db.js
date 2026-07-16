@@ -816,6 +816,14 @@ function initDb(dbPathOverride) {
   try { db.prepare('SELECT sin_gracia_cuota1 FROM diferidas LIMIT 1').get(); }
   catch (e) { db.exec('ALTER TABLE diferidas ADD COLUMN sin_gracia_cuota1 INTEGER DEFAULT 0'); }
 
+  // reprog_total = M (total de cuotas del plan REPROGRAMADO por el banco). Solo lo setea la
+  // reprogramacion de saldo (/compras/:id/reprogramar-saldo) en la diferida HIJA. Sirve para que el
+  // badge muestre la numeracion del plan "(k+1)/M" (ej. 2/2) en vez de la local "1/1" cuando la hija
+  // quedo con pocas (o 1) cuotas. NULL en toda diferida normal -> el badge cae a la numeracion local
+  // (num_cuotas), sin regresion. Es metadato de DISPLAY: no afecta la amortizacion (que corre por num_cuotas).
+  try { db.prepare('SELECT reprog_total FROM diferidas LIMIT 1').get(); }
+  catch (e) { db.exec('ALTER TABLE diferidas ADD COLUMN reprog_total INTEGER'); }
+
   // Intereses sobre compras internacionales: se persiste al cerrar el extracto
   // para que el historial mantenga el valor real cobrado por el banco aunque la
   // tasa o las compras cambien después.
