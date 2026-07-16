@@ -261,6 +261,9 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '5.5.3': [
+    'Las cuotas ya facturadas de una compra a cuotas reprogramada ya no aparecen en la lista de Compras del mes pasado: viven solo en la seccion de Diferidas, donde ahora se ven igual que cualquier otra cuota pagada (sin resaltados especiales), manteniendo su estado "Pagado" y su numero de cuota.'
+  ],
   '5.5.2': [
     'Las compras a cuotas reprogramadas ahora se ven de forma coherente: la cuota final (el saldo reprogramado) aparece SOLO en la seccion de Diferidas, ya no duplicada tambien en la lista de Compras.',
     'Al navegar a un mes pasado, las cuotas ya facturadas de una diferida reprogramada ahora tambien se muestran en la seccion de Diferidas (como historial, marcadas "sellada"), para que no se pierda el hilo del plan.'
@@ -2211,10 +2214,11 @@ function CardResumen({ tarjeta, onDataChange }) {
     const grupos = {};
     const singles = [];
     compras.forEach(c => {
-      // Ocultar la compra RENACIDA de una reprogramacion de saldo (diferida HIJA, sin_gracia_cuota1): no
-      // es una compra real, es el saldo vivo del plan -> vive SOLO en la pestaña Diferidas. Las cuotas
-      // SELLADAS (pagos historicos reales) SI se conservan aqui.
+      // Ocultar de la tabla de Compras las filas de reprogramacion de saldo (viven solo en Diferidas):
+      // (a) la compra RENACIDA (diferida HIJA, sin_gracia_cuota1); (b) las cuotas SELLADAS del plan viejo
+      // (notas "sellada por reprogramacion"). Ambas se ven en la pestaña Diferidas (la sellada, read-only).
       if (c.sin_gracia_cuota1) return;
+      if (c.notas && c.notas.indexOf('sellada por reprogramacion') !== -1) return;
       if (c.grupo_id) {
         if (!grupos[c.grupo_id]) grupos[c.grupo_id] = [];
         grupos[c.grupo_id].push(c);
@@ -3086,20 +3090,24 @@ function CardResumen({ tarjeta, onDataChange }) {
                   // y su estado real (Pagado/Pendiente). Se inyecta desde GET /diferidas al ver su ciclo.
                   const renderSelladaDif = (s) => {
                     var pagada = s.estado_sellada === 'pagado';
-                    return e('tr', { key: s.id, style: { opacity: 0.7, background: pagada ? 'rgba(52,211,153,0.06)' : undefined } },
+                    // Se ve EXACTO a una diferida normal pagada (misma fila que renderSingleDif con ciclo
+                    // pagado): sin atenuado, sin badge "sellada", con su cuota "i/M", saldo $0 y estado
+                    // Pagado. Unica diferencia: READ-ONLY (sin acciones editar/borrar) — es historia sellada.
+                    return e('tr', { key: s.id, style: { background: pagada ? 'rgba(52,211,153,0.10)' : undefined } },
                       e('td', null, fmtDate(s.fecha_compra)),
                       e('td', null, e('div', { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
-                        e('span', { style: { fontWeight: 600 } }, s.etiqueta),
-                        e('span', { className: 'badge', style: { fontSize: 9, background: 'var(--bg-tertiary)', color: 'var(--text-muted)', padding: '1px 6px', borderRadius: 4 } }, 'sellada')
+                        e('span', { style: { fontWeight: 600 } }, s.etiqueta)
                       )),
                       e('td', { style: { fontSize: 12 } }, s.es_de_tercero
                         ? e('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 6 } }, e('span', { style: { background: s.persona_color || 'var(--accent)', width: 8, height: 8, display: 'inline-block', borderRadius: '50%' } }), e('span', { style: { color: 'var(--text-primary)' } }, s.persona_nombre))
                         : e('span', { style: { color: 'var(--text-muted)' } }, '—')),
-                      e('td', { className: 'text-right text-mono', style: { fontWeight: 700, color: 'var(--success)' } }, fmtCOP(s.cuotaCorte)),
+                      e('td', { className: 'text-right text-mono', style: { fontWeight: 700, color: pagada ? 'var(--success)' : 'var(--danger)' } }, fmtCOP(s.cuotaCorte)),
                       e('td', null, (s.cuota_num_sellada || 1) + (s.reprog_total_sellada ? '/' + s.reprog_total_sellada : '')),
-                      e('td', { className: 'text-mono', style: { color: 'var(--text-muted)' } }, '—'),
+                      e('td', { className: 'text-mono' }, '—'),
                       e('td', { className: 'text-right text-mono', style: { fontWeight: 700, color: 'var(--success)' } }, fmtCOP(0)),
-                      e('td', null, e('span', { className: 'badge badge-' + (pagada ? 'pagado' : 'pendiente'), style: { fontSize: 10 } }, pagada ? 'Pagado' : 'Pendiente')),
+                      e('td', null, pagada
+                        ? e('span', { className: 'badge badge-pagado', style: { display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, padding: '4px 10px' } }, e(Ico, { name: 'check', size: 12, color: 'currentColor' }), 'Pagado')
+                        : e('span', { className: 'badge badge-pendiente' }, 'pendiente')),
                       e('td', null)
                     );
                   };
