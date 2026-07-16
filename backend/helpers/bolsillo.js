@@ -24,6 +24,11 @@ const { aplicaIntInternacional } = require('./banco');
 // NO resta monto_abonado: eso lo hace cada llamador según su contexto (saldo restante).
 function objetivoBolsilloCop(db, c) {
   let tgt = c.valor_cop || 0;
+  // Cuota SELLADA por reprogramación de saldo: su costo REAL es capital (valor_cop) + el interés que el
+  // banco facturó por esa cuota (interes_sellado). Sin sumarlo, el tope del bolsillo se queda en el
+  // capital y un tercero NO puede registrar su reembolso completo (el modal lo capa) → su deuda por esa
+  // cuota nunca se salda. NULL en toda compra no sellada → COALESCE a 0 → cero regresión.
+  tgt += Math.round(c.interes_sellado || 0);
   if (c.es_internacional && c.ciclo) {
     const tj = db.prepare('SELECT banco, franquicia, tasa_mv_avances, dia_corte FROM tarjetas WHERE id=?').get(c.tarjeta_id);
     if (tj && aplicaIntInternacional(tj.banco, tj.franquicia)) {

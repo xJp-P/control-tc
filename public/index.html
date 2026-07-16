@@ -261,6 +261,15 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '5.6.0': [
+    'REPROGRAMAR COMPRAS DE UN TERCERO. Ahora puedes cambiar el numero de cuotas de una compra que le prestaste a alguien, incluso si esa persona ya te reembolso parte o todo. Antes el boton "Reprogramar" estaba bloqueado para cualquier compra con responsable y tocaba retirarle los reembolsos a mano, uno por uno, para poder tocarla.',
+    'COMO FUNCIONA: las cuotas que el banco ya te facturo quedan congeladas tal como se pagaron (no se vuelven a tocar) y el saldo que sigue vivo renace con el plan de cuotas nuevo. Lo que le debes al banco no cambia ni un peso: solo cambia en cuantas cuotas te queda repartido, y por eso el interes total se recalcula.',
+    'DOS CUENTAS SEPARADAS: cada cuota congelada guarda por un lado lo que el banco te cobro y por otro el reembolso que esa persona ya te hizo, con sus intereses. Asi nunca se le vuelve a cobrar lo que ya pago; y si solo te reembolso una parte, sigues viendo que te debe el resto de esa cuota CON sus intereses (antes ese interes se perdia de su cuenta). El dinero de mas que aporto por los intereses de esas cuotas no le queda a favor, porque el banco ya te lo cobro.',
+    'DINERO A FAVOR AUTOMATICO: si esa persona te habia adelantado cuotas que con el plan nuevo desaparecen, ese dinero ya no se mete solo en la cuota que queda. Pasa completo a su saldo a favor, con una nota de que compra salio, para que seas tu quien decida a que deuda suya aplicarlo desde "Dinero a favor" en Terceros. Lo mismo si te adelanto mas de lo que cuesta el plan nuevo.',
+    'TODO EN UN SOLO LUGAR: cualquier deuda que venga de una reprogramacion se gestiona ahora desde Diferidas. La cuota final aparece SOLO ahi, ya no duplicada tambien en la lista de Compras; y aunque quede una sola cuota se muestra con su tabla de amortizacion y bien etiquetada como la ultima del plan (por ejemplo "Cuota 2/2"), en vez de quedar suelta como una compra corriente.',
+    'HISTORIAL SIN PERDER EL HILO: al navegar a un mes pasado, las cuotas ya facturadas de una compra reprogramada se muestran en Diferidas con su estado "Pagado" y su numero de cuota, igual que cualquier otra cuota pagada, y desaparecen de la lista de Compras de ese mes. Asi ves el plan completo sin encontrarte la misma deuda dos veces.',
+    'Arreglado un detalle de centavos: una cuota reembolsada al peso exacto ya no aparece como "no cubierta" en la pestana Terceros.'
+  ],
   '5.5.3': [
     'Las cuotas ya facturadas de una compra a cuotas reprogramada ya no aparecen en la lista de Compras del mes pasado: viven solo en la seccion de Diferidas, donde ahora se ven igual que cualquier otra cuota pagada (sin resaltados especiales), manteniendo su estado "Pagado" y su numero de cuota.'
   ],
@@ -2166,6 +2175,11 @@ function CardResumen({ tarjeta, onDataChange }) {
       refreshAll();
       let msg = 'Saldo reprogramado: ' + r.k + ' cuota(s) sellada(s), saldo a ' + r.remanente + ' cuota(s).';
       if (r.bolsillo_liberado > 0) msg += ' Se liberaron ' + fmtCOP(r.bolsillo_liberado) + ' del bolsillo.';
+      // Prepago de cuotas futuras de un TERCERO: no se inyecta al bolsillo del saldo renacido (queda en
+      // $0) — nace como crédito a su favor para que el usuario lo aplique donde decida. Hay que AVISARLO
+      // o el crédito se crea en silencio (las dos ramas son excluyentes: en un tercero bolsillo_liberado
+      // es siempre 0, así que sin esto nunca se informaba).
+      if (r.saldo_favor_creado > 0) msg += ' Su prepago de cuotas futuras (' + fmtCOP(r.saldo_favor_creado) + ') pasó a saldo a favor del responsable: aplícalo desde "Dinero a favor" en Terceros.';
       toast(msg);
     });
   }
@@ -3127,7 +3141,10 @@ function CardResumen({ tarjeta, onDataChange }) {
           e('div', { className: 'toolbar-spacer' }),
           (() => {
             const dd = diferidaDetail;
-            const noElegible = !dd.compra_id ? 'Sin compra vinculada' : dd.grupo_id ? 'Compra dividida: reprograma cada parte por separado' : dd.tercero_con_reembolso ? 'Compra de tercero con reembolsos: gestionala desde Terceros' : dd.es_usd_pura ? 'Compra solo en dolares (no soportado)' : dd.tiene_abono_parcial ? 'Tiene un abono parcial registrado' : null;
+            // Ya NO se bloquea por tercero_con_reembolso: reprogramar-saldo preserva el libro del tercero
+            // (cada cuota sellada conserva su reembolso integro + interes_sellado, y la renacida hereda
+            // su persona_id). El flag sigue expuesto por GET /diferidas/:id para otros usos.
+            const noElegible = !dd.compra_id ? 'Sin compra vinculada' : dd.grupo_id ? 'Compra dividida: reprograma cada parte por separado' : dd.es_usd_pura ? 'Compra solo en dolares (no soportado)' : dd.tiene_abono_parcial ? 'Tiene un abono parcial registrado' : null;
             return e('button', { className: 'btn btn-sm', disabled: !!noElegible, title: noElegible || 'Reprogramar el saldo restante a un nuevo numero de cuotas', style: noElegible ? { opacity: 0.5, cursor: 'not-allowed', marginRight: 6 } : { marginRight: 6 }, onClick: () => { if (noElegible) return; setReproDiferida(dd); setShowReprogramarModal(true); } }, e(Ico, { name: 'refresh', size: 14, color: 'currentColor' }), ' Reprogramar');
           })(),
           e('button', { className: 'btn btn-sm', onClick: () => { setSelectedDiferida(null); setDiferidaDetail(null); }, style: { fontSize: 18, padding: '4px 10px' } }, '\u{2715}')
@@ -6854,6 +6871,15 @@ function Terceros({ tarjeta }) {
     return Math.round(saldo * tasaIntl * (dias / 30));
   };
 
+  // OBJETIVO COP de una compra de tercero = lo que me debe por ella: capital + interés. El interés llega
+  // por DOS vías EXCLUYENTES entre sí:
+  //  · interes_sellado → cuota SELLADA por reprogramación de saldo: el interés REAL que el banco facturó
+  //    por esa cuota. La sellada nace con es_internacional=0, así que las dos vías nunca se suman.
+  //  · recargo intl en vivo → compra internacional normal (Bancolombia Visa).
+  // PUNTO ÚNICO a propósito: esta fórmula estaba copiada en 6 sitios y YA estaba desincronizada (dos de
+  // ellos ni sumaban el intl). Todo consumidor debe llamar aquí — es el espejo de objetivoBolsilloCop.
+  const objetivoTerceroCop = (c) => (c.valor_cop || 0) + Math.round(c.interes_sellado || 0) + calcInteresIntlTercero(c);
+
   // Columna DINERO unificada (compras 1-cuota y cuotas de diferida): "Pagado" (verde) si el tercero
   // saldó — sea por el toggle "Recibido" o porque el bolsillo/reembolso cubre el total —; "Pendiente"
   // (rojo) si aún debe. En parcial conserva el detalle "$apartado / $total · Falta" (sigue pendiente).
@@ -6889,14 +6915,13 @@ function Terceros({ tarjeta }) {
       grouped[key].totalRecibido += cubiertas;
     } else {
       const bol = c.monto_bolsillo || 0;
-      const intl = calcInteresIntlTercero(c);
-      grouped[key].totalPendiente += c.valor_cop - bol + intl;
+      grouped[key].totalPendiente += objetivoTerceroCop(c) - bol;
       grouped[key].totalRecibido += bol;
       if (c.valor_usd && c.valor_usd > 0) grouped[key].totalPendienteUsd += c.valor_usd;
     }
   });
   const personas = Object.values(grouped);
-  const totalPendiente = compras.filter(c => !c.tercero_pagado).reduce((s, c) => s + (c.es_diferida ? (c.valor_pendiente || 0) : c.valor_cop - (c.monto_bolsillo || 0) + calcInteresIntlTercero(c)), 0);
+  const totalPendiente = compras.filter(c => !c.tercero_pagado).reduce((s, c) => s + (c.es_diferida ? (c.valor_pendiente || 0) : objetivoTerceroCop(c) - (c.monto_bolsillo || 0)), 0);
   const totalPendienteUsd = compras.filter(c => !c.tercero_pagado).reduce((s, c) => s + (c.es_diferida ? (c.valor_usd_pendiente || 0) : (c.valor_usd || 0)), 0);
   const totalRecibido = compras.reduce((s, c) => {
     if (c.tercero_pagado) return s + c.valor_cop;
@@ -6999,7 +7024,7 @@ function Terceros({ tarjeta }) {
                 const rows = ciclosMap[cic];
                 const subPendiente = rows.reduce((s, { _compra: c, _cuota: q }) => {
                   if (q) return s + (c.tercero_pagado || q.cubierta_bolsillo ? 0 : q.total);
-                  return s + (c.tercero_pagado ? 0 : c.valor_cop - (c.monto_bolsillo || 0) + calcInteresIntlTercero(c));
+                  return s + (c.tercero_pagado ? 0 : objetivoTerceroCop(c) - (c.monto_bolsillo || 0));
                 }, 0);
                 const subRecibido = rows.reduce((s, { _compra: c, _cuota: q }) => {
                   if (q) return s + (c.tercero_pagado || q.cubierta_bolsillo ? q.total : 0);
@@ -7075,7 +7100,7 @@ function Terceros({ tarjeta }) {
                         // El tercero debe su valor + su porción proporcional del interés intl de su
                         // división (v4.8.2): el bolsillo cubre cuando alcanza valor+intl, igual que la
                         // tabla principal (renderSingleRow) y la card "Me Deben" del dashboard.
-                        const objetivoTercero = c.valor_cop + intlTercero;
+                        const objetivoTercero = objetivoTerceroCop(c);
                         const bolCubre = bol >= objetivoTercero;
                         const faltaBol = Math.max(0, objetivoTercero - bol);
                         const pctBol = objetivoTercero > 0 ? Math.min(100, Math.round(bol / objetivoTercero * 100)) : 0;
@@ -7096,7 +7121,7 @@ function Terceros({ tarjeta }) {
                           ),
                           aplicaIntl && tasaIntlTd(c, tarjeta),
                           aplicaIntl && e('td', { className: 'text-right text-mono', style: { fontSize: 12 } }, intlTercero > 0 ? fmtCOP(intlTercero) : e('span', { style: { color: 'var(--text-muted)' } }, '—')),
-                          aplicaIntl && e('td', { className: 'text-right text-mono', style: { fontWeight: intlTercero > 0 ? 600 : undefined } }, fmtCOP(intlTercero > 0 ? c.valor_cop + intlTercero : c.valor_cop)),
+                          aplicaIntl && e('td', { className: 'text-right text-mono', style: { fontWeight: intlTercero > 0 ? 600 : undefined } }, fmtCOP(objetivoTercero)),
                           // ESTADO TC = estado con el BANCO: ignora el bolsillo (que es plata del usuario, no
                           // del banco). Una compra de tercero visible aquí aún no está pagada al banco → 'Pendiente'.
                           // (La columna "Dinero" ya muestra si el tercero reembolsó; si el ciclo se paga, la compra
@@ -7118,7 +7143,7 @@ function Terceros({ tarjeta }) {
                                 ? e('button', { className: 'btn btn-sm btn-danger', onClick: () => togglePagado(c.id) }, 'Desmarcar')
                                 : e('button', {
                                     className: 'btn btn-sm btn-success',
-                                    onClick: () => openBolsilloTercero(c, c.valor_cop + calcInteresIntlTercero(c))
+                                    onClick: () => openBolsilloTercero(c, objetivoTerceroCop(c))
                                   }, 'Bolsillo')
                           )
                         );
@@ -7206,6 +7231,10 @@ function Terceros({ tarjeta }) {
       const creditos = (saldosFavor.creditos || [])
         .filter(cr => String(cr.persona_id) === String(pid))
         .sort((a, b) => (a.estado === 'activo' ? 0 : 1) - (b.estado === 'activo' ? 0 : 1));
+      // OJO: capital pelado A PROPÓSITO — espejo EXACTO del guard del backend (saldosFavor.js:
+      // deudaTercero = valor_cop - monto_bolsillo). El cruce de un saldo a favor sigue topeado al
+      // CAPITAL desde v4.8.2 (el interés se cubre con el bolsillo). Si aquí se suma el interés, el modal
+      // ofrece un máximo que el backend rechaza con 400. NO usar objetivoTerceroCop aquí.
       const deudas = compras.filter(c => String(c.persona_id) === String(pid) && !c.es_diferida && (c.valor_cop - (c.monto_bolsillo || 0)) > 0);
       return e('div', { className: 'modal-overlay', onClick: () => { setFavorModal(null); setAplicarSel(null); } },
         e('div', { className: 'modal', onClick: ev => ev.stopPropagation() },
@@ -7223,6 +7252,7 @@ function Terceros({ tarjeta }) {
                   const disp = Math.round(cr.disponible);
                   const abierto = !!(aplicarSel && aplicarSel.creditoId === cr.id);
                   const dSel = deudas.find(x => String(x.id) === String(aplicarSel && aplicarSel.compra_destino_id));
+                  // Capital pelado: espejo del cap del backend (saldosFavor.js). Ver nota en `deudas`.
                   const maxCruce = dSel ? Math.min(disp, Math.round(dSel.valor_cop - (dSel.monto_bolsillo || 0))) : disp;
                   const aps = cr.aplicaciones || [];
                   const estadoLabel = cr.estado === 'liquidado' ? 'Liquidado' : (disp > 0 ? 'Disponible' : 'Consumido');
@@ -7248,7 +7278,7 @@ function Terceros({ tarjeta }) {
                             e('div', { className: 'form-group', style: { marginBottom: 8 } },
                               e('label', { className: 'form-label' }, 'Aplicar a la deuda'),
                               e('select', { className: 'form-select', value: aplicarSel.compra_destino_id, onChange: ev => setAplicarSel(prev => ({ ...prev, compra_destino_id: ev.target.value })) },
-                                deudas.map(d => e('option', { key: d.id, value: String(d.id) }, d.descripcion + ' — debe ' + fmtCOP(d.valor_cop + calcInteresIntlTercero(d) - (d.monto_bolsillo || 0)))))
+                                deudas.map(d => e('option', { key: d.id, value: String(d.id) }, d.descripcion + ' — debe ' + fmtCOP(objetivoTerceroCop(d) - (d.monto_bolsillo || 0)))))
                             ),
                             e('div', { className: 'form-group', style: { marginBottom: 6 } },
                               e('label', { className: 'form-label' }, 'Monto a cruzar'),

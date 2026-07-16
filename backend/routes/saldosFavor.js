@@ -16,9 +16,13 @@ module.exports = function(db, { logAction }) {
   // Las diferidas conservan 'diferida' (usan bolsillo per-cuota, fuera del alcance de v1).
   function derivarEstadoCompra(c, nuevoBolsillo) {
     if (c.estado === 'diferida') return 'diferida';
-    // El tercero no queda saldado hasta cubrir valor + interés intl (no solo el capital). Mismo
-    // objetivo que el cap de /bolsillo, la tabla principal y la card "Me Deben" del dashboard (v4.8.2).
-    const saldo = r2(objetivoBolsilloCop(db, c) - (c.monto_abonado || 0));
+    // El tercero no queda saldado hasta cubrir valor + interés (intl, o el de una cuota SELLADA vía
+    // interes_sellado) — no solo el capital. Mismo objetivo que el cap de /bolsillo, la tabla principal
+    // y la card "Me Deben" del dashboard (v4.8.2).
+    // NO se resta monto_abonado en compras de TERCERO: ahí es lo que YO le pagué al banco, no algo que
+    // reduzca lo que él me debe. Restarlo hacía que un cruce sobre una cuota sellada de ciclo pagado
+    // (monto_abonado=capital) marcara 'pagado'/tercero_pagado=1 y BORRARA su deuda real.
+    const saldo = r2(objetivoBolsilloCop(db, c) - (c.persona_id ? 0 : (c.monto_abonado || 0)));
     if (saldo <= 0) return 'pagado';
     return nuevoBolsillo >= saldo ? 'bolsillo' : (nuevoBolsillo > 0 ? 'bolsillo_parcial' : 'pendiente');
   }

@@ -22,6 +22,11 @@ module.exports = function(db, { logAction, tjNombre }) {
     // las cuotas" via SQL agregado a bolsillo_cuotas sería costoso y poco común).
     let sql = `SELECT c.id, c.fecha, c.descripcion, c.nota_personal, c.tasa_intl, c.valor_cop, c.valor_usd, c.estado, c.ciclo, c.tercero_pagado,
                COALESCE(c.tercero_monto_abonado, 0) as tercero_monto_abonado,
+               -- interes_sellado: interés de una cuota SELLADA por reprogramación de saldo. El tercero
+               -- me debe capital + este interés (el banco me facturó ambos). El SELECT es lista
+               -- EXPLÍCITA: sin esta línea la columna NUNCA llega al frontend y su deuda se queda en
+               -- capital pelado (fuga silenciosa: no falla, solo pierde plata).
+               COALESCE(c.interes_sellado, 0) as interes_sellado,
                COALESCE(c.monto_bolsillo, 0) as monto_bolsillo,
                COALESCE(c.monto_bolsillo_usd, 0) as monto_bolsillo_usd,
                COALESCE(c.es_internacional, 0) as es_internacional,
@@ -31,9 +36,11 @@ module.exports = function(db, { logAction, tjNombre }) {
                WHERE c.persona_id IS NOT NULL
                  AND NOT (
                    -- (a) Compra 1-cuota COP: extracto COP pagado Y (tercero pagó O bolsillo cubre total).
+                   -- El objetivo incluye interes_sellado: una cuota sellada cuyo reembolso solo cubre el
+                   -- CAPITAL se ocultaría de Terceros aunque el tercero aún deba su interés.
                    (c.estado != 'diferida'
                     AND c.valor_cop > 0
-                    AND (c.tercero_pagado = 1 OR COALESCE(c.monto_bolsillo, 0) >= c.valor_cop)
+                    AND (c.tercero_pagado = 1 OR COALESCE(c.monto_bolsillo, 0) >= c.valor_cop + COALESCE(c.interes_sellado, 0))
                     AND EXISTS (SELECT 1 FROM extractos ext
                                  WHERE ext.tarjeta_id = c.tarjeta_id AND ext.ciclo = c.ciclo
                                    AND ext.estado = 'pagado'))
@@ -120,7 +127,10 @@ module.exports = function(db, { logAction, tjNombre }) {
     const cruceSF = db.prepare("SELECT 1 FROM aplicaciones_saldo_favor WHERE compra_destino_id=? AND tipo='cruce' LIMIT 1").get(req.params.id);
     if (cruceSF) return res.status(409).json({ error: 'Esta compra recibió un saldo a favor cruzado. Deshazlo desde "Dinero a favor" antes de cambiar su estado.' });
     const nuevo = compra.tercero_pagado ? 0 : 1;
-    db.prepare('UPDATE compras SET tercero_pagado=?, tercero_monto_abonado=? WHERE id=?').run(nuevo, nuevo ? compra.valor_cop : 0, req.params.id);
+    // Objetivo = capital + interés de la cuota sellada (si aplica): al marcar "Recibido" el abono debe
+    // cubrir lo que el tercero DEBE, no solo el capital, o la aritmética dejaría deuda residual.
+    const objToggle = Math.round((compra.valor_cop || 0) + (compra.interes_sellado || 0));
+    db.prepare('UPDATE compras SET tercero_pagado=?, tercero_monto_abonado=? WHERE id=?').run(nuevo, nuevo ? objToggle : 0, req.params.id);
     const persona = compra.persona_id ? db.prepare('SELECT nombre FROM personas WHERE id=?').get(compra.persona_id) : null;
     logAction('editar', tjNombre(compra.tarjeta_id) + (nuevo ? 'Tercero pago: ' : 'Tercero marcado como pendiente: ') + compra.descripcion + (persona ? ' (' + persona.nombre + ')' : ''));
     res.json({ ok: true, tercero_pagado: nuevo });
@@ -132,8 +142,12 @@ module.exports = function(db, { logAction, tjNombre }) {
     const compra = db.prepare('SELECT * FROM compras WHERE id=?').get(req.params.id);
     if (!compra) return res.status(404).json({ error: 'Compra no encontrada' });
     if (!compra.persona_id) return res.status(400).json({ error: 'Solo compras de terceros' });
-    const nuevoAbono = Math.min((compra.tercero_monto_abonado || 0) + monto, compra.valor_cop);
-    const pagado = nuevoAbono >= compra.valor_cop ? 1 : 0;
+    // Objetivo = capital + interés de la cuota sellada (si aplica). Sin sumarlo, el CAP impediría
+    // físicamente que el tercero abone el interés que debe (el excedente se descartaba en silencio) y el
+    // umbral marcaría tercero_pagado=1 antes de tiempo.
+    const objAbono = Math.round((compra.valor_cop || 0) + (compra.interes_sellado || 0));
+    const nuevoAbono = Math.min((compra.tercero_monto_abonado || 0) + monto, objAbono);
+    const pagado = nuevoAbono >= objAbono ? 1 : 0;
     db.prepare('UPDATE compras SET tercero_monto_abonado=?, tercero_pagado=? WHERE id=?').run(nuevoAbono, pagado, req.params.id);
     const persona = compra.persona_id ? db.prepare('SELECT nombre FROM personas WHERE id=?').get(compra.persona_id) : null;
     logAction('editar', tjNombre(compra.tarjeta_id) + 'Abono tercero: ' + compra.descripcion + (persona ? ' (' + persona.nombre + ')' : '') + ' +' + monto);

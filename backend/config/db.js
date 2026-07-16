@@ -824,6 +824,17 @@ function initDb(dbPathOverride) {
   try { db.prepare('SELECT reprog_total FROM diferidas LIMIT 1').get(); }
   catch (e) { db.exec('ALTER TABLE diferidas ADD COLUMN reprog_total INTEGER'); }
 
+  // interes_sellado = interes (en pesos ENTEROS) de la cuota que representa una compra SELLADA por
+  // reprogramacion de saldo (/compras/:id/reprogramar-saldo). Es metadato del LIBRO DEL TERCERO: el
+  // tercero me debe por esa cuota capital (valor_cop) + interes_sellado, porque el banco me facturo
+  // AMBOS. El LIBRO DEL BANCO lo IGNORA por completo: valor_cop sigue siendo capital puro, para que se
+  // mantengan el invariante Σ(capital sellado)+saldoRestante==monto y el cruce de la IA por capital.
+  // Se guarda REDONDEADO A PESO a proposito: mas abajo syncData fuerza monto_bolsillo=ROUND(...) en cada
+  // arranque, asi que un objetivo con centavos seria INALCANZABLE (bolsillo_parcial eterno + degradacion
+  // recurrente). NULL en toda compra que no sea una sellada -> cero regresion.
+  try { db.prepare('SELECT interes_sellado FROM compras LIMIT 1').get(); }
+  catch (e) { db.exec('ALTER TABLE compras ADD COLUMN interes_sellado REAL'); }
+
   // Intereses sobre compras internacionales: se persiste al cerrar el extracto
   // para que el historial mantenga el valor real cobrado por el banco aunque la
   // tasa o las compras cambien después.

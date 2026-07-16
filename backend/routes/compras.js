@@ -249,7 +249,10 @@ module.exports = function(db, { logAction, tjNombre }) {
     // inflado ni un estado "cubierto" falso. Las diferidas usan bolsillo per-cuota
     // (bolsillo_cuotas) y no se tocan aquí.
     if (current && current.estado !== 'diferida' && finalEstado !== 'diferida') {
-      const topeEdit = targetBolsillo({ valor_cop, valor_usd, es_internacional: finalIntl, ciclo, fecha, tarjeta_id, tasa_intl: finalTasaIntl }, 'COP', null);
+      // interes_sellado se propaga desde la fila actual (el PUT no lo edita): sin él, el objeto armado a
+      // mano deja el tope en el capital pelado y el re-cap DESTRUIRÍA la parte del reembolso de un
+      // tercero que corresponde al interés de una cuota sellada.
+      const topeEdit = targetBolsillo({ valor_cop, valor_usd, es_internacional: finalIntl, ciclo, fecha, tarjeta_id, tasa_intl: finalTasaIntl, persona_id: current.persona_id, interes_sellado: current.interes_sellado }, 'COP', null);
       if (topeEdit != null) {
         if (finalBolsillo > topeEdit) finalBolsillo = topeEdit;
         finalEstado = (topeEdit > 0 && finalBolsillo >= topeEdit) ? 'bolsillo' : (finalBolsillo > 0 ? 'bolsillo_parcial' : 'pendiente');
@@ -334,7 +337,12 @@ module.exports = function(db, { logAction, tjNombre }) {
     let tope = targetBolsillo(c, monedaPago, cuota_num);
     // Si la compra ya tiene un abono a capital (COP), el tope baja al saldo restante: no se debe apartar
     // más de lo que aún se debe (valor [+ interés] − abonado). Para abonado=0 el tope no cambia.
-    if (monedaPago === 'COP' && tope != null && (c.monto_abonado || 0) > 0) tope = Math.max(0, tope - (c.monto_abonado || 0));
+    // NUNCA en compras de TERCERO (!c.persona_id): ahí monto_abonado es lo que YO le pagué al BANCO
+    // (libro del banco), mientras monto_bolsillo es SU reembolso (libro del tercero) y él me sigue
+    // debiendo capital+interés. Restarlo dejaba el tope en 0 en una cuota SELLADA de ciclo pagado
+    // (monto_abonado=capital) → guardar el bolsillo lo BORRABA y su deuda saltaba de $0 al capital
+    // completo, en silencio. Hallazgo CRÍTICO de la revisión adversarial de v5.6.0.
+    if (monedaPago === 'COP' && tope != null && !c.persona_id && (c.monto_abonado || 0) > 0) tope = Math.max(0, tope - (c.monto_abonado || 0));
     if (tope != null && nuevoMonto > tope) { nuevoMonto = tope; capped = true; }
 
     // Piso del cruce: el bolsillo COP no puede quedar por debajo de lo cubierto por un saldo a favor
@@ -793,8 +801,24 @@ module.exports = function(db, { logAction, tjNombre }) {
     // Solo se rechaza la compra USD PURA (sin valor en pesos): la amortización de la hija corre sobre el
     // COP. Una internacional de Visa (valor_cop>0 + USD informativo) SÍ se reprograma.
     if (c.valor_usd && c.valor_usd > 0 && (!c.valor_cop || c.valor_cop <= 0)) return res.status(400).json({ error: 'Reprogramar compras solo en dólares (sin valor en pesos) no está soportado.' });
-    if (compraTerceroConReembolso(db, c.id)) {
-      return res.status(403).json({ error: 'No se puede reprogramar: esta compra es de un tercero y ya tiene reembolsos registrados. Gestiona o retira esos abonos desde la pestaña Terceros antes de reprogramar.' });
+    // Guard de tercero ACOTADO al canal que el sellado SÍ sabe repartir (v1). El guard genérico
+    // (compraTerceroConReembolso, que conservan convertir/revertir/merge — endpoints que NO saben sellar)
+    // bloqueaba los CUATRO canales de reembolso; aquí solo soportamos el del bolsillo COP per-cuota
+    // (bolsillo_cuotas), que el sellado traslada íntegro cuota por cuota + interes_sellado. Los otros dos
+    // se bloquean porque NO se sabe repartirlos entre las k selladas y la renacida:
+    //   · tercero_pagado / tercero_monto_abonado: el toggle "Recibido" y los abonos directos son de la
+    //     compra COMPLETA, no por cuota. Sellar sin propagarlos RESUCITA deuda fantasma (medido: un
+    //     tercero en cero pasaba a deber +$212.913).
+    //   · monto_bolsillo_usd / bolsillo_cuotas USD: el traslado solo mueve COP → el reembolso USD se
+    //     perdería sin traza ni saldo a favor (medido: USD $50 evaporados).
+    if (c.persona_id) {
+      if (c.tercero_pagado || (c.tercero_monto_abonado || 0) > 0) {
+        return res.status(403).json({ error: 'Esta compra es de un tercero marcado como "Recibido" (o con abonos directos): ese reembolso es de la compra completa y aún no se sabe repartir entre las cuotas al reprogramar. Gestiónalo desde la pestaña Terceros antes de reprogramar. El reembolso por bolsillo (cuota a cuota) SÍ está soportado.' });
+      }
+      const bolUsd = db.prepare("SELECT COALESCE(SUM(monto),0) t FROM bolsillo_cuotas WHERE compra_id=? AND COALESCE(moneda,'COP')='USD'").get(c.id);
+      if ((c.monto_bolsillo_usd || 0) > 0 || (bolUsd && bolUsd.t > 0)) {
+        return res.status(403).json({ error: 'Esta compra de tercero tiene reembolso en dólares. Reprogramar solo traslada el reembolso en pesos, así que el de dólares se perdería. Retíralo desde Terceros antes de reprogramar.' });
+      }
     }
     const d = db.prepare('SELECT * FROM diferidas WHERE id=?').get(c.diferida_id);
     if (!d) return res.status(404).json({ error: 'No se encontró el plan de cuotas vinculado.' });
@@ -866,9 +890,12 @@ module.exports = function(db, { logAction, tjNombre }) {
       .forEach(b => { bolMap[b.cuota_num] = Math.round(b.monto); });
 
     const cicloPagado = (ci) => { const e = db.prepare("SELECT estado FROM extractos WHERE tarjeta_id=? AND ciclo=?").get(c.tarjeta_id, ci); return !!(e && e.estado === 'pagado'); };
-    const esIntl = c.es_internacional ? 1 : 0;
-    const tasaIntl = (c.tasa_intl != null) ? c.tasa_intl : null;
-    let hijaId = null, rollForward = 0, bolsilloLiberado = 0;
+    // Un TERCERO tiene DOS libros y hay que servirlos por separado (ver el bloque de sellado):
+    //   BANCO   → valor_cop = capital, estado = estado del extracto. Invariante Σcapital+saldo==monto.
+    //   TERCERO → monto_bolsillo = SU reembolso (no es plata mía) + interes_sellado = el interés que
+    //             el banco me facturó por esa cuota y que él también me debe.
+    const esTercero = !!c.persona_id;
+    let hijaId = null, rollForward = 0, bolsilloLiberado = 0, saldoFavorCreado = 0;
     const sellados = [];
 
     const reprogramar = db.transaction(() => {
@@ -877,23 +904,45 @@ module.exports = function(db, { logAction, tjNombre }) {
         const q = tabla[i];
         const ciCuota = q.fechaCorte.slice(0, 7);
         const capital = sealCapitals[i];
-        let estadoSello, abonado = 0, bolSello = 0;
-        if (cicloPagado(ciCuota)) {
-          // Ese extracto ya se pagó → 'pagado' + monto_abonado=capital (tríada completa; el bolsillo de
-          // esa cuota se consumió al pagar). No se roda (la plata fue al banco).
+        let estadoSello, abonado = 0, bolSello = 0, intSellado = null;
+        if (esTercero) {
+          // TERCERO — los dos libros, desacoplados:
+          //  (a) BANCO: el estado lo decide el EXTRACTO, nunca el bolsillo (convención v4.4.1: en una
+          //      compra de tercero el "Estado TC" es el estado con el banco e ignora el bolsillo).
+          //  (b) TERCERO: su reembolso se conserva COMPLETO — sin capar y SIN rodar. El excedente sobre
+          //      el capital es el INTERÉS que él ya pagó: murió en esta cuota (el banco ya me lo cobró);
+          //      rodarlo al saldo nuevo sería un crédito futuro por plata ya consumida (doble crédito).
+          //      interes_sellado persiste ese interés para que su deuda por la cuota siga siendo
+          //      capital+interés: si reembolsó a medias, sigue debiendo el remanente CON su interés.
+          if (cicloPagado(ciCuota)) { estadoSello = 'pagado'; abonado = capital; }
+          else { estadoSello = 'pendiente'; }
+          bolSello = bolMap[i + 1] || 0;
+          // POR RESTA, no Math.round(q.interesTotal): así capital + interes_sellado == round(totalPagar)
+          // EXACTO. round(capital)+round(interés) puede diferir en $1 de round(capital+interés), y ese
+          // round(totalPagar) es justo el tope con el que targetBolsillo dejó apartar el reembolso →
+          // el objetivo quedaría $1 por encima de lo máximo reembolsable = deuda fantasma perpetua.
+          intSellado = Math.round(q.totalPagar || 0) - capital;
+        } else if (cicloPagado(ciCuota)) {
+          // Personal: ese extracto ya se pagó → 'pagado' + monto_abonado=capital (tríada completa; el
+          // bolsillo de esa cuota se consumió al pagar). No se roda (la plata fue al banco).
           estadoSello = 'pagado'; abonado = capital;
         } else {
-          // Ciclo cerrado IMPAGO → conserva su bolsillo (cap al capital); el exceso (si cubría interés)
-          // se roda al saldo futuro para no perder un peso.
+          // Personal + ciclo cerrado IMPAGO → conserva su bolsillo (cap al capital); el exceso (si cubría
+          // interés) se roda al saldo futuro para no perder un peso.
           const b = bolMap[i + 1] || 0;
           bolSello = Math.min(b, capital);
           if (b > bolSello) rollForward += (b - bolSello);
           estadoSello = (bolSello >= capital && capital > 0) ? 'bolsillo' : (bolSello > 0 ? 'bolsillo_parcial' : 'pendiente');
         }
-        const r = db.prepare(`INSERT INTO compras (tarjeta_id, fecha, descripcion, valor_cop, persona_id, estado, ciclo, notas, nota_personal, es_internacional, ciclo_manual, tasa_intl, monto_abonado, monto_bolsillo)
-                              VALUES (?,?,?,?,?,?,?,?,?,?,1,?,?,?)`)
+        // es_internacional=0 / tasa_intl=NULL en la sellada (antes se heredaban): una cuota de diferida NO
+        // lleva recargo intl extra — el banco la factura a puro capital + su tasa_mv (regla confirmada con
+        // el extracto de junio). Heredarlos hacía que el recargo se RECALCULARA con la fecha ORIGINAL de la
+        // compra contra el corte de la cuota k (dias≈30·k) → interés fantasma inflado ×k; sumado a
+        // interes_sellado sería DOBLE COBRO al tercero. El interés real de la cuota vive en interes_sellado.
+        const r = db.prepare(`INSERT INTO compras (tarjeta_id, fecha, descripcion, valor_cop, persona_id, estado, ciclo, notas, nota_personal, es_internacional, ciclo_manual, tasa_intl, monto_abonado, monto_bolsillo, interes_sellado)
+                              VALUES (?,?,?,?,?,?,?,?,?,0,1,NULL,?,?,?)`)
           .run(c.tarjeta_id, c.fecha, c.descripcion + ' (cuota ' + (i + 1) + '/' + M + ')', capital, c.persona_id || null, estadoSello, ciCuota,
-               'Cuota ' + (i + 1) + '/' + M + ' sellada por reprogramacion de saldo (' + d.num_cuotas + '->' + M + ')', c.nota_personal || null, esIntl, tasaIntl, abonado, bolSello);
+               'Cuota ' + (i + 1) + '/' + M + ' sellada por reprogramacion de saldo (' + d.num_cuotas + '->' + M + ')', c.nota_personal || null, abonado, bolSello, intSellado);
         sellados.push(r.lastInsertRowid);
       }
 
@@ -913,17 +962,42 @@ module.exports = function(db, { logAction, tjNombre }) {
         // ROUND(valor_usd*tasa_usd) en tarjetas no duales. es_internacional/tasa_intl se conservan.
         db.prepare(`UPDATE compras SET estado='diferida', valor_cop=?, valor_usd=NULL, tasa_usd=NULL, ciclo=?, ciclo_manual=1, diferida_id=?, monto_bolsillo=0, monto_bolsillo_usd=0, notas=? WHERE id=?`)
           .run(saldoRestante, V, hijaId, (notasBase ? notasBase + ' | ' : '') + 'Diferida a ' + remanente + ' cuotas | Saldo reprogramado ' + d.num_cuotas + '->' + M, c.id);
-        // Trasladar el bolsillo FUTURO (cuotas k+1..N originales) a la hija, re-indexado + rollForward,
-        // cap por cuota (totalPagar), residuo a la última — sin perder un peso.
         const amortHija = calcularAmortizacionDiferida(saldoRestante, tasaHija, remanente, fechaCompraHija, fechaPrimerCorteHija, null, optsHija);
-        // TODO el bolsillo FUTURO de la diferida original (cuotas k+1..N) + el excedente rodado del pasado.
-        let restante = rollForward;
-        for (let j = k + 1; j <= d.num_cuotas; j++) restante += (bolMap[j] || 0);
-        // Tope global: nunca reservar más que el costo total de la hija (convención "bolsillo <= costo").
-        // Si se fondearon más cuotas de las que quedan (reprogramación a MENOS cuotas), el excedente se
-        // LIBERA (efectivo libre), no se sobre-reserva en la última cuota ni se descarta en silencio.
-        const capacidadHija = amortHija.tabla.reduce((s, q) => s + Math.round(q.totalPagar), 0);
-        if (restante > capacidadHija) { bolsilloLiberado += (restante - capacidadHija); restante = capacidadHija; }
+        // Prepago FUTURO del plan viejo (cuotas k+1..N) + el excedente rodado del pasado (personal).
+        let prepagoFuturo = rollForward;
+        for (let j = k + 1; j <= d.num_cuotas; j++) prepagoFuturo += (bolMap[j] || 0);
+
+        let restante;
+        if (esTercero) {
+          // TERCERO — el prepago de cuotas futuras NO se inyecta al bolsillo de la hija: esa plata es del
+          // deudor y es ÉL (vía el usuario) quien decide a qué deuda se aplica, no el sistema. Nace COMPLETO
+          // como crédito trazable a su favor y el bolsillo del saldo renacido queda en $0; se cruza a mano
+          // desde "Dinero a favor" en Terceros. Antes se auto-inyectaba a la hija; además de decidir por el
+          // usuario, dejaba la cuota de la hija con un reembolso PARCIAL — estado que la card "Me Deben"
+          // representa TODO-O-NADA e ignora (ver BACKLOG "Reembolso parcial de cuota"), inflando su deuda.
+          // Con el crédito aparte, la cuota queda limpia (bolsillo 0) y las dos vistas vuelven a coincidir.
+          if (prepagoFuturo > 0) {
+            db.prepare(`INSERT INTO saldos_favor_tercero
+                (persona_id, monto, origen_tipo, origen_compra_id, tarjeta_id, descripcion, fecha, notas)
+                VALUES (?,?, 'reprogramacion', ?,?,?,?,?)`)
+              .run(c.persona_id, prepagoFuturo, c.id, c.tarjeta_id,
+                   'Prepago de cuotas futuras por reprogramacion de ' + c.descripcion, hoyLocal(),
+                   'Reprogramacion de saldo ' + d.num_cuotas + '->' + M + ': habia reembolsado cuotas del plan viejo que ya no existen. Ese prepago queda a su favor para aplicarlo a la deuda que elijas.');
+            saldoFavorCreado += prepagoFuturo;
+          }
+          restante = 0;
+        } else {
+          // PERSONAL — el bolsillo es plata propia: se traslada al saldo vivo (cap por cuota, residuo a la
+          // última, sin perder un peso). Tope global: nunca reservar más que el costo total de la hija
+          // (convención "bolsillo <= costo"); si se fondearon más cuotas de las que quedan (reprogramación
+          // a MENOS cuotas), el excedente se LIBERA como efectivo, no se sobre-reserva ni se descarta.
+          restante = prepagoFuturo;
+          const capacidadHija = amortHija.tabla.reduce((s, q) => s + Math.round(q.totalPagar), 0);
+          if (restante > capacidadHija) {
+            bolsilloLiberado += restante - capacidadHija;
+            restante = capacidadHija;
+          }
+        }
         for (const qh of amortHija.tabla) {
           if (restante <= 0) break;
           const cap = Math.round(qh.totalPagar);
@@ -947,7 +1021,7 @@ module.exports = function(db, { logAction, tjNombre }) {
     reprogramar();
 
     logAction('editar', tjNombre(c.tarjeta_id) + 'Reprogramacion de saldo: ' + c.descripcion + ' (' + d.num_cuotas + ' -> ' + M + '; ' + k + ' selladas, saldo ' + Math.round(saldoRestante) + ' a ' + remanente + ')');
-    res.json({ ok: true, k, remanente, saldo_restante: Math.round(saldoRestante), hija_id: hijaId, sellados, ciclo_vigente: V, tasa_hija: tasaHija, bolsillo_liberado: Math.round(bolsilloLiberado) });
+    res.json({ ok: true, k, remanente, saldo_restante: Math.round(saldoRestante), hija_id: hijaId, sellados, ciclo_vigente: V, tasa_hija: tasaHija, bolsillo_liberado: Math.round(bolsilloLiberado), saldo_favor_creado: Math.round(saldoFavorCreado) });
   });
 
   // POST /api/compras/aplicar-tasa-intl — acción 1-clic del Asistente de Conciliación IA.

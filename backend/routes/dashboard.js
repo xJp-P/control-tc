@@ -59,6 +59,7 @@ module.exports = function(db) {
       SELECT c.id, c.tarjeta_id, c.persona_id, p.nombre, p.color, c.valor_cop, c.valor_usd, c.estado,
         c.diferida_id, c.descripcion, c.fecha, c.ciclo,
         COALESCE(c.es_internacional, 0) as es_internacional, c.tasa_intl,
+        COALESCE(c.interes_sellado, 0) as interes_sellado,
         COALESCE(c.monto_bolsillo, 0) as bolsillo,
         t.dia_corte as tarjeta_dia_corte,
         COALESCE(t.tasa_mv_avances, 0.01911) as tarjeta_tasa_intl,
@@ -100,8 +101,12 @@ module.exports = function(db) {
           pendienteUsd = cuotaUsd * pendientesCount;
         }
       } else {
-        // 1 cuota: valor - bolsillo (+ interés intl si la tarjeta aplica)
-        pendiente = c.valor_cop - c.bolsillo;
+        // 1 cuota: valor + interés sellado - bolsillo (+ interés intl si la tarjeta aplica).
+        // interes_sellado: si es una cuota SELLADA por reprogramación de saldo, el tercero me debe
+        // capital + el interés que el banco facturó por esa cuota. NULL→0 en el resto → sin regresión.
+        // (Esta card NO resta tercero_monto_abonado, a diferencia de "Me Deben Corte"; se respeta esa
+        // asimetría preexistente a propósito: unificarla sería otro cambio, ajeno a este feature.)
+        pendiente = c.valor_cop + c.interes_sellado - c.bolsillo;
         if (c.es_internacional && c.ciclo) {
           const cDiaCorte = tarjeta_id ? diaCorte : (c.tarjeta_dia_corte || 30);
           const cTasaIntl = tarjeta_id ? tasaIntlGlobal : (c.tarjeta_tasa_intl || 0.01911);
@@ -501,6 +506,7 @@ module.exports = function(db) {
       SELECT c.persona_id, p.nombre, p.color, c.valor_cop, c.valor_usd, c.fecha,
         COALESCE(c.es_internacional, 0) as es_internacional, c.tasa_intl,
         COALESCE(c.tercero_monto_abonado, 0) as abono,
+        COALESCE(c.interes_sellado, 0) as interes_sellado,
         COALESCE(c.monto_bolsillo, 0) as bolsillo,
         t.dia_corte as tarjeta_dia_corte,
         COALESCE(t.tasa_mv_avances, 0.01911) as tarjeta_tasa_intl,
@@ -515,7 +521,9 @@ module.exports = function(db) {
       // que se suma abajo. Aplicar Math.max(0,...) ANTES borraría ese crédito y el interés
       // aparecería como deuda fantasma aunque el bolsillo ya lo cubriera. El recorte a 0 se
       // hace al final, igual que en la card "Me Deben" (histórica).
-      let pendiente = r.valor_cop - r.abono - r.bolsillo;
+      // + interes_sellado: en una cuota SELLADA por reprogramación de saldo el tercero debe capital + el
+      // interés que el banco facturó por esa cuota. NULL→0 en el resto de compras → sin regresión.
+      let pendiente = r.valor_cop + r.interes_sellado - r.abono - r.bolsillo;
       if (r.es_internacional && r.fecha) {
         const rDiaCorte = tarjeta_id ? diaCorte : (r.tarjeta_dia_corte || 30);
         const rTasaIntl = tarjeta_id ? tasaIntlGlobal : (r.tarjeta_tasa_intl || 0.01911);
