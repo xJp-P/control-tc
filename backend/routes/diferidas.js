@@ -53,6 +53,34 @@ module.exports = function(db, { logAction, tjNombre }) {
         bolsillo_por_cuota: bolPorCuota
       };
     });
+
+    // Cuotas SELLADAS por reprogramacion de saldo del ciclo consultado: son compras (diferida_id=NULL,
+    // notas "sellada por reprogramacion") = cuotas YA facturadas del plan viejo. La diferida original se
+    // borro al "Sellar y Renacer", asi que sin esto el historial del plan DESAPARECE de la pestaña
+    // Diferidas al navegar a un mes pasado. Se inyectan como filas READ-ONLY (id string 'sellada-N', sin
+    // amortizacion ni acciones) SOLO cuando se consulta ese ciclo. No son diferidas reales ni afectan
+    // calculos (deuda/pago minimo salen del backend); es puro historial visual. La compra sellada se
+    // conserva ademas en la tabla de Compras (es un pago historico real).
+    if (ciclo) {
+      const paramsS = [ciclo];
+      let sqlS = "SELECT c.*, pe.nombre AS _pnom, pe.color AS _pcol FROM compras c LEFT JOIN personas pe ON c.persona_id=pe.id WHERE c.ciclo=? AND c.notas LIKE '%sellada por reprogramacion%'";
+      if (tarjeta_id) { sqlS += ' AND c.tarjeta_id=?'; paramsS.push(tarjeta_id); }
+      db.prepare(sqlS).all(...paramsS).forEach(s => {
+        const mm = /\(cuota\s+(\d+)\/(\d+)\)/i.exec(s.descripcion || '') || /Cuota\s+(\d+)\/(\d+)/i.exec(s.notas || '') || [];
+        const base = String(s.descripcion || '').replace(/\s*\(cuota\s+\d+\/\d+\)\s*$/i, '').trim();
+        result.push({
+          id: 'sellada-' + s.id, _sellada: true, tarjeta_id: s.tarjeta_id,
+          etiqueta: base || s.descripcion, fecha_compra: s.fecha,
+          cuotaCorte: Math.round(s.valor_cop || 0), saldoActual: 0, cuotasRestantes: 0, ciclos: [ciclo],
+          cuota_num_sellada: mm[1] ? parseInt(mm[1], 10) : 1,
+          reprog_total_sellada: mm[2] ? parseInt(mm[2], 10) : null,
+          estado_sellada: s.estado,
+          es_de_tercero: !!s.persona_id, persona_id: s.persona_id || null,
+          persona_nombre: s._pnom || null, persona_color: s._pcol || null,
+          monto_bolsillo: 0, bolsillo_por_cuota: {}
+        });
+      });
+    }
     res.json(result);
   });
 

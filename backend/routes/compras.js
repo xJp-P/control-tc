@@ -105,6 +105,9 @@ module.exports = function(db, { logAction, tjNombre }) {
         cuota_num: cuotaNum,
         cuotas_total: dif.num_cuotas,
         reprog_total: dif.reprog_total || null,
+        // Marca de diferida HIJA de reprogramacion de saldo: el frontend la OCULTA de la tabla de Compras
+        // (la compra renacida no es una compra real, es el saldo vivo del plan -> vive solo en Diferidas).
+        sin_gracia_cuota1: dif.sin_gracia_cuota1 || 0,
         monto_bolsillo_cuota: bolCuota ? Math.round(bolCuota.monto) : 0
       };
     });
