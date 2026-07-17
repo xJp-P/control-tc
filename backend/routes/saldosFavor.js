@@ -5,12 +5,35 @@
 // La app NUNCA cruza el crédito de un tercero con deudas de OTRO (regla de negocio v4.7.5).
 const { Router } = require('express');
 const { hoyLocal } = require('../helpers/dates');
-const { objetivoBolsilloCop } = require('../helpers/bolsillo');
+const { objetivoBolsilloCop, cicloYaPagado } = require('../helpers/bolsillo');
 
 module.exports = function(db, { logAction }) {
   const router = Router();
   const fmt = (n) => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(Math.round(n));
   const r2 = (n) => Math.round((n || 0) * 100) / 100;
+
+  // Aplica a la compra el resultado de un cruce/deshacer respetando los DOS libros (v5.6.1):
+  //   BANCO   → `estado`: si el ciclo YA se pagó, se CONGELA (es el invariante de syncData paso 6; el
+  //             bolsillo del tercero no puede reabrir un mes cerrado). Si no, se deriva como siempre.
+  //   TERCERO → `monto_bolsillo` + `tercero_pagado`: se recalculan SIEMPRE, incluso en un ciclo pagado.
+  //             `tercero_pagado` sale del estado DERIVADO (lo que el bolsillo dice de su deuda), nunca
+  //             del congelado: si no, retirarle el reembolso a una compra de un mes pagado lo dejaría
+  //             marcado como que pagó.
+  // Así deshacer un cruce histórico retira el dinero y lo devuelve al crédito sin tocar el cierre del
+  // ciclo — que es justo lo que ya se puede hacer con el botón "Bolsillo" normal.
+  function aplicarBolsilloATercero(destino, nuevoBolsillo, opts) {
+    opts = opts || {};
+    const estadoDerivado = derivarEstadoCompra(destino, nuevoBolsillo);
+    const estadoFinal = cicloYaPagado(db, destino) ? destino.estado : estadoDerivado;
+    const saldado = (estadoDerivado === 'bolsillo' || estadoDerivado === 'pagado');
+    // `conservarTerceroPagado` (solo al APLICAR): un cruce PARCIAL no borra un "Recibido" que el usuario
+    // hubiera marcado a mano (v4.8.2). Al DESHACER no se conserva: retirarle el reembolso debe devolverlo
+    // a deudor.
+    const terceroPagado = saldado ? 1 : (opts.conservarTerceroPagado ? (destino.tercero_pagado || 0) : 0);
+    db.prepare('UPDATE compras SET monto_bolsillo=?, estado=?, tercero_pagado=? WHERE id=?')
+      .run(nuevoBolsillo, estadoFinal, terceroPagado, destino.id);
+    return { estadoFinal, estadoDerivado, terceroPagado };
+  }
 
   // Re-deriva el estado de una compra de 1 cuota tras cambiar su monto_bolsillo (reembolso del tercero).
   // Las diferidas conservan 'diferida' (usan bolsillo per-cuota, fuera del alcance de v1).
@@ -38,12 +61,17 @@ module.exports = function(db, { logAction }) {
     sql += ' ORDER BY s.fecha DESC, s.id DESC';
     const creditos = db.prepare(sql).all(...params);
     // Adjunta las aplicaciones (cruces/liquidaciones) de cada crédito → ledger + deshacer en el modal.
-    const apStmt = db.prepare(`SELECT a.*, c.descripcion as compra_desc
+    // `compra_estado`/`compra_ciclo` son informativos (la UI muestra de qué mes es cada movimiento).
+    // TODO movimiento es deshacible: el deshacer respeta el cierre del ciclo en vez de bloquearse (v5.6.1).
+    const apStmt = db.prepare(`SELECT a.*, c.descripcion as compra_desc, c.estado as compra_estado,
+                                      c.ciclo as compra_ciclo
                                FROM aplicaciones_saldo_favor a
                                LEFT JOIN compras c ON a.compra_destino_id = c.id
                                WHERE a.saldo_favor_id = ? ORDER BY a.fecha, a.id`);
     creditos.forEach(cr => { cr.aplicaciones = apStmt.all(cr.id); });
-    // porPersona: total disponible de créditos ACTIVOS (para el chip de la tarjeta del tercero).
+    // porPersona: total disponible de créditos ACTIVOS (el monto que muestra el chip en verde). Con
+    // disponible 0 el chip sigue visible pero en gris ("Ver historial"): el ledger se puede consultar y
+    // deshacer, pero sin aparentar plata por gestionar.
     const porPersona = {};
     db.prepare(`SELECT persona_id, COALESCE(SUM(monto - monto_aplicado), 0) as disponible
                 FROM saldos_favor_tercero WHERE estado = 'activo' GROUP BY persona_id`).all()
@@ -51,9 +79,11 @@ module.exports = function(db, { logAction }) {
     res.json({ creditos, porPersona });
   });
 
-  // GET /:id/aplicaciones — ledger de un crédito (detalle + para deshacer).
+  // GET /:id/aplicaciones — ledger de un crédito (detalle + para deshacer). Hoy sin consumidores (el
+  // modal usa las `aplicaciones` que ya adjunta GET /); se mantiene alineado con el mismo contrato.
   router.get('/:id/aplicaciones', (req, res) => {
-    const aps = db.prepare(`SELECT a.*, c.descripcion as compra_desc
+    const aps = db.prepare(`SELECT a.*, c.descripcion as compra_desc, c.estado as compra_estado,
+                                   c.ciclo as compra_ciclo
                             FROM aplicaciones_saldo_favor a
                             LEFT JOIN compras c ON a.compra_destino_id = c.id
                             WHERE a.saldo_favor_id = ? ORDER BY a.fecha, a.id`).all(req.params.id);
@@ -94,17 +124,13 @@ module.exports = function(db, { logAction }) {
     const nuevoBolsillo = r2((destino.monto_bolsillo || 0) + m);
     const nuevoAplicado = r2(credito.monto_aplicado + m);
     const nuevoEstadoCredito = nuevoAplicado >= r2(credito.monto) - 0.01 ? 'consumido' : 'activo';
-    const nuevoEstadoCompra = derivarEstadoCompra(destino, nuevoBolsillo);
-    // tercero_pagado sigue al estado derivado: saldado (bolsillo/pagado cubre valor+intl) → 1. Si el
-    // cruce es PARCIAL (queda el interés intl u otro resto) conserva su valor previo → la compra NO
-    // queda como "Pagada" y el botón Bolsillo sigue activo para completar el resto en efectivo (v4.8.2).
-    const terceroPagado = (nuevoEstadoCompra === 'bolsillo' || nuevoEstadoCompra === 'pagado') ? 1 : (destino.tercero_pagado || 0);
-
     db.transaction(() => {
       db.prepare(`INSERT INTO aplicaciones_saldo_favor (saldo_favor_id, compra_destino_id, tipo, monto, fecha, notas)
                   VALUES (?,?,?,?,?,?)`).run(credito.id, compra_destino_id, 'cruce', m, fecha || hoyLocal(), notas || null);
       db.prepare('UPDATE saldos_favor_tercero SET monto_aplicado=?, estado=? WHERE id=?').run(nuevoAplicado, nuevoEstadoCredito, credito.id);
-      db.prepare('UPDATE compras SET monto_bolsillo=?, estado=?, tercero_pagado=? WHERE id=?').run(nuevoBolsillo, nuevoEstadoCompra, terceroPagado, compra_destino_id);
+      // Los dos libros por separado (v5.6.1): el estado con el BANCO se congela si el ciclo ya se pagó
+      // (antes se pisaba 'pagado' → 'bolsillo'); el reembolso del tercero se aplica siempre.
+      aplicarBolsilloATercero(destino, nuevoBolsillo, { conservarTerceroPagado: true });
     })();
 
     logAction('editar', 'Saldo a favor aplicado: ' + fmt(m) + ' a "' + destino.descripcion + '"');
@@ -129,6 +155,9 @@ module.exports = function(db, { logAction }) {
   });
 
   // DELETE /aplicaciones/:aplId — DESHACER una aplicacion (cruce o liquidacion): revierte los pasos.
+  // SIEMPRE permitido, tambien sobre compras de ciclos ya pagados (v5.6.1): es lo mismo que ya se puede
+  // hacer con el boton "Bolsillo" normal, y retirar un reembolso mal aplicado no toca el cierre del mes
+  // — `aplicarBolsilloATercero` congela el estado con el banco y solo devuelve al tercero a deudor.
   router.delete('/aplicaciones/:aplId', (req, res) => {
     const apl = db.prepare('SELECT * FROM aplicaciones_saldo_favor WHERE id=?').get(req.params.aplId);
     if (!apl) return res.status(404).json({ error: 'Aplicacion no encontrada' });
@@ -142,9 +171,7 @@ module.exports = function(db, { logAction }) {
         const destino = db.prepare('SELECT * FROM compras WHERE id=?').get(apl.compra_destino_id);
         if (destino) {
           const nuevoBolsillo = Math.max(0, r2((destino.monto_bolsillo || 0) - apl.monto));
-          const nuevoEstado = derivarEstadoCompra(destino, nuevoBolsillo);
-          const terceroPagado = (nuevoEstado === 'bolsillo' || nuevoEstado === 'pagado') ? 1 : 0;
-          db.prepare('UPDATE compras SET monto_bolsillo=?, estado=?, tercero_pagado=? WHERE id=?').run(nuevoBolsillo, nuevoEstado, terceroPagado, destino.id);
+          aplicarBolsilloATercero(destino, nuevoBolsillo);
         }
       }
       db.prepare('DELETE FROM aplicaciones_saldo_favor WHERE id=?').run(apl.id);

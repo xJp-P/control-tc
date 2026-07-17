@@ -3,7 +3,7 @@ const { Router } = require('express');
 const { hoyLocal, daysBetween, primerCorteAvance } = require('../helpers/dates');
 const { calcularAmortizacionDiferida } = require('../engine/amortizacion');
 const { nuOpts, nuOptsDif, aplicaIntInternacional } = require('../helpers/banco');
-const { compraTerceroConReembolso, objetivoBolsilloCop } = require('../helpers/bolsillo');
+const { compraTerceroConReembolso, objetivoBolsilloCop, cicloYaPagado } = require('../helpers/bolsillo');
 const { getCortesCustomMap, cicloConCorte, corteDeCiclo } = require('../helpers/cortes');
 
 module.exports = function(db, { logAction, tjNombre }) {
@@ -376,7 +376,12 @@ module.exports = function(db, { logAction, tjNombre }) {
       // Antes se recomputaba como valor_cop − abonado, ignorando el intl → una compra internacional
       // marcaba 'bolsillo' cubriendo solo el capital, incoherente con el cap y con Terceros (v4.8.2).
       const target = tope != null ? tope : (monedaPago === 'USD' ? (c.valor_usd || 0) : Math.max(0, c.valor_cop - (c.monto_abonado || 0)));
+      // El estado con el BANCO se CONGELA si el ciclo ya se pagó (v5.6.1): es el invariante que syncData
+      // paso 6 impone en cada arranque, y el bolsillo no puede reabrir un mes cerrado. Antes se derivaba
+      // igual → una compra de un ciclo pagado quedaba con el badge en "Pendiente" hasta el próximo
+      // arranque (sin afectar la deuda, porque monto_abonado ya cubría el valor, pero confundiendo).
       const nuevoEstado = c.estado === 'diferida' ? 'diferida'
+        : cicloYaPagado(db, c) ? c.estado
         : nuevoMonto >= target ? 'bolsillo' : nuevoMonto > 0 ? 'bolsillo_parcial' : 'pendiente';
       if (monedaPago === 'USD') {
         db.prepare('UPDATE compras SET monto_bolsillo_usd=?, estado=? WHERE id=?').run(nuevoMonto, nuevoEstado, c.id);

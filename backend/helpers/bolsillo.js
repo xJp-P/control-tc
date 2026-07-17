@@ -82,4 +82,25 @@ function compraTerceroConReembolso(db, compraId) {
   return !!(bc && bc.n > 0);
 }
 
-module.exports = { liberarBolsilloDiferida, liberarBolsilloAvance, compraTerceroConReembolso, objetivoBolsilloCop };
+// ¿La compra pertenece a un ciclo cuyo extracto YA se pagó? (v5.6.1)
+//
+// Es el invariante que `syncData` paso 6 (config/db.js) impone en CADA arranque: toda compra de un
+// ciclo con extracto pagado DEBE estar en estado='pagado' (y su monto_abonado = valor_cop). Replica su
+// criterio EXACTO, incluida la separación por moneda del extracto dual (estado → compras COP;
+// estado_usd → compras con valor_usd > 0), para no divergir de él.
+//
+// Para qué sirve: el "Estado TC" de una compra es su estado CON EL BANCO, y NO lo decide el bolsillo
+// (en una compra de tercero el bolsillo es el reembolso del deudor: otro libro, ver v4.4.1). Toda ruta
+// que escriba el bolsillo debe CONGELAR el estado cuando el ciclo ya se pagó, en vez de re-derivarlo:
+// si lo re-deriva, la fila queda contradiciendo el invariante (badge "Pendiente" en un mes ya pagado)
+// hasta que el próximo arranque la repare. El libro del TERCERO (monto_bolsillo/tercero_pagado) sí se
+// recalcula siempre: retirarle un reembolso debe volver a mostrarlo como deudor de inmediato.
+function cicloYaPagado(db, c) {
+  if (!c || !c.ciclo || !c.tarjeta_id) return false;
+  const ext = db.prepare('SELECT estado, estado_usd FROM extractos WHERE tarjeta_id=? AND ciclo=?').get(c.tarjeta_id, c.ciclo);
+  if (!ext) return false;
+  const esUsd = c.valor_usd != null && c.valor_usd > 0;
+  return esUsd ? ext.estado_usd === 'pagado' : ext.estado === 'pagado';
+}
+
+module.exports = { liberarBolsilloDiferida, liberarBolsilloAvance, compraTerceroConReembolso, objetivoBolsilloCop, cicloYaPagado };

@@ -261,6 +261,11 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '5.6.1': [
+    'En "Dinero a favor" ya puedes deshacer CUALQUIER movimiento, incluidos los que aplicaste a compras de meses que ya pagaste. Si cruzaste un dinero por error, lo retiras y vuelve a quedar disponible para aplicarlo donde toca. La compra NO se reabre como pendiente con el banco: el mes cerrado queda intacto y esa persona simplemente vuelve a aparecer debiendote lo que le retiraste.',
+    'El boton "Dinero a favor" ahora dice "Ver historial", en gris, cuando ya no queda dinero por repartir: antes decia "Gestionar" y parecia que habia plata pendiente cuando en realidad ya se habia usado toda. Si queda saldo sin repartir sigue en verde con el monto, como siempre. Y cada movimiento de la lista muestra de que mes es la compra.',
+    'Corregido un detalle que confundia: al apartar o quitar dinero del bolsillo de una compra de un mes ya pagado, su estado dejaba de decir "Pagado" hasta que reiniciaras la app. Ahora se mantiene correcto al instante.'
+  ],
   '5.6.0': [
     'REPROGRAMAR COMPRAS DE UN TERCERO. Ahora puedes cambiar el numero de cuotas de una compra que le prestaste a alguien, incluso si esa persona ya te reembolso parte o todo. Antes el boton "Reprogramar" estaba bloqueado para cualquier compra con responsable y tocaba retirarle los reembolsos a mano, uno por uno, para poder tocarla.',
     'COMO FUNCIONA: las cuotas que el banco ya te facturo quedan congeladas tal como se pagaron (no se vuelven a tocar) y el saldo que sigue vivo renace con el plan de cuotas nuevo. Lo que le debes al banco no cambia ni un peso: solo cambia en cuantas cuotas te queda repartido, y por eso el interes total se recalcula.',
@@ -6779,6 +6784,7 @@ function Terceros({ tarjeta }) {
   const [compras, setCompras] = useState([]);
   const [bolsilloModal, setBolsilloModal] = useState(null); // { compra, target, monto }
   // Saldo a favor de terceros (reversos, Fase 2): { creditos, porPersona }. Es por-PERSONA (cross-tarjeta).
+  // `porPersona` = disponible sin adjudicar: decide si el chip va en verde con monto o gris "Ver historial".
   const [saldosFavor, setSaldosFavor] = useState({ creditos: [], porPersona: {} });
   const [favorModal, setFavorModal] = useState(null);   // { persona_id, nombre, color }
   const [aplicarSel, setAplicarSel] = useState(null);   // { creditoId, compra_destino_id, monto }
@@ -6998,8 +7004,10 @@ function Terceros({ tarjeta }) {
                   (p.totalRecibidoUsd || 0) > 0 && e('span', { style: { fontSize: 12, fontWeight: 700, color: '#4FC3F7', fontFamily: 'monospace' } }, fmtUsd(p.totalRecibidoUsd))
                 ),
                 // Saldo a favor del tercero (reversos): chip clickable → abre el modal de gestión.
-                // Se muestra con disponible activo (verde) O si tiene créditos ya consumidos/liquidados
-                // (gris, "ver") para poder deshacer sus movimientos.
+                // Con dinero sin adjudicar va en VERDE con el monto; sin disponible sigue visible pero en
+                // gris y diciendo "Ver historial" (v5.6.1): el ledger se puede consultar y deshacer, pero
+                // sin aparentar plata por gestionar — que era la queja real. Todo movimiento es deshacible
+                // (el deshacer respeta el cierre del ciclo), así que el chip nunca se oculta.
                 ((saldosFavor.porPersona[p.persona_id] || 0) > 0 || (saldosFavor.creditos || []).some(cr => String(cr.persona_id) === String(p.persona_id))) && (() => {
                   const disp = saldosFavor.porPersona[p.persona_id] || 0;
                   const activo = disp > 0;
@@ -7012,7 +7020,7 @@ function Terceros({ tarjeta }) {
                     e(Ico, { name: 'dollar', size: 15, color: activo ? 'var(--success)' : 'var(--text-muted)' }),
                     e('div', { style: { display: 'flex', flexDirection: 'column', alignItems: 'flex-start', lineHeight: 1.15, gap: 3 } },
                       e('span', { style: { fontSize: 9.5, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 1, fontWeight: 700 } }, 'Dinero a favor'),
-                      e('span', { style: { fontSize: 13, fontWeight: 700, fontFamily: 'monospace', color: activo ? 'var(--success)' : 'var(--text-secondary)' } }, activo ? fmtCOP(disp) : 'Gestionar')
+                      e('span', { style: { fontSize: 13, fontWeight: 700, fontFamily: 'monospace', color: activo ? 'var(--success)' : 'var(--text-secondary)' } }, activo ? fmtCOP(disp) : 'Ver historial')
                     ),
                     e(Ico, { name: 'chevron-right', size: 14, color: activo ? 'var(--success)' : 'var(--text-muted)' })
                   );
@@ -7136,7 +7144,10 @@ function Terceros({ tarjeta }) {
                               ? e('button', {
                                   className: 'btn btn-sm btn-success',
                                   style: { opacity: 0.5, cursor: 'not-allowed' },
-                                  title: 'Esta compra recibió un saldo a favor cruzado. Gestiónalo desde "Dinero a favor" (arriba).',
+                                  // Sin "(arriba)": desde v5.6.1 el chip se oculta cuando el saldo ya es
+                                  // historia, así que el texto no puede prometer que esté ahí. Este botón
+                                  // abre el modal por sí mismo, así que nunca es un callejón sin salida.
+                                  title: 'Esta compra recibió un saldo a favor cruzado. Gestiónalo desde "Dinero a favor".',
                                   onClick: () => { setAplicarSel(null); setFavorModal({ persona_id: p.persona_id, nombre: p.nombre, color: p.color }); }
                                 }, 'Bolsillo')
                               : c.tercero_pagado
@@ -7294,8 +7305,14 @@ function Terceros({ tarjeta }) {
                       aps.map(ap => e('div', { key: ap.id, style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '4px 0' } },
                         e('div', { style: { fontSize: 12 } },
                           e('span', { style: { fontFamily: 'monospace', fontWeight: 600 } }, fmtCOP(Math.round(ap.monto))),
-                          e('span', { style: { color: 'var(--text-muted)' } }, ' · ' + (ap.tipo === 'liquidacion' ? 'Liquidación (efectivo)' : ('cruce a ' + (ap.compra_desc || ('compra #' + ap.compra_destino_id)))))
+                          e('span', { style: { color: 'var(--text-muted)' } }, ' · ' + (ap.tipo === 'liquidacion' ? 'Liquidación (efectivo)' : ('cruce a ' + (ap.compra_desc || ('compra #' + ap.compra_destino_id))))),
+                          // De qué mes es la compra: distingue un cruce del ciclo en curso de uno viejo
+                          // (útil ahora que ambos se pueden deshacer).
+                          ap.tipo !== 'liquidacion' && ap.compra_ciclo && e('span', { style: { color: 'var(--text-muted)', opacity: 0.7 } }, ' · ' + ap.compra_ciclo)
                         ),
+                        // Deshacer SIEMPRE disponible, tambien en cruces de meses ya pagados: retira el
+                        // dinero y lo devuelve al credito sin tocar el cierre del ciclo (el backend
+                        // congela el estado con el banco). v5.6.1.
                         e('button', { type: 'button', className: 'btn btn-sm', style: { color: 'var(--danger)' }, onClick: () => deshacerAplicacion(ap.id), title: 'Deshacer este movimiento' }, 'Deshacer')
                       ))
                     )
