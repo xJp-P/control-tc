@@ -24,12 +24,19 @@ module.exports = function(db, { logAction }) {
   function aplicarBolsilloATercero(destino, nuevoBolsillo, opts) {
     opts = opts || {};
     const estadoDerivado = derivarEstadoCompra(destino, nuevoBolsillo);
-    const estadoFinal = cicloYaPagado(db, destino) ? destino.estado : estadoDerivado;
+    // El estado con el BANCO se congela si el ciclo ya se pagó O si la compra fue REVERSADA (el banco la
+    // devolvió: no se debe nada, y `reversar` la dejó en 'pagado' a propósito). Sin lo segundo, deshacer
+    // un cruce sobre una reversada de un ciclo ABIERTO la dejaría 'pendiente' y syncData no la sanaría.
+    const congelado = cicloYaPagado(db, destino) || !!destino.reversada;
+    const estadoFinal = congelado ? destino.estado : estadoDerivado;
     const saldado = (estadoDerivado === 'bolsillo' || estadoDerivado === 'pagado');
     // `conservarTerceroPagado` (solo al APLICAR): un cruce PARCIAL no borra un "Recibido" que el usuario
     // hubiera marcado a mano (v4.8.2). Al DESHACER no se conserva: retirarle el reembolso debe devolverlo
-    // a deudor.
-    const terceroPagado = saldado ? 1 : (opts.conservarTerceroPagado ? (destino.tercero_pagado || 0) : 0);
+    // a deudor. EXCEPCIÓN: una compra REVERSADA no le debe nada al tercero (el banco la devolvió) → su
+    // `tercero_pagado=1` se conserva siempre, o resucitaría en "Me Deben" una deuda que no existe.
+    const terceroPagado = destino.reversada
+      ? (destino.tercero_pagado || 0)
+      : saldado ? 1 : (opts.conservarTerceroPagado ? (destino.tercero_pagado || 0) : 0);
     db.prepare('UPDATE compras SET monto_bolsillo=?, estado=?, tercero_pagado=? WHERE id=?')
       .run(nuevoBolsillo, estadoFinal, terceroPagado, destino.id);
     return { estadoFinal, estadoDerivado, terceroPagado };
@@ -60,23 +67,50 @@ module.exports = function(db, { logAction }) {
     if (persona_id) { sql += ' WHERE s.persona_id = ?'; params.push(persona_id); }
     sql += ' ORDER BY s.fecha DESC, s.id DESC';
     const creditos = db.prepare(sql).all(...params);
-    // Adjunta las aplicaciones (cruces/liquidaciones) de cada crédito → ledger + deshacer en el modal.
+    // Adjunta las aplicaciones (cruces/liquidaciones) de cada crédito → ledger del modal.
     // `compra_estado`/`compra_ciclo` son informativos (la UI muestra de qué mes es cada movimiento).
-    // TODO movimiento es deshacible: el deshacer respeta el cierre del ciclo en vez de bloquearse (v5.6.1).
+    // `ciclo_pagado` = el cruce cayó en un mes ya pagado → la UI no le ofrece "Deshacer" (misma regla de
+    // negocio del chip, aplicada por movimiento: no hay razón para deshacer pagos de meses anteriores).
+    // Es SOLO display: el DELETE sigue respondiendo 200 y lo hace sin reabrir el mes — no es un candado.
+    // Una liquidación (compra_destino_id NULL) nunca se marca: no pertenece a ningún mes.
     const apStmt = db.prepare(`SELECT a.*, c.descripcion as compra_desc, c.estado as compra_estado,
-                                      c.ciclo as compra_ciclo
+                                      c.ciclo as compra_ciclo,
+                                      CASE WHEN a.compra_destino_id IS NOT NULL
+                                                AND COALESCE(e.estado, '') = 'pagado' THEN 1 ELSE 0 END AS ciclo_pagado
                                FROM aplicaciones_saldo_favor a
                                LEFT JOIN compras c ON a.compra_destino_id = c.id
+                               LEFT JOIN extractos e ON e.tarjeta_id = c.tarjeta_id AND e.ciclo = c.ciclo
                                WHERE a.saldo_favor_id = ? ORDER BY a.fecha, a.id`);
     creditos.forEach(cr => { cr.aplicaciones = apStmt.all(cr.id); });
-    // porPersona: total disponible de créditos ACTIVOS (el monto que muestra el chip en verde). Con
-    // disponible 0 el chip sigue visible pero en gris ("Ver historial"): el ledger se puede consultar y
-    // deshacer, pero sin aparentar plata por gestionar.
+    // porPersona: total disponible de créditos ACTIVOS (el monto que muestra el chip en verde).
     const porPersona = {};
     db.prepare(`SELECT persona_id, COALESCE(SUM(monto - monto_aplicado), 0) as disponible
                 FROM saldos_favor_tercero WHERE estado = 'activo' GROUP BY persona_id`).all()
       .forEach(row => { porPersona[row.persona_id] = Math.round(row.disponible); });
-    res.json({ creditos, porPersona });
+    // gestionables: REGLA DE NEGOCIO del chip "Dinero a favor". Se muestra solo si la persona tiene:
+    //   (a) dinero a favor sin repartir (disponible > 0), o
+    //   (b) algún CRUCE sobre una compra de un ciclo ABIERTO (extracto no pagado) — ahí sí es válido
+    //       equivocarse y querer deshacerlo.
+    // Si el saldo es $0 y TODOS sus cruces cayeron en ciclos con el extracto ya PAGADO, ese libro está
+    // cerrado: no hay razón de negocio para entrar a deshacer pagos de meses anteriores, y esas compras
+    // ni siquiera aparecen ya en la tabla → el chip DESAPARECE para no dejar ruido.
+    // OJO — esto NO es un candado: el backend sigue permitiendo el deshacer (no hay 403; y si el ciclo
+    // está pagado lo hace sin reabrir el mes). Es solo que la UI no ofrece la entrada a un historial
+    // muerto. El punto único de la regla vive aquí; el frontend solo consume el mapa.
+    const gestionables = {};
+    db.prepare(`SELECT persona_id FROM saldos_favor_tercero
+                WHERE estado = 'activo' AND (monto - monto_aplicado) > 0.5`).all()
+      .forEach(row => { gestionables[row.persona_id] = true; });
+    // JOIN (no LEFT) a compras: una liquidación (cashout, compra_destino_id NULL) o un destino borrado
+    // no son "cruces a una compra del ciclo abierto" → no sostienen el chip por sí solos.
+    db.prepare(`SELECT DISTINCT s.persona_id
+                FROM aplicaciones_saldo_favor a
+                JOIN saldos_favor_tercero s ON s.id = a.saldo_favor_id
+                JOIN compras c ON c.id = a.compra_destino_id
+                LEFT JOIN extractos e ON e.tarjeta_id = c.tarjeta_id AND e.ciclo = c.ciclo
+                WHERE a.tipo = 'cruce' AND COALESCE(e.estado, '') <> 'pagado'`).all()
+      .forEach(row => { gestionables[row.persona_id] = true; });
+    res.json({ creditos, porPersona, gestionables });
   });
 
   // GET /:id/aplicaciones — ledger de un crédito (detalle + para deshacer). Hoy sin consumidores (el
@@ -161,6 +195,22 @@ module.exports = function(db, { logAction }) {
   router.delete('/aplicaciones/:aplId', (req, res) => {
     const apl = db.prepare('SELECT * FROM aplicaciones_saldo_favor WHERE id=?').get(req.params.aplId);
     if (!apl) return res.status(404).json({ error: 'Aplicacion no encontrada' });
+    // GUARD ANTI-DUPLICACION (v5.6.1): si la compra destino fue REVERSADA, `reversar` ya materializo su
+    // monto_bolsillo en un credito NUEVO (por el reembolso que el tercero habia hecho). Ese bolsillo es
+    // justo el efecto de este cruce: deshacerlo ahora devolveria al credito origen una plata que YA esta
+    // viva en el credito del reverso -> el mismo dinero contado dos veces, y gastable (cruzable o
+    // liquidable). No es un candado de conveniencia: la operacion perdio su sentido, porque el efecto que
+    // revierte ya no existe (se transformo en el otro credito). El dinero del tercero NO se pierde ni se
+    // bloquea: sigue disponible ahi, y el mensaje dice donde.
+    if (apl.tipo === 'cruce' && apl.compra_destino_id) {
+      const dst = db.prepare('SELECT id, descripcion, reversada FROM compras WHERE id=?').get(apl.compra_destino_id);
+      if (dst && dst.reversada) {
+        const credRev = db.prepare("SELECT id, descripcion, monto FROM saldos_favor_tercero WHERE origen_tipo='reverso' AND origen_compra_id=?").get(dst.id);
+        if (credRev) {
+          return res.status(409).json({ error: 'El banco reverso "' + dst.descripcion + '", y ese dinero ya volvio a estar a favor de esta persona como "' + credRev.descripcion + '" (' + fmt(credRev.monto) + '). Deshacer este movimiento contaria la misma plata dos veces. Aplica ese saldo desde ahi.' });
+        }
+      }
+    }
     const credito = db.prepare('SELECT * FROM saldos_favor_tercero WHERE id=?').get(apl.saldo_favor_id);
     db.transaction(() => {
       if (credito) {
