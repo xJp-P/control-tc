@@ -1062,6 +1062,15 @@ function fmtCOPDec(n) {
   return (n < 0 ? '-' : '') + '$' + intPart + ',' + parts[1];
 }
 
+// Un ciclo ('2026-06') como lo lee un humano ('junio de 2026'). Vivia dentro del .map() de personas de
+// Terceros; se elevo a helper global (patron de fmtCOP) para que el ledger de "Dinero a favor" muestre el
+// mes con el MISMO formato que los encabezados de esa pestana, sin duplicar la funcion.
+function fmtCicloLabel(cic) {
+  if (!cic || cic === 'Sin ciclo') return cic || '';
+  const [y, m] = String(cic).split('-');
+  return new Date(y, m - 1).toLocaleDateString('es-CO', { month: 'long', year: 'numeric' });
+}
+
 function fmtDate(d) {
   if (!d) return '';
   const parts = d.split('-');
@@ -6976,12 +6985,6 @@ function Terceros({ tarjeta }) {
             }
           });
           const ciclos = Object.keys(ciclosMap).sort((a, b) => b.localeCompare(a));
-          const fmtCicloLabel = cic => {
-            if (cic === 'Sin ciclo') return cic;
-            const [y, m] = cic.split('-');
-            return new Date(y, m - 1).toLocaleDateString('es-CO', { month: 'long', year: 'numeric' });
-          };
-
           return e('div', { key: p.nombre, className: 'persona-card', style: { marginBottom: 20 } },
             e('div', { className: 'persona-card-header' },
               e('div', { className: 'persona-name' }, e('span', { className: 'persona-dot', style: { background: p.color } }), p.nombre),
@@ -7144,9 +7147,8 @@ function Terceros({ tarjeta }) {
                               ? e('button', {
                                   className: 'btn btn-sm btn-success',
                                   style: { opacity: 0.5, cursor: 'not-allowed' },
-                                  // Sin "(arriba)": desde v5.6.1 el chip se oculta cuando el saldo ya es
-                                  // historia, así que el texto no puede prometer que esté ahí. Este botón
-                                  // abre el modal por sí mismo, así que nunca es un callejón sin salida.
+                                  // Este botón abre el modal por sí mismo (onClick), así que no depende del
+                                  // chip: por eso el texto no dice dónde está.
                                   title: 'Esta compra recibió un saldo a favor cruzado. Gestiónalo desde "Dinero a favor".',
                                   onClick: () => { setAplicarSel(null); setFavorModal({ persona_id: p.persona_id, nombre: p.nombre, color: p.color }); }
                                 }, 'Bolsillo')
@@ -7308,7 +7310,7 @@ function Terceros({ tarjeta }) {
                           e('span', { style: { color: 'var(--text-muted)' } }, ' · ' + (ap.tipo === 'liquidacion' ? 'Liquidación (efectivo)' : ('cruce a ' + (ap.compra_desc || ('compra #' + ap.compra_destino_id))))),
                           // De qué mes es la compra: distingue un cruce del ciclo en curso de uno viejo
                           // (útil ahora que ambos se pueden deshacer).
-                          ap.tipo !== 'liquidacion' && ap.compra_ciclo && e('span', { style: { color: 'var(--text-muted)', opacity: 0.7 } }, ' · ' + ap.compra_ciclo)
+                          ap.tipo !== 'liquidacion' && ap.compra_ciclo && e('span', { style: { color: 'var(--text-muted)', opacity: 0.7 } }, ' · ' + fmtCicloLabel(ap.compra_ciclo))
                         ),
                         // Deshacer SIEMPRE disponible, tambien en cruces de meses ya pagados: retira el
                         // dinero y lo devuelve al credito sin tocar el cierre del ciclo (el backend
