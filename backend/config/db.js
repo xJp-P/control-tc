@@ -781,22 +781,24 @@ function initDb(dbPathOverride) {
     db.exec('UPDATE compras SET updated_at = created_at WHERE updated_at IS NULL');
   }
 
-  // Retroactively assign grupo_id to existing split compras
-  (() => {
-    const splitGroups = db.prepare(`
-      SELECT fecha, descripcion, tarjeta_id, COALESCE(diferida_id, -1) as dif_id, GROUP_CONCAT(id) as ids
-      FROM compras
-      WHERE grupo_id IS NULL
-      GROUP BY fecha, descripcion, tarjeta_id, COALESCE(diferida_id, -1)
-      HAVING COUNT(*) > 1 AND SUM(CASE WHEN persona_id IS NOT NULL THEN 1 ELSE 0 END) > 0
-    `).all();
-    splitGroups.forEach(g => {
-      const grupoId = 'g' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
-      g.ids.split(',').forEach(id => {
-        db.prepare('UPDATE compras SET grupo_id=? WHERE id=?').run(grupoId, parseInt(id));
-      });
-    });
-  })();
+  // [DEROGADO v5.6.2] Aqui vivia un backfill retroactivo que asignaba grupo_id agrupando por
+  // (fecha, descripcion, tarjeta_id, diferida_id) cuando habia mas de una compra en el bucket y al
+  // menos una era de un tercero. Se escribio para migrar divisiones ANTERIORES a la existencia de la
+  // columna grupo_id, pero quedo como IIFE sin candado de "ya migrado" -> corria en CADA arranque
+  // (initDb) y fusionaba compras INDEPENDIENTES del mismo comercio/dia/tarjeta en una compra dividida
+  // fantasma. Caso real: AMAZON COM #700/#701/#702 del 15-jul-2026, tres registros manuales separados
+  // por 26 y 29 segundos que aparecieron unidos como "DIVIDIDA 3 partes" tras un reinicio. Como se
+  // probo: el grupo_id ('gmrpjmphtbtoopma4') codifica en base36 el instante en que se acuño, y ese
+  // instante era 7 minutos POSTERIOR a la ultima compra. OJO al reusar esa tecnica: el FORMATO por si
+  // solo no prueba nada (el fallback de crypto.randomUUID en CompraForm acuña el mismo patron); la
+  // prueba es el DESFASE temporal, porque el frontend acuña su grupo_id al crear, nunca despues.
+  // Efecto colateral grave: el grupo resultante podia tener DOS partes personales, estado imposible
+  // desde la UI, que hace que handleEditGrupo BORRE una parte al editar el grupo (indexa por persona y
+  // ambas colisionan en la clave 'personal'). Desde que el flujo de division del frontend (CompraForm)
+  // manda su propio grupo_id en el body y POST /compras lo persiste en el INSERT, esta heuristica ya no
+  // tiene poblacion legitima que migrar: su unica salida posible son falsos positivos. Si algun dia
+  // aparece una BD anterior a la columna, el remedio es un UPDATE puntual y auditado sobre ESOS ids,
+  // nunca un backfill automatico por (fecha, descripcion, tarjeta) en el arranque. NO REINTRODUCIR.
 
   try { db.prepare('SELECT comision FROM avances LIMIT 1').get(); }
   catch (e) { db.exec('ALTER TABLE avances ADD COLUMN comision REAL DEFAULT 0'); }

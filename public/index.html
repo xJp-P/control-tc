@@ -261,6 +261,11 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '5.6.2': [
+    'Tus compras ya no se agrupan solas. Si registrabas dos o mas compras del mismo comercio, el mismo dia y en la misma tarjeta, y alguna tenia un responsable asignado, la app las unia por su cuenta en una sola "compra dividida" la siguiente vez que la abrias. Nunca fue algo que hicieras tu: era un arreglo antiguo que se quedo activo y se ejecutaba en cada arranque. Ya no existe, y las compras que registras separadas se quedan separadas.',
+    'Esto ademas destraba esas compras: mientras estaban unidas por error, la app no te dejaba reversarlas, diferirlas a cuotas ni reprogramarlas, porque las trataba como parte de una compra dividida.',
+    'Si ya tienes una compra unida por error, esta correccion evita que vuelva a pasar, pero no la separa sola: borrala y registra de nuevo cada compra por separado, siempre que el mes de esa compra siga abierto. Si ese mes ya cerro o ya lo pagaste, la app no te dejara borrarla (para no descuadrar un extracto ya facturado) y tocara dejarla como esta. Importante: usa "eliminar", no "editar".'
+  ],
   '5.6.1': [
     'En "Dinero a favor" ya puedes deshacer CUALQUIER movimiento, incluidos los que aplicaste a compras de meses que ya pagaste. Si cruzaste un dinero por error, lo retiras y vuelve a quedar disponible para aplicarlo donde toca. La compra NO se reabre como pendiente con el banco: el mes cerrado queda intacto y esa persona simplemente vuelve a aparecer debiendote lo que le retiraste.',
     'El boton "Dinero a favor" de una persona ya no aparece cuando no le queda saldo Y todo ese dinero se uso en meses que ya pagaste: ese libro esta cerrado y esas compras ni siquiera siguen en la tabla, asi que solo generaba ruido. Sigue apareciendo si le queda dinero sin repartir (en verde con el monto) o si algun movimiento se aplico a una compra de un mes que aun no has pagado, que es donde si tiene sentido corregir.',
