@@ -68,6 +68,14 @@ module.exports = function(db, { logAction, tjNombre }) {
           db.prepare("UPDATE extractos SET monto_pagado=? WHERE id=?").run(nuevoMonto, ext.id);
         }
       }
+      // Si el mínimo "oficial" de ese ciclo lo había fabricado el auto-ajuste a partir de ESTE pago
+      // (v5.7.1), revertir el pago tiene que llevárselo: si no, el ciclo se queda mostrando como cifra
+      // del banco un número derivado de un pago que ya no existe, y no hay UI para limpiarlo. La cifra
+      // LEÍDA de un PDF (fuente 'conciliacion') es un dato independiente del pago y NO se toca.
+      try {
+        db.prepare("DELETE FROM extractos_oficiales WHERE tarjeta_id=? AND ciclo=? AND fuente='ajuste por dias de interes'")
+          .run(pago.tarjeta_id, pago.ciclo);
+      } catch (e) { /* BD anterior a la migración: nada que limpiar */ }
       logAction('revertir', tjNombre(pago.tarjeta_id) + 'Abono a extracto revertido: ' + fmt + ' (' + pago.ciclo + ')');
 
     } else {

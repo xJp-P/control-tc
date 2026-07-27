@@ -258,9 +258,19 @@ tbody tr.row-highlight { background: var(--accent-bg); }
 const e = React.createElement;
 const { useState, useEffect, useCallback, useRef, useMemo, Fragment } = React;
 const API = 'http://127.0.0.1:3500/api';
+// Espejo de TOLERANCIA_PAGO_COP (backend/routes/extractos.js): margen con el que un pago se da por
+// completo aunque no coincida al peso con el estimado. El estimado no puede ser exacto por diseno
+// (el banco cobra interes sobre la cuota facturada hasta el dia del pago). Solo afecta el TEXTO del
+// boton y el aviso; quien decide es el backend.
+const TOLERANCIA_PAGO_COP = 2000;
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '5.7.1': [
+    'PAGAR YA NO DEPENDE DE CONCILIAR. Conciliar el PDF es opcional; pagar no. Ahora puedes escribir el valor exacto que te pide el banco y la app lo acepta como pago completo aunque no coincida con su estimado, siempre que la diferencia sea menor a dos mil pesos. El extracto queda saldado y las compras del mes marcadas como pagadas, sin tener que subir ningun documento.',
+    'Cuando eso pasa, la app ajusta sola el mes con la cifra que pagaste y te avisa cuanto absorbio, para que no te quede un aviso de "Falta" fantasma dando vueltas. Ese margen sale de haber medido 10 extractos: la diferencia nunca paso de mil seiscientos pesos, unas veces de mas y otras de menos, porque el banco cobra intereses por los dias que pasan hasta que pagas.',
+    'Lo que NO cambia: un abono parcial de verdad sigue siendo un abono y no cierra el mes. Y si ya conciliaste el extracto de ese mes, la app conoce la cifra exacta del banco: ahi exige esa cifra y no aplica ningun margen, porque un faltante ya no seria un desfase de calculo sino plata que falta.'
+  ],
   '5.7.0': [
     'SE ACABO TENER QUE MIRAR EL PDF PARA PAGAR (por ahora en RappiCard). Al conciliar un extracto de esa tarjeta, la app ahora LEE el pago minimo oficial impreso en el documento y lo guarda. Cuando le das a Pagar, te propone ese valor exacto, no un estimado: le das aceptar y listo. En la lista de extractos ese valor aparece marcado como "DEL EXTRACTO" para que sepas que es la cifra del banco y no un calculo; pasando el mouse por encima ves cuanto estimaba la app. En las demas tarjetas todo sigue igual que antes.',
     'POR QUE HACIA FALTA: revisamos 10 extractos de RappiCard, desde que abriste la tarjeta, y descubrimos por que la app nunca daba el numero exacto. Ademas de los intereses del plan de cuotas, el banco cobra intereses sobre la cuota que ya te facturo por cada dia que pasa hasta que pagas. Con el saldo de julio, esa parte vale 38 pesos si pagas el primer dia y 771 si pagas el dia 20: es decir, el valor depende de CUANDO pagues, algo que la app no puede saber por adelantado. Por eso ahora lee la cifra en vez de adivinarla.',
@@ -4649,10 +4659,13 @@ function Pagos({ tarjeta, onDataChange }) {
     ev.preventDefault();
     var monto = parseFloat(pagoMonto);
     if (!monto || monto <= 0) { toast('Ingresa un monto valido'); return; }
-    await api('/extractos/' + pagoExtracto.id + '/pagar', {
+    const resp = await api('/extractos/' + pagoExtracto.id + '/pagar', {
       method: 'PUT',
       body: { monto_pagado: monto, fecha_pagado: pagoFecha, tipo: 'abono_extracto', moneda: pagoMoneda }
     });
+    // api() no lanza ante 4xx/5xx: devuelve {error}. Sin este corte, un pago fallido mostraba
+    // igualmente un toast de exito y el usuario creia haber pagado.
+    if (!resp || resp.error) { toastErr('No se registro el pago: ' + ((resp && resp.error) || 'sin respuesta del servidor')); return; }
     setShowPagoModal(false);
     loadExtractos(); loadPagos();
     if (onDataChange) onDataChange();
@@ -4660,8 +4673,22 @@ function Pagos({ tarjeta, onDataChange }) {
       var nuevoTotalUsd = (pagoExtracto.monto_pagado_usd || 0) + monto;
       toast(nuevoTotalUsd >= (pagoExtracto.pago_minimo_usd || 0) ? 'Pago USD completado' : 'Abono USD registrado');
     } else {
-      var nuevoTotal = (pagoExtracto.monto_pagado || 0) + monto;
-      toast(nuevoTotal >= pagoExtracto.pago_minimo ? 'Pago minimo COP completado' : 'Abono COP registrado');
+      // El veredicto lo da el BACKEND (aplica la tolerancia y conoce la cifra oficial): compararlo aca
+      // contra el estimado del front daria un mensaje distinto al efecto real. Fallback local solo si
+      // la respuesta no trae el dato.
+      var completo = (resp && typeof resp.pagadoCompleto === 'boolean')
+        ? resp.pagadoCompleto
+        : ((pagoExtracto.monto_pagado || 0) + monto) >= pagoExtracto.pago_minimo;
+      var aj = (resp && resp.ajuste) || 0;
+      if (completo && aj) {
+        toast('Pago minimo COP completado. Se ajusto una diferencia de ' + (aj > 0 ? 'mas ' : 'menos ') + fmtCOP(Math.abs(aj)) + ' por dias de interes.');
+      } else if (completo && resp.absorbido_por_tolerancia) {
+        // Sella por tolerancia pero SIN adoptar cifra (ya habia una del PDF): hay que decirlo igual,
+        // porque el usuario pago menos que la cifra del banco que la app tiene guardada.
+        toast('Pago minimo COP completado. Se acepto una diferencia de ' + fmtCOP(Math.abs(resp.faltante_absorbido || 0)) + ' frente a la cifra del extracto.');
+      } else {
+        toast(completo ? 'Pago minimo COP completado' : 'Abono COP registrado');
+      }
     }
   }
 
@@ -4713,9 +4740,11 @@ function Pagos({ tarjeta, onDataChange }) {
         // Marca que esta cifra es la OFICIAL leida del extracto del banco, no el estimado de la app
         // (v5.7.0). Es la que hay que pagar; el estimado queda en pago_minimo_calculado.
         ext.tiene_oficial && e('div', {
-          style: { fontSize: 9, color: 'var(--success)', fontWeight: 700, letterSpacing: 0.3, cursor: 'help' },
-          title: 'Cifra tomada del extracto del banco. Estimado de la app: ' + fmtCOP(ext.pago_minimo_calculado)
-        }, 'DEL EXTRACTO'),
+          style: { fontSize: 9, color: ext.oficial_es_ajuste ? 'var(--warning)' : 'var(--success)', fontWeight: 700, letterSpacing: 0.3, cursor: 'help' },
+          title: (ext.oficial_es_ajuste
+            ? 'Cifra adoptada de lo que pagaste, no leida de un extracto. Estimado de la app: '
+            : 'Cifra tomada del extracto del banco. Estimado de la app: ') + fmtCOP(ext.pago_minimo_calculado)
+        }, ext.oficial_es_ajuste ? 'AJUSTADO AL PAGO' : 'DEL EXTRACTO'),
         tieneUsd && e('div', { style: { fontSize: 11, color: '#4FC3F7', fontWeight: 700 } }, fmtUsd(ext.pago_minimo_usd))
       ),
       e('td', { className: 'text-right text-mono' },
@@ -5229,7 +5258,11 @@ function Pagos({ tarjeta, onDataChange }) {
           e('div', { className: 'form-row' },
             e('div', { className: 'form-group' },
               e('label', { className: 'form-label' }, 'Monto a Pagar' + (esUsd ? ' (USD)' : '')),
-              e(MoneyInput, { value: pagoMonto, onChange: val => setPagoMonto(val), required: true })
+              e(MoneyInput, { value: pagoMonto, onChange: val => setPagoMonto(val), required: true }),
+              // Desacople de la conciliacion: conciliar el PDF es opcional, pagar no. Si el banco pide
+              // unos pesos mas (o menos) que el estimado, se acepta igual y el extracto queda saldado.
+              !esUsd && e('div', { style: { fontSize: 11, color: 'var(--text-muted)', marginTop: 4, lineHeight: 1.4 } },
+                'Puedes escribir el valor exacto que te pide el banco: las diferencias menores a ' + fmtCOP(TOLERANCIA_PAGO_COP) + ' se aceptan como pago completo y la app ajusta sola el ciclo.')
             ),
             e('div', { className: 'form-group' },
               e('label', { className: 'form-label' }, 'Fecha del Pago'),
@@ -5239,7 +5272,7 @@ function Pagos({ tarjeta, onDataChange }) {
           e('div', { className: 'modal-actions' },
             e('button', { type: 'button', className: 'btn', onClick: () => setShowPagoModal(false) }, 'Cancelar'),
             e('button', { type: 'submit', className: 'btn btn-primary' },
-              (parseFloat(pagoMonto) >= restante ? 'Completar Pago ' : 'Registrar Abono ') + (esUsd ? 'USD' : 'COP'))
+              (parseFloat(pagoMonto) >= (restante - (esUsd ? 0 : TOLERANCIA_PAGO_COP)) ? 'Completar Pago ' : 'Registrar Abono ') + (esUsd ? 'USD' : 'COP'))
           )
         );
       })()

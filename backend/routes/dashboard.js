@@ -379,7 +379,7 @@ module.exports = function(db) {
 
     let comprasCicloHistorico = null;
     if (extractoCicloData) {
-      pagoMinimoBruto = extractoCicloData.pago_minimo;
+      pagoMinimoBruto = minimoEfectivo(db, tarjeta_id, cicloActual, extractoCicloData.pago_minimo);
       pagoMinimo = 0;
       montoPagadoExtractoCiclo = extractoCicloData.monto_pagado;
       if (tarjeta_id) {
