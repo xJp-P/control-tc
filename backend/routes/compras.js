@@ -592,18 +592,35 @@ module.exports = function(db, { logAction, tjNombre }) {
   });
 
   router.delete('/:id', (req, res) => {
-    const c = db.prepare('SELECT descripcion, tarjeta_id, diferida_id, ciclo FROM compras WHERE id=?').get(req.params.id);
-    // Inmutabilidad: bloquear si el extracto del ciclo ya está pagado.
-    if (c) {
+    const desdeIa = !!(req.body && req.body.desde_conciliacion);
+    const c = db.prepare('SELECT id, descripcion, tarjeta_id, diferida_id, ciclo, grupo_id, persona_id, COALESCE(monto_bolsillo,0) mb, COALESCE(monto_bolsillo_usd,0) mbu, COALESCE(monto_abonado,0) ma, COALESCE(reversada,0) rev FROM compras WHERE id=?').get(req.params.id);
+    // Un id inexistente NO es un borrado exitoso: antes respondía {ok:true} tras un DELETE en vacío, así
+    // que una acción de la IA con un compra_id alucinado reportaba "aplicada" sin haber hecho nada.
+    if (!c) return res.status(404).json({ error: 'No existe la compra ' + req.params.id + '.' });
+    {
       const ext = db.prepare("SELECT estado FROM extractos WHERE tarjeta_id=? AND ciclo=?").get(c.tarjeta_id, c.ciclo);
       if (ext && ext.estado === 'pagado') {
         return res.status(403).json({ error: 'No se puede eliminar: el extracto del ciclo ' + c.ciclo + ' ya está pagado.' });
       }
       // Inmutabilidad estructural (cerrado ≠ pagado): borrar una compra de un ciclo que ya cerró
-      // descuadra el extracto que el banco ya facturó. Exención desde_conciliacion reservada para
-      // la conciliación IA (hoy ninguna acción IA elimina compras; queda latente por consistencia).
-      if (!(req.body && req.body.desde_conciliacion) && esCicloCerrado(c.tarjeta_id, c.ciclo)) {
+      // descuadra el extracto que el banco ya facturó. Exención desde_conciliacion para la acción
+      // `eliminar_compra` de la conciliación IA (v5.6.3): borra una compra que el banco NO facturó, y
+      // el extracto llega justo cuando el ciclo ya cerró. El candado de PAGADOS de arriba no se exime.
+      if (!desdeIa && esCicloCerrado(c.tarjeta_id, c.ciclo)) {
         return res.status(403).json({ error: 'No se puede eliminar: la compra pertenece al ciclo ' + c.ciclo + ', que ya cerró (el banco ya generó ese extracto).' });
+      }
+      // Guards de CONTENIDO, solo para la vía de la IA: el borrado manual lo hace el usuario viendo la
+      // fila y sus badges, pero la IA propone a ciegas sobre un id. Sin esto, un falso positivo podía
+      // evaporar el reembolso de un tercero o dejar un crédito de saldo a favor inalcanzable (la
+      // aplicación queda con compra_destino_id=NULL por el ON DELETE SET NULL y el chip desaparece).
+      if (desdeIa) {
+        if (c.grupo_id) return res.status(403).json({ error: 'Esta compra es una parte de una compra dividida: bórrala desde la tabla, no por conciliación.' });
+        if (c.mb > 0 || c.mbu > 0) return res.status(409).json({ error: 'Esta compra tiene dinero apartado en el bolsillo; retíralo antes de eliminarla.' });
+        if (c.ma > 0) return res.status(409).json({ error: 'Esta compra tiene un abono registrado; no se puede eliminar por conciliación.' });
+        if (c.rev) return res.status(409).json({ error: 'Esta compra está reversada; su historial no se elimina.' });
+        if (compraTerceroConReembolso(db, c.id)) return res.status(403).json({ error: 'Esta compra tiene reembolsos de un tercero; gestiónalos desde Terceros antes de eliminarla.' });
+        const cruce = db.prepare("SELECT 1 FROM aplicaciones_saldo_favor WHERE compra_destino_id=? AND tipo='cruce' LIMIT 1").get(c.id);
+        if (cruce) return res.status(409).json({ error: 'Esta compra recibió un cruce de saldo a favor; deshazlo desde "Dinero a favor" antes de eliminarla.' });
       }
     }
     db.prepare('DELETE FROM compras WHERE id=?').run(req.params.id);

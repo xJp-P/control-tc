@@ -12,7 +12,7 @@
 | 6 | 20 feb – 19 mar 2026 | 31 mar 2026 | 12 |
 | 7 | 20 mar – 20 abr 2026 | 04 may 2026 | 14 |
 
-**Estado del análisis:** documentación pre-implementación. NO se modificó código durante esta fase. La lógica actual de RappiCard en el motor ya está correctamente configurada (validado al final del documento).
+**Estado del análisis:** documento VIVO. La versión original fue documentación pre-implementación (sin cambios de código). **Actualizado en v5.6.3** con la auditoría del extracto de julio-2026: el layout real del texto extraído (§1.1) y la calibración de los intereses (§4.3), que **deroga** la explicación anterior de "capitalización diaria". Esa versión **sí** modificó código (el parser de conciliación) y dejó identificado —pero NO implementado— un ajuste pendiente en el conteo de días del motor. Las conclusiones de §8 y §10 quedan matizadas por §4.3.
 
 ---
 
@@ -30,6 +30,43 @@ Características del documento físico:
 > - `isDualExtracto('Visa')` → `false` ✓
 > - `aplicaIntInternacional('RappiCard'/'Davivienda', 'Visa')` → `false` ✓ (no hay `INT INTL` estilo Bancolombia)
 > - Detección actual: `banco.toLowerCase().includes('rappi') || banco.toLowerCase().includes('davivienda')` activa la rama `esRappiCardCalc` / `esRappiDash`.
+
+### 1.1 Layout del TEXTO extraído — vertical, no tabular (confirmado con un PDF real)
+
+Dato clave para la conciliación IA, confirmado al extraer el PDF de julio-2026 (el archivo viene
+**cifrado**: la contraseña es el número de documento del titular). El "Detalle de transacciones" se ve
+como una tabla en pantalla, pero al extraer el texto **cada celda cae en su propia línea**, en bloques
+de 9 campos por movimiento:
+
+```
+Virtual          <- canal (Virtual | Fisica | "-" en los pagos)
+2026-07-15       <- fecha, formato ISO YYYY-MM-DD
+RAPPI            <- descripcion del comercio
+$36.300,00       <- valor de la transaccion
+$36.300,00       <- capital facturado del periodo   <-- lo que cobra ESTE ciclo
+1 de 1           <- cuotas ("9 de 24" en diferidas)
+$0,00            <- capital pendiente por facturar
+0,0000%          <- tasa M.V de la linea
+0,00%            <- tasa E.A
+```
+
+Los pagos usan la misma estructura con `-` como canal, valor **negativo** y `N/A` en los campos de
+cuotas: `- | 2026-06-29 | PAGOS RAPPIPAY APP | $-237.136,05 | N/A | N/A | N/A | 0% | 0,00%`.
+
+> **Implicación en el motor (corregida en v5.6.3):** `parsearTabular` exige fecha **y** monto en la
+> MISMA línea, así que con este layout no cruzaba NADA y toda la conciliación de RappiCard caía sobre
+> el LLM, sin la red determinista. `strategies/rappiCard.js` tiene ahora un `parsearVertical` propio
+> que reconstruye los bloques (con fallback al tabular si el layout difiere). Emite el **capital
+> facturado** (2º monto), no el valor de la transacción: es lo que el banco cobra en el ciclo y lo que
+> el motor compara — las cuotas de diferida se cruzan por `campo_monto:'capital'`, y en una compra de
+> contado ambos valores coinciden. Los movimientos negativos se descartan del pool del matcher.
+>
+> **⚠️ Pendiente conocido:** esos negativos hoy **tampoco llegan** a `detectarReversos` /
+> `detectarPagosOmitidos` — ambos parsean el texto crudo con una regex que exige fecha `DD/MM/YYYY`,
+> concepto y monto **en la misma línea**, y aquí la fecha es ISO y cada campo va en su renglón. O sea:
+> en RappiCard un pago o un reverso **no tienen cruce determinista** (el arreglo de plurales
+> `PAGOS?` de v5.6.3 es necesario pero no suficiente). Fix natural: alimentar esos detectores con las
+> líneas ya reconstruidas por la estrategia del banco en vez de re-parsear el texto. Ver BACKLOG.
 
 ---
 
@@ -115,22 +152,72 @@ Los $27.037,64 son intereses sobre las diferidas (incluyendo cuota 1), porque la
 
 > **Implicación en el motor:** la flag `difiere_intereses_cuota1` debe quedar en **`0` o `null`** para tarjetas RappiCard. Esto hace que `nuOpts(db, tarjetaId)` retorne `undefined` y `calcularAmortizacionDiferida` use el modelo estándar (`interesTotal = interesPeriodo` desde i=0).
 
-### 4.3 Fórmula de los intereses (aproximación)
+### 4.3 Fórmula de los intereses — CALIBRADA (auditoría del extracto de julio-2026)
 
-El motor usa `interesPeriodo = saldoInicial × tasaMV × (dias / 30)`, calculado por cuota individual y sumado.
+> **Corrección importante (27-jul-2026).** Este apartado afirmaba antes que el residual se debía a
+> *"capitalización diaria sobre saldo pendiente diario"*. **Es FALSO** y se deroga: la E.A. impresa
+> (24,36%) es exactamente la misma tasa que 1,8334% M.V. (`1,018334^12 = 1,2436`), así que no hay
+> capitalización extra que explicar; en convención base-30 aporta ~$12 y en convención 365 días va en
+> **dirección contraria**. La causa real es el **número de días del periodo**.
 
-Comparación con datos reales:
+**La fórmula del banco es la misma del motor** — `interés = saldo × tasaMV × (días / 30)`, por cuota y
+sumada. Lo que difiere es el insumo **días**.
 
-| Ciclo | Intereses cobrados PDF | Intereses calculados motor (aprox) | Diferencia |
-|-------|------------------------|------------------------------------|-----------|
-| 2     | $27.037,64 | ~$26.323 | ~$715 (2,6%) |
-| 3     | $25.197,77 | (sin reconcili. exacta) | ≤ 5% |
-| 4     | $29.032,28 | (sin reconcili. exacta) | ≤ 5% |
-| 5     | $24.619,84 | (sin reconcili. exacta) | ≤ 5% |
-| 6     | $21.999,88 | (sin reconcili. exacta) | ≤ 5% |
-| 7     | $23.940,45 | (sin reconcili. exacta) | ≤ 5% |
+**Prueba de calibración (ciclo 2, nov-2025).** Es el ciclo de nacimiento de las 5 diferidas, sin saldo
+previo que contamine. Con los días REALES (contando el día de la transacción, inclusive):
 
-**Residual conocido:** Davivienda usa **capitalización diaria sobre saldo pendiente diario** (igual concepto que Bancolombia, ver `Bancolombia_Mastercard.md §4.4`). Como nuestra app no tiene el log día-por-día, sumamos los intereses itemizados por cuota, lo que produce una diferencia de hasta ~5% con el cargo real del banco. Aceptable para uso práctico.
+| Grupo | Capital | Días | Interés |
+|---|---|---|---|
+| 3 compras del 22-oct → corte 20-nov | $937.909,53 | 30 | $17.195,62 |
+| 2 compras del 24-oct → corte 20-nov | $575.162,07 | 28 | $9.842,03 |
+| **Total calculado** | | | **$27.037,65** |
+| **Total impreso en el PDF** | | | **$27.037,64** |
+
+Error: **$0,013** sobre 5 términos. La forma de la fórmula queda confirmada al centavo. Con el conteo
+que hace hoy el motor (`daysBetween` exclusivo: 29 y 27 días) daría $26.112,96 → **−$924,68**.
+
+Dos convenciones rivales quedaron descartadas con este mismo ciclo: sin prorrateo por día → $27.740,66;
+`días_vivos / días_del_periodo` → $26.165,30.
+
+#### La causa raíz: cortes sintéticos vs. cortes reales
+
+`calcularAmortizacionDiferida` ([backend/engine/amortizacion.js](../../backend/engine/amortizacion.js))
+genera los cortes con `addMonths(fechaPrimerCorte, i)` → siempre el **día fijo**, siempre **30 días**.
+Pero RappiCard **adelanta el corte** cuando cae en fin de semana, y entonces el periodo facturado no
+mide 30 días.
+
+Caso medido — ciclo julio-2026, periodo impreso *"desde 19 jun 2026 hasta 20 jul 2026"* (**32 días**,
+porque el corte de junio fue el **18**, un jueves: el 20-jun cayó sábado):
+
+| | Interés |
+|---|---|
+| App (30 días sintéticos) | $18.493,77 |
+| Con 32 días reales | $19.726,69 |
+| **Banco (PDF)** | **$20.150,51** |
+
+El conteo de días explica **~74%** del desfase. El residual restante (**$423,82**, 2,1% del interés y
+0,13% del pago mínimo) **sigue abierto**: es recurrente (≈0,18% del saldo facturado anterior, ~3 días
+de interés) y para desempatar sus candidatos —rotación parcial, cambio de tasa a mitad de ciclo (el
+periodo abarca dos meses calendario y la usura cambia el 1°), o convención distinta para saldos
+arrastrados— haría falta el PDF del extracto de junio. **Decisión del usuario (27-jul-2026): se acepta
+como margen de error, no se persigue.**
+
+**Lo irónico:** la app **ya conoce** el corte real — está en `cortes_custom` (`2026-06 → 2026-06-18`,
+motor de cortes adelantados de v4.6.0) y lo usan los candados y el display desde v4.7.0. Simplemente
+**no llega al motor de amortización**.
+
+> **Fix identificado pero NO implementado** (decisión del usuario, 27-jul-2026): pasar los cortes
+> reales al motor vía un `opts.cortesReales` opcional. Es un **sub-proyecto de alto riesgo**: la firma
+> de `calcularAmortizacionDiferida` la consumen ~24 call sites y alimenta deuda, cupo, pago mínimo y
+> conciliación IA; las `fechaCorte` generadas son además la CLAVE con que `engine/extracto.js` asigna
+> cada cuota a un ciclo, así que un corte que cruce el límite de mes podría duplicar una cuota en un
+> extracto y borrarla del siguiente. Corregirlo mueve números históricos en AMBAS direcciones.
+> Además, el sub-fix del día inclusivo en la cuota 1 **contaminaría el experimento de campo abierto**
+> (APPLE #70 / NETFLIX #71), cuya pregunta central es justamente desde qué fecha arranca el interés de
+> la primera cuota. Debe ir gateado por banco y esperar al extracto de agosto.
+
+**Efecto práctico mientras tanto:** la app **subestima** el interés de RappiCard cuando el banco
+adelanta el corte. En julio-2026 fueron $1.657 de un pago mínimo de $320.582 (0,5%).
 
 ---
 
@@ -261,7 +348,7 @@ El patrón aparente es: la fecha de pago cae en el **último día calendario del
 | Compras diferidas: cuota 1 cobra intereses | ✅ **Sí (sin diferimiento)** ← diferencia con Bancolombia |
 | Cuota mostrada en diferidas | Capital puro (`monto/N`) |
 | Tasa de diferidas (al día del desembolso) | 1,8334% MV / 24,36% EA en los datos vistos. Se actualiza el 1° de cada mes según Tasa de Usura del Banco de la República |
-| Modelo de cálculo de intereses | Capitalización diaria (motor lo aproxima por cuota) |
+| Modelo de cálculo de intereses | `saldo × tasaMV × (días/30)` por cuota — la MISMA fórmula del motor. **No es capitalización diaria** (derogado en §4.3); el desfase viene del número de días del periodo |
 | Avances tradicionales | Modelados como diferidas (sin evidencia clara aún) |
 | Comisión de avance | No observada |
 | Pago Mínimo: fórmula | Capital + Intereses + Mora + Otros − Saldo a favor |
@@ -325,7 +412,7 @@ const intlCheckboxLabel = aplicaIntlForm
 
 2. **`backend/engine/amortizacion.js → calcularAmortizacionDiferida`**:
    - Sin flag `esBancolombia`, cae en `interesTotal = interesPeriodo` desde i=0 → la cuota 1 **sí** cobra intereses ✓
-   - Fórmula `saldoInicial × tasaMV × (dias/30)` aplicada correctamente
+   - Fórmula `saldoInicial × tasaMV × (dias/30)`: la **FORMA** está confirmada al centavo contra el PDF (§4.3) ✓, pero el insumo `dias` **NO** — usa cortes sintéticos de 30 días y conteo exclusivo. Ver §4.3.
 
 3. **`backend/routes/extractos.js`**:
    - Detección `esRappiCardCalc` por `banco.includes('rappi')` o `'davivienda'` ✓
@@ -341,9 +428,11 @@ const intlCheckboxLabel = aplicaIntlForm
    - Card "Deuda USD" oculta para RappiCard (porque `data.dualExtracto=false`) ✓
    - Columnas "Int Intl" y "Total" ocultas en tablas de Compras y Terceros para RappiCard (porque `aplicaIntl=false`) ✓
 
-### 10.2 Lo que NO requiere cambios
+### 10.2 Lo que NO requiere cambios (con UNA excepción abierta)
 
-✅ **No se necesita tocar el motor.** La arquitectura actual ya distingue correctamente RappiCard de las otras franquicias.
+✅ **La arquitectura actual ya distingue correctamente RappiCard** de las otras franquicias: la detección por banco, los flags y las ramas de cálculo están bien.
+
+⚠️ **La excepción:** el **conteo de días** del motor de amortización cuando el banco adelanta el corte (§4.3). Está identificado y cuantificado ($1.657 en el ciclo de julio-2026, el 74% del desfase de intereses), y **NO implementado por decisión del usuario** — es un sub-proyecto de alto riesgo que además contaminaría un experimento de campo en curso. No dar por cerrado este documento sin leer §4.3.
 
 ### 10.3 Mejoras opcionales (no bloqueantes)
 

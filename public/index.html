@@ -261,6 +261,12 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '5.6.3': [
+    'El asistente de conciliacion ahora esta obligado a CUADRAR las cuentas: antes de mostrarte el analisis debe verificar que las diferencias que encontro sumen exactamente el descuadre del pago minimo. Si no cuadra, sigue buscando en vez de decirte "no se pudo explicar". Ademas cada diferencia te muestra cuanto explica en pesos, para que veas de donde sale cada peso del total.',
+    'El asistente ya no se inventa reglas de otros bancos. Ahora recibe la formula EXACTA con la que cada banco arma su pago minimo y tiene prohibido aplicar porcentajes que no aparezcan impresos en tu extracto. Antes, en un extracto de RappiCard, calculo que una compra pesaba solo el 10% del pago minimo cuando en realidad pesa el 100%, y por eso reporto como inexplicable una diferencia que ya tenia resuelta.',
+    'Nueva accion de 1 clic: ELIMINAR una compra que el banco NO facturo. Si registraste una compra dos veces por error, el asistente lo detecta y te ofrece borrar la sobrante, incluso si el mes ya cerro (que es justo cuando llega el extracto y no se puede borrar a mano). Antes solo sabia avisarte de compras que FALTABAN, nunca de las que sobraban. Como es una accion que no se puede deshacer, siempre pide confirmacion mostrandote los datos reales de la compra.',
+    'La conciliacion de RappiCard ahora si cruza las compras automaticamente. El extracto de esa tarjeta tiene un formato distinto que la app no sabia leer, asi que todo el trabajo quedaba en manos de la inteligencia artificial, sin la verificacion automatica previa. Ahora la app empareja sola cada compra y cada cuota con su linea del extracto, y te indica con precision cual sobra o cual falta.'
+  ],
   '5.6.2': [
     'Tus compras ya no se agrupan solas. Si registrabas dos o mas compras del mismo comercio, el mismo dia y en la misma tarjeta, y alguna tenia un responsable asignado, la app las unia por su cuenta en una sola "compra dividida" la siguiente vez que la abrias. Nunca fue algo que hicieras tu: era un arreglo antiguo que se quedo activo y se ejecutaba en cada arranque. Ya no existe, y las compras que registras separadas se quedan separadas.',
     'Esto ademas destraba esas compras: mientras estaban unidas por error, la app no te dejaba reversarlas, diferirlas a cuotas ni reprogramarlas, porque las trataba como parte de una compra dividida.',
@@ -6066,7 +6072,7 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
     api('/compras?tarjeta_id=' + Number(tarjetaId)).then(l => setComprasTj(Array.isArray(l) ? l : [])).catch(() => setComprasTj([]));
   }, [tarjetaId]);
   // Operaciones que la app puede aplicar automaticamente (mapean a endpoints existentes).
-  const AUTO = { crear_compra: 1, editar_valor: 1, mover_ciclo: 1, reprogramar_cuotas: 1, convertir_a_diferida: 1, crear_diferida_omitida: 1, actualizar_tasa_intl: 1, actualizar_fecha_pago: 1, reversar_compra: 1, registrar_pago: 1 };
+  const AUTO = { crear_compra: 1, eliminar_compra: 1, editar_valor: 1, mover_ciclo: 1, reprogramar_cuotas: 1, convertir_a_diferida: 1, crear_diferida_omitida: 1, actualizar_tasa_intl: 1, actualizar_fecha_pago: 1, reversar_compra: 1, registrar_pago: 1 };
 
   // Formatea una tasa mensual decimal a porcentaje colombiano (0.020849 -> "2,0849%").
   const fmtPct = (x) => (x == null || x === '') ? '—' : (Number(x) * 100).toFixed(4).replace('.', ',') + '%';
@@ -6079,7 +6085,7 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
       clasificacion_incorrecta: 'Clasificación incorrecta', cuota_reprogramada: 'Cuota reprogramada',
       tasa_intl_incorrecta: 'Tasa internacional incorrecta', fecha_pago_movida: 'Fecha de pago movida',
       reverso_detectado: 'Reverso detectado', mover_ciclo: 'Mover de ciclo', diferida_omitida: 'Diferida omitida',
-      pago_omitido: 'Pago no registrado', otro: 'Otra discrepancia'
+      pago_omitido: 'Pago no registrado', compra_no_facturada: 'Compra que el banco no facturó', otro: 'Otra discrepancia'
     };
     if (map[tipo]) return map[tipo];
     const s = String(tipo).replace(/_/g, ' ').trim();
@@ -6089,7 +6095,7 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
   const fmtOperacion = (op) => {
     if (!op) return '';
     const map = {
-      crear_compra: 'Crear compra', editar_valor: 'Editar valor', mover_ciclo: 'Mover de ciclo',
+      crear_compra: 'Crear compra', eliminar_compra: 'Eliminar compra', editar_valor: 'Editar valor', mover_ciclo: 'Mover de ciclo',
       reprogramar_cuotas: 'Reprogramar cuotas', actualizar_tasa_intl: 'Actualizar tasa internacional',
       actualizar_fecha_pago: 'Actualizar fecha de pago', fecha_corte_movida: 'Aplicar corte adelantado',
       convertir_a_diferida: 'Convertir a diferida', crear_diferida_omitida: 'Crear diferida omitida', reversar_compra: 'Reversar compra',
@@ -6125,6 +6131,28 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
     const p = paramsDe(d);
     const cid = p.compra_id != null ? p.compra_id : d.compra_id;
     if (op === 'crear_compra') return { titulo: 'Crear compra nueva', endpoint: 'POST /api/compras', filas: [['Descripcion', p.descripcion || d.descripcion || ''], ['Valor', fmtCOP(p.valor_cop != null ? p.valor_cop : d.valor_extracto)], ['Ciclo', ciclo], ['Fecha', p.fecha || (ciclo + '-15')]] };
+    if (op === 'eliminar_compra') {
+      // Accion DESTRUCTIVA e irreversible: el resumen se arma con los datos REALES de la compra tomados
+      // de la tabla (no los que reporta la IA), para que la confirmacion no sea a ciegas.
+      const t = comprasTj.find(x => String(x.id) === String(cid));
+      if (!t) return { titulo: 'Eliminar la compra de la app', endpoint: 'DELETE /api/compras/' + cid, filas: [
+        ['Compra', '#' + cid],
+        ['ATENCION', 'no se encontro esa compra en esta tarjeta: no se eliminara nada']
+      ] };
+      const filas = [
+        ['Compra', '#' + t.id + ' - ' + (t.descripcion || '')],
+        ['Valor', fmtCOP(t.valor_cop)],
+        ['Fecha', t.fecha || ''],
+        ['Motivo', 'el banco no la facturo en este extracto']
+      ];
+      if (t.persona_nombre || t.persona_id) filas.push(['Responsable', t.persona_nombre || ('persona #' + t.persona_id)]);
+      if (t.monto_bolsillo > 0) filas.push(['Dinero apartado', fmtCOP(t.monto_bolsillo)]);
+      // Borrar la ultima compra que referencia una diferida borra TAMBIEN la diferida: el usuario debe
+      // saber que se lleva por delante la tabla de amortizacion completa, no una sola cuota.
+      if (t.diferida_id) filas.push(['OJO', 'es una compra a cuotas: se elimina tambien su plan de amortizacion']);
+      filas.push(['ATENCION', 'se borra de forma definitiva y no se puede deshacer']);
+      return { titulo: 'Eliminar la compra de la app', endpoint: 'DELETE /api/compras/' + cid, filas };
+    }
     if (op === 'editar_valor') return { titulo: 'Editar valor de la compra', endpoint: 'PUT /api/compras/' + cid, filas: [['Compra', '#' + cid], ['Valor actual (app)', fmtCOP(d.valor_app)], ['Nuevo valor (extracto)', fmtCOP(p.valor_cop != null ? p.valor_cop : d.valor_extracto)]] };
     if (op === 'mover_ciclo') return { titulo: 'Reasignar al ciclo (manual)', endpoint: 'PUT /api/compras/' + cid, filas: [['Compra', '#' + cid], ['Nuevo ciclo', p.ciclo || ciclo], ['Conserva su fecha real', 'si']] };
     if (op === 'reprogramar_cuotas') {
@@ -6203,6 +6231,21 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
         // que el extracto YA facturado trae y la app no tiene); el de ciclos PAGADOS sigue aplicando.
         const body = { tarjeta_id: Number(tarjetaId), ciclo: ciclo, ciclo_manual: 1, fecha: p.fecha || (ciclo + '-15'), descripcion: p.descripcion || d.descripcion || 'Compra (conciliacion)', valor_cop: Number(p.valor_cop != null ? p.valor_cop : d.valor_extracto) || 0, es_internacional: p.es_internacional ? 1 : 0, desde_conciliacion: true };
         const r = await api('/compras', { method: 'POST', body });
+        if (r && r.error) throw new Error(r.error);
+      } else if (op === 'eliminar_compra') {
+        // Caso INVERSO de crear_compra: la app tiene una compra que el banco NUNCA facturo (tipicamente
+        // un doble registro del usuario). desde_conciliacion exime del candado de "ciclo cerrado" — sin
+        // el flag el DELETE responde 403 en cuanto el ciclo cierra, que es justo cuando llega el extracto
+        // y se concilia; el candado de ciclos PAGADOS sigue aplicando y no se puede saltar.
+        const cid = p.compra_id != null ? p.compra_id : d.compra_id;
+        if (!cid) throw new Error('No se identifico la compra a eliminar.');
+        // Verificar contra la BD que la compra EXISTE y es de ESTA tarjeta antes de borrar (mismo patron
+        // que editar_valor/mover_ciclo). Sin esto, un compra_id equivocado del modelo podia borrar una
+        // compra de otra tarjeta; el backend tambien lo blinda (404 + guards de contenido).
+        const lista = await api('/compras?tarjeta_id=' + Number(tarjetaId));
+        const a = Array.isArray(lista) ? lista.find(x => String(x.id) === String(cid)) : null;
+        if (!a) throw new Error('No se encontro la compra #' + cid + ' en la tarjeta. No se elimino nada.');
+        const r = await api('/compras/' + cid, { method: 'DELETE', body: { desde_conciliacion: true } });
         if (r && r.error) throw new Error(r.error);
       } else if (op === 'editar_valor' || op === 'mover_ciclo') {
         const cid = p.compra_id != null ? p.compra_id : d.compra_id;
@@ -6312,7 +6355,10 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
       e('div', null, e('div', { style: { fontSize: 11, color: 'var(--text-muted)' } }, 'Diferencia'), e('div', { style: { fontSize: 15, fontWeight: 700, color: Math.abs(Number(c.diferencia) || 0) > 0 ? 'var(--warning)' : 'var(--success)' } }, fmtCOP(c.diferencia)))
     ),
     Array.isArray(c.explicacion) && c.explicacion.length > 0 && e('ul', { style: { margin: '0 0 10px 0', paddingLeft: 18, fontSize: 12.5, color: 'var(--text-secondary)', lineHeight: 1.5 } }, c.explicacion.map((x, i) => e('li', { key: i }, String(x)))),
-    (Number(c.residual_no_explicado) > 0) && e('div', { style: { fontSize: 12, color: 'var(--text-muted)', marginBottom: 10 } }, 'Residual no explicado: ', e('strong', null, fmtCOP(c.residual_no_explicado))),
+    // Con impactos CON SIGNO (v5.6.3) un residual NEGATIVO es posible (el analisis sobre-explica la
+    // diferencia) y tambien hay que mostrarlo: con el guard viejo (> 0) quedaba invisible justo el caso
+    // que delata un razonamiento mal cerrado.
+    Number.isFinite(Number(c.residual_no_explicado)) && Math.round(Number(c.residual_no_explicado)) !== 0 && e('div', { style: { fontSize: 12, color: 'var(--text-muted)', marginBottom: 10 } }, 'Residual no explicado: ', e('strong', null, fmtCOP(c.residual_no_explicado))),
     pagos.length > 0 && e('div', { style: { marginBottom: 10 } },
       e('div', { style: { fontSize: 12.5, fontWeight: 600, marginBottom: 4 } }, 'Pagos detectados (no son compras faltantes)'),
       pagos.map((p, i) => e('div', { key: i, style: { fontSize: 12, color: 'var(--text-secondary)' } }, (p.fecha || '') + '  ' + fmtCOP(p.monto) + '  ' + (p.etiqueta_extracto || '') + (p.coincide_con_pago_app ? '  (coincide con un pago en la app)' : '')))
@@ -6384,6 +6430,12 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
                     ))
                 )
               : (d.valor_extracto != null || d.valor_app != null) && e('div', { style: { fontSize: 12, color: 'var(--text-muted)' } }, 'Extracto: ' + fmtCOP(d.valor_extracto) + '   App: ' + fmtCOP(d.valor_app)),
+            // Cuanto de la diferencia del pago minimo explica ESTA causa (con signo): es la cifra que
+            // permite ver si las discrepancias suman la diferencia total o si todavia falta una causa.
+            // Number.isFinite descarta un valor no numerico (el modelo podria devolverlo formateado):
+            // sin ese guard, NaN pasaba el "!== 0" y pintaba un enganoso "Explica $0".
+            Number.isFinite(Number(d.impacto_pago_minimo)) && Math.round(Number(d.impacto_pago_minimo)) !== 0 && e('div', { style: { fontSize: 12, color: 'var(--text-muted)', marginTop: 2 } },
+              'Explica ' + (Number(d.impacto_pago_minimo) > 0 ? '+' : '') + fmtCOP(d.impacto_pago_minimo) + ' del pago minimo'),
             d.posible_falso_positivo && e('div', { style: { marginTop: 6, fontSize: 11.5, color: 'var(--warning)', background: 'rgba(251,191,36,0.10)', border: '1px solid rgba(251,191,36,0.25)', borderRadius: 6, padding: '6px 8px', lineHeight: 1.4 } },
               e('div', { style: { fontWeight: 700, marginBottom: 2 } }, 'Posible falso positivo'),
               e('div', { style: { color: 'var(--text-secondary)' } }, 'Tu app ya tiene una compra de este monto bien clasificada; la IA pudo confundir estas:'),
