@@ -699,6 +699,42 @@ module.exports = function(db, ctx) {
         }
       } catch (e) { console.log('[ia/analizar] comparacion de fechas:', e && e.message); }
 
+      // ── Cifra OFICIAL del pago mínimo, leída del PDF de forma DETERMINISTA (v5.7.0) ──
+      // La app NO puede calcular el mínimo al peso: el banco cobra además interés sobre la cuota ya
+      // facturada hasta el día en que el usuario paga (información del futuro al proyectar; probado
+      // contra 10 extractos, ver docs/bancos/RappiCard_Visa.md §4.3). Así que el número se LEE del
+      // extracto, sin pasar por el LLM (la estrategia del banco sabe dónde está impreso), y se ofrece
+      // fijarlo con un clic para que al pagar no haya que transcribirlo a mano.
+      try {
+        const resumenPdf = (estrategia && typeof estrategia.parsearResumen === 'function')
+          ? (estrategia.parsearResumen(texto_redactado) || {}) : {};
+        const fmtPesos = (n) => '$' + Math.round(n || 0).toLocaleString('es-CO');
+        if (resumenPdf.pago_minimo > 0) {
+          const yaFijado = db.prepare('SELECT pago_minimo FROM extractos_oficiales WHERE tarjeta_id=? AND ciclo=?')
+            .get(mv.tarjeta.id, mv.ciclo);
+          const dif = Math.round(resumenPdf.pago_minimo - (mv.pago_minimo_app || 0));
+          resu.pago_minimo_oficial = { valor: resumenPdf.pago_minimo, pago_total: resumenPdf.pago_total || null, diferencia: dif };
+          // Solo se propone si aún no está fijado con ese mismo valor y difiere del cálculo.
+          const yaIgual = yaFijado && Math.abs(yaFijado.pago_minimo - resumenPdf.pago_minimo) < 1;
+          if (!yaIgual && Math.abs(dif) >= 1) {
+            if (!Array.isArray(resu.discrepancias)) resu.discrepancias = [];
+            resu.discrepancias.push({
+              tipo: 'pago_minimo_oficial',
+              descripcion: 'El extracto exige ' + fmtPesos(resumenPdf.pago_minimo) + ' de pago minimo y la app estima '
+                + fmtPesos(mv.pago_minimo_app || 0) + '. Fija la cifra oficial para pagar el valor exacto sin transcribirlo a mano.',
+              valor_extracto: resumenPdf.pago_minimo,
+              valor_app: mv.pago_minimo_app || 0,
+              compra_id: null,
+              impacto_pago_minimo: 0,
+              severidad: 'media',
+              accion_sugerida: { operacion: 'fijar_pago_minimo_oficial', parametros: {
+                tarjeta_id: mv.tarjeta.id, ciclo: mv.ciclo,
+                pago_minimo: resumenPdf.pago_minimo, pago_total: resumenPdf.pago_total || null } }
+            });
+          }
+        }
+      } catch (e) { console.log('[ia/analizar] lectura del pago minimo oficial:', e && e.message); }
+
       // ── Detección determinista de REVERSOS (devoluciones) ──
       // Movimientos NEGATIVOS que NO son pagos (ej. "LATAM AIR $ -138.920") = devolución de una
       // compra. Se cruzan contra el historial por monto (abs, ±$2) + descripción difusa (el banco

@@ -261,6 +261,13 @@ const API = 'http://127.0.0.1:3500/api';
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '5.7.0': [
+    'SE ACABO TENER QUE MIRAR EL PDF PARA PAGAR (por ahora en RappiCard). Al conciliar un extracto de esa tarjeta, la app ahora LEE el pago minimo oficial impreso en el documento y lo guarda. Cuando le das a Pagar, te propone ese valor exacto, no un estimado: le das aceptar y listo. En la lista de extractos ese valor aparece marcado como "DEL EXTRACTO" para que sepas que es la cifra del banco y no un calculo; pasando el mouse por encima ves cuanto estimaba la app. En las demas tarjetas todo sigue igual que antes.',
+    'POR QUE HACIA FALTA: revisamos 10 extractos de RappiCard, desde que abriste la tarjeta, y descubrimos por que la app nunca daba el numero exacto. Ademas de los intereses del plan de cuotas, el banco cobra intereses sobre la cuota que ya te facturo por cada dia que pasa hasta que pagas. Con el saldo de julio, esa parte vale 38 pesos si pagas el primer dia y 771 si pagas el dia 20: es decir, el valor depende de CUANDO pagues, algo que la app no puede saber por adelantado. Por eso ahora lee la cifra en vez de adivinarla.',
+    'Tu estimado no desaparece: la app sigue calculando la deuda, el cupo y las proyecciones con su propio motor. La cifra del banco solo manda en el momento de pagar.',
+    'Los nombres de tus compras de RappiCard quedaron alineados con los del extracto, para que la conciliacion los cruce sin dudas. Donde el banco solo dice "RAPPI" y tu tenias el nombre del sitio, ese nombre se movio a la nota personal: sigue visible bajo la compra, no se perdio nada.',
+    'La app entiende mejor los extractos de RappiCard: ya reconoce los nombres de comercio que el banco parte en dos lineas y las compras que aparecen listadas pero sin cobro en el mes.'
+  ],
   '5.6.3': [
     'El asistente de conciliacion ahora esta obligado a CUADRAR las cuentas: antes de mostrarte el analisis debe verificar que las diferencias que encontro sumen exactamente el descuadre del pago minimo. Si no cuadra, sigue buscando en vez de decirte "no se pudo explicar". Ademas cada diferencia te muestra cuanto explica en pesos, para que veas de donde sale cada peso del total.',
     'El asistente ya no se inventa reglas de otros bancos. Ahora recibe la formula EXACTA con la que cada banco arma su pago minimo y tiene prohibido aplicar porcentajes que no aparezcan impresos en tu extracto. Antes, en un extracto de RappiCard, calculo que una compra pesaba solo el 10% del pago minimo cuando en realidad pesa el 100%, y por eso reporto como inexplicable una diferencia que ya tenia resuelta.',
@@ -4628,6 +4635,8 @@ function Pagos({ tarjeta, onDataChange }) {
       const restanteUsd = Math.max(0, (ext.pago_minimo_usd || 0) - (ext.monto_pagado_usd || 0));
       setPagoMonto(restanteUsd);
     } else {
+      // `ext.pago_minimo` ya viene siendo el valor OFICIAL del extracto cuando se concilio el PDF
+      // (v5.7.0, backend routes/extractos.js). Si no hay oficial, cae al estimado de la app.
       const restante = Math.max(0, ext.pago_minimo - (ext.monto_pagado || 0));
       setPagoMonto(restante);
     }
@@ -4701,6 +4710,12 @@ function Pagos({ tarjeta, onDataChange }) {
       ),
       e('td', { className: 'text-right text-mono' },
         fmtCOP(ext.pago_minimo),
+        // Marca que esta cifra es la OFICIAL leida del extracto del banco, no el estimado de la app
+        // (v5.7.0). Es la que hay que pagar; el estimado queda en pago_minimo_calculado.
+        ext.tiene_oficial && e('div', {
+          style: { fontSize: 9, color: 'var(--success)', fontWeight: 700, letterSpacing: 0.3, cursor: 'help' },
+          title: 'Cifra tomada del extracto del banco. Estimado de la app: ' + fmtCOP(ext.pago_minimo_calculado)
+        }, 'DEL EXTRACTO'),
         tieneUsd && e('div', { style: { fontSize: 11, color: '#4FC3F7', fontWeight: 700 } }, fmtUsd(ext.pago_minimo_usd))
       ),
       e('td', { className: 'text-right text-mono' },
@@ -6072,7 +6087,7 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
     api('/compras?tarjeta_id=' + Number(tarjetaId)).then(l => setComprasTj(Array.isArray(l) ? l : [])).catch(() => setComprasTj([]));
   }, [tarjetaId]);
   // Operaciones que la app puede aplicar automaticamente (mapean a endpoints existentes).
-  const AUTO = { crear_compra: 1, eliminar_compra: 1, editar_valor: 1, mover_ciclo: 1, reprogramar_cuotas: 1, convertir_a_diferida: 1, crear_diferida_omitida: 1, actualizar_tasa_intl: 1, actualizar_fecha_pago: 1, reversar_compra: 1, registrar_pago: 1 };
+  const AUTO = { crear_compra: 1, eliminar_compra: 1, fijar_pago_minimo_oficial: 1, editar_valor: 1, mover_ciclo: 1, reprogramar_cuotas: 1, convertir_a_diferida: 1, crear_diferida_omitida: 1, actualizar_tasa_intl: 1, actualizar_fecha_pago: 1, reversar_compra: 1, registrar_pago: 1 };
 
   // Formatea una tasa mensual decimal a porcentaje colombiano (0.020849 -> "2,0849%").
   const fmtPct = (x) => (x == null || x === '') ? '—' : (Number(x) * 100).toFixed(4).replace('.', ',') + '%';
@@ -6085,7 +6100,8 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
       clasificacion_incorrecta: 'Clasificación incorrecta', cuota_reprogramada: 'Cuota reprogramada',
       tasa_intl_incorrecta: 'Tasa internacional incorrecta', fecha_pago_movida: 'Fecha de pago movida',
       reverso_detectado: 'Reverso detectado', mover_ciclo: 'Mover de ciclo', diferida_omitida: 'Diferida omitida',
-      pago_omitido: 'Pago no registrado', compra_no_facturada: 'Compra que el banco no facturó', otro: 'Otra discrepancia'
+      pago_omitido: 'Pago no registrado', compra_no_facturada: 'Compra que el banco no facturó',
+      pago_minimo_oficial: 'Pago mínimo del extracto', otro: 'Otra discrepancia'
     };
     if (map[tipo]) return map[tipo];
     const s = String(tipo).replace(/_/g, ' ').trim();
@@ -6099,7 +6115,7 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
       reprogramar_cuotas: 'Reprogramar cuotas', actualizar_tasa_intl: 'Actualizar tasa internacional',
       actualizar_fecha_pago: 'Actualizar fecha de pago', fecha_corte_movida: 'Aplicar corte adelantado',
       convertir_a_diferida: 'Convertir a diferida', crear_diferida_omitida: 'Crear diferida omitida', reversar_compra: 'Reversar compra',
-      registrar_pago: 'Registrar pago', ninguna: 'Sin acción'
+      registrar_pago: 'Registrar pago', fijar_pago_minimo_oficial: 'Usar el pago minimo del extracto', ninguna: 'Sin acción'
     };
     if (map[op]) return map[op];
     const s = String(op).replace(/_/g, ' ').trim();
@@ -6115,7 +6131,7 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
     // afectan un grupo: crear_diferida_omitida (diferida standalone) y crear_compra (compra nueva). Sin
     // este corte, la rama por descripción bloquearía de más si el nombre coincide con un grupo de otro ciclo.
     const opAG = d.accion_sugerida ? d.accion_sugerida.operacion : '';
-    if (opAG === 'crear_diferida_omitida' || opAG === 'crear_compra' || opAG === 'registrar_pago') return false;
+    if (opAG === 'crear_diferida_omitida' || opAG === 'crear_compra' || opAG === 'registrar_pago' || opAG === 'fijar_pago_minimo_oficial') return false;
     const p = paramsDe(d);
     const cid = p.compra_id != null ? p.compra_id : d.compra_id;
     if (cid != null && String(cid) !== 'null') {
@@ -6199,6 +6215,15 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
         ['Valor total (capital x cuotas)', fmtCOP(total)],
         ['Ciclo de origen (calculado)', co],
         ['Cobra intereses', (p.cobrar_intereses === false ? 'no' : 'si')]
+      ] };
+    }
+    if (op === 'fijar_pago_minimo_oficial') {
+      return { titulo: 'Usar el pago minimo que exige el extracto', endpoint: 'POST /api/extractos/pago-oficial', filas: [
+        ['Ciclo', p.ciclo || ciclo],
+        ['Pago minimo del extracto', fmtCOP(p.pago_minimo != null ? p.pago_minimo : d.valor_extracto)],
+        ['Estimado de la app', fmtCOP(d.valor_app)],
+        ['Efecto', 'al pagar, la app propondra el valor exacto del banco (no hay que copiarlo a mano)'],
+        ['No cambia', 'la deuda, el cupo ni las proyecciones siguen saliendo del calculo de la app']
       ] };
     }
     if (op === 'registrar_pago') {
@@ -6321,6 +6346,15 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
         if (!(Number(p.cuota_actual) >= 1)) throw new Error('Falta la cuota actual (N de M).');
         if (!(cap > 0)) throw new Error('Falta el capital de la cuota.');
         const r = await api('/diferidas/crear-omitida', { method: 'POST', body: { tarjeta_id: Number(tarjetaId), descripcion: p.descripcion || d.descripcion || 'Diferida (conciliacion)', capital: cap, num_cuotas: Number(p.num_cuotas), cuota_actual: Number(p.cuota_actual), ciclo: ciclo, cobrar_intereses: p.cobrar_intereses !== false, desde_conciliacion: true } });
+        if (r && r.error) throw new Error(r.error);
+      } else if (op === 'fijar_pago_minimo_oficial') {
+        // Guarda la cifra impresa en el PDF para ese ciclo. No edita compras ni el extracto: solo
+        // alimenta el valor que la app propone al pagar (el calculo del motor queda intacto).
+        const pmo = Number(p.pago_minimo != null ? p.pago_minimo : d.valor_extracto);
+        if (!(pmo > 0)) throw new Error('No se identifico el pago minimo del extracto.');
+        const r = await api('/extractos/pago-oficial', { method: 'POST', body: {
+          tarjeta_id: Number(tarjetaId), ciclo: p.ciclo || ciclo, pago_minimo: pmo,
+          pago_total: (p.pago_total != null ? Number(p.pago_total) : null), fuente: 'conciliacion' } });
         if (r && r.error) throw new Error(r.error);
       } else if (op === 'registrar_pago') {
         // Registra el pago que saldó el extracto ANTERIOR (detectado en el PDF). El endpoint resuelve/crea

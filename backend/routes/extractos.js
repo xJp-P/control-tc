@@ -1,5 +1,6 @@
 // backend/routes/extractos.js — /api/extractos + pagar
 const { Router } = require('express');
+const { minimoEfectivo } = require('../helpers/extractoOficial');
 const { hoyLocal } = require('../helpers/dates');
 const { calcularAmortizacionAvance, calcularAmortizacionDiferida } = require('../engine/amortizacion');
 const { nuOpts, nuOptsDif, avanceOpts } = require('../helpers/banco');
@@ -46,10 +47,12 @@ module.exports = function(db, { logAction, tjNombre }) {
     });
 
     const result = db.prepare(`
-      SELECT ext.*, fpc.fecha_pago as fecha_pago_custom, cc.fecha_corte as fecha_corte_custom
+      SELECT ext.*, fpc.fecha_pago as fecha_pago_custom, cc.fecha_corte as fecha_corte_custom,
+             eo.pago_minimo as pago_minimo_oficial, eo.pago_total as pago_total_oficial, eo.fuente as fuente_oficial
       FROM extractos ext
       LEFT JOIN fechas_pago_custom fpc ON fpc.tarjeta_id = ext.tarjeta_id AND fpc.ciclo = ext.ciclo
       LEFT JOIN cortes_custom cc ON cc.tarjeta_id = ext.tarjeta_id AND cc.ciclo = ext.ciclo
+      LEFT JOIN extractos_oficiales eo ON eo.tarjeta_id = ext.tarjeta_id AND eo.ciclo = ext.ciclo
       WHERE ext.tarjeta_id = ? ORDER BY ext.ciclo DESC
     `).all(tarjeta_id);
     result.forEach(ext => {
@@ -102,6 +105,17 @@ module.exports = function(db, { logAction, tjNombre }) {
         // (COP y USD) están al día (o USD es 'no_aplica' para tarjetas no-duales).
         ext.cerrado_completo = ext.estado === 'pagado' && (ext.estado_usd === 'pagado' || ext.estado_usd === 'no_aplica');
       }
+      // Cifra OFICIAL del extracto del banco (v5.7.0). El cálculo de la app queda intacto en
+      // `pago_minimo_calculado` (alimenta deuda, cupo y proyecciones); `pago_minimo` pasa a ser el
+      // valor REAL cuando se conoce, que es el que el usuario tiene que pagar. Ver el porqué en
+      // docs/bancos/RappiCard_Visa.md §4.3: el modelo NO puede ser exacto por diseño.
+      ext.tiene_oficial = ext.pago_minimo_oficial != null;
+      if (ext.tiene_oficial) {
+        ext.pago_minimo_calculado = ext.pago_minimo;
+        ext.pago_total_calculado = ext.pago_total;
+        ext.pago_minimo = ext.pago_minimo_oficial;
+        if (ext.pago_total_oficial != null) ext.pago_total = ext.pago_total_oficial;
+      }
     });
 
     const filtered = result.filter(ext => ext.estado === 'pagado' || ext.pago_minimo > 0 || ext.pago_total > 0);
@@ -132,11 +146,18 @@ module.exports = function(db, { logAction, tjNombre }) {
     // monto REAL del PDF (no se infla el ledger). PUT /:id/pagar NO lo envia -> los abonos parciales
     // manuales siguen sin sellar.
     const sellarFactura = !!(body && body.sellar);
+    // Mínimo EFECTIVO: si se conoce la cifra oficial del extracto (v5.7.0) manda esa, no el estimado.
+    // Es imprescindible para el caso en que la app SOBREESTIMA (medido: junio-2026, app $238.099 vs
+    // banco $237.136,05): sin esto, el usuario paga el valor correcto del banco, la comparación lo ve
+    // por debajo del estimado y el extracto NO se sella — queda como abono parcial, sin formar la
+    // tríada del blindaje, y el usuario cree que ya pagó. `ext` viene del SELECT crudo de la tabla, que
+    // conserva el valor calculado, así que la resolución se hace aquí.
+    const minimoRef = minimoEfectivo(db, ext.tarjeta_id, ext.ciclo, ext.pago_minimo);
 
     if (monedaPago === 'COP') {
-      const montoAbono = parseFloat(monto_pagado) || ext.pago_minimo;
+      const montoAbono = parseFloat(monto_pagado) || minimoRef;
       const nuevoMontoPagado = (ext.monto_pagado || 0) + montoAbono;
-      const pagadoCompleto = (nuevoMontoPagado >= ext.pago_minimo) || sellarFactura;
+      const pagadoCompleto = (nuevoMontoPagado >= minimoRef) || sellarFactura;
 
       if (pagadoCompleto) {
         const calcCierre = calcExtracto(db, ext.tarjeta_id, ext.ciclo, false);
@@ -235,6 +256,40 @@ module.exports = function(db, { logAction, tjNombre }) {
       logAction('editar', tjNombre(tarjeta_id) + 'Override de fecha de pago eliminado para ' + ciclo);
       res.json({ ok: true, fecha_pago: null, esManual: false });
     }
+  });
+
+  // ── Fijar las cifras OFICIALES impresas en el extracto del banco (v5.7.0) ────────────────────
+  // POST /api/extractos/pago-oficial   Body: { tarjeta_id, ciclo, pago_minimo, pago_total? }
+  // El modelo de la app NO puede predecir el mínimo al peso: el banco cobra además interés sobre la
+  // cuota ya facturada hasta el día en que el usuario paga (dato del FUTURO al proyectar; probado
+  // contra 10 extractos, ver docs/bancos/RappiCard_Visa.md §4.3). Al conciliar el PDF se guarda aquí
+  // el valor real y la app deja de pedirle al usuario que lo transcriba a mano.
+  // NO toca `extractos` ni el cálculo: la deuda, el cupo y las proyecciones siguen saliendo del motor.
+  router.post('/pago-oficial', (req, res) => {
+    const { tarjeta_id, ciclo, pago_minimo, pago_total, fuente } = req.body || {};
+    if (!tarjeta_id || !ciclo) return res.status(400).json({ error: 'tarjeta_id y ciclo son requeridos' });
+    if (!/^\d{4}-\d{2}$/.test(String(ciclo))) return res.status(400).json({ error: 'ciclo debe tener formato YYYY-MM' });
+    // pago_minimo null/vacío ELIMINA el override (mismo patrón que fecha-pago-custom). Es la salida
+    // si alguna vez se fija una cifra equivocada: sin esto quedaría clavada, el extracto no sellaría
+    // nunca al pagar lo real y solo se podría corregir editando la BD a mano.
+    if (pago_minimo === null || pago_minimo === '' || pago_minimo === undefined) {
+      db.prepare('DELETE FROM extractos_oficiales WHERE tarjeta_id=? AND ciclo=?').run(tarjeta_id, ciclo);
+      logAction('editar', tjNombre(tarjeta_id) + 'Pago minimo oficial eliminado para ' + ciclo);
+      return res.json({ ok: true, ciclo, pago_minimo: null, eliminado: true });
+    }
+    const pm = parseFloat(pago_minimo);
+    if (!(pm > 0)) return res.status(400).json({ error: 'pago_minimo debe ser un valor positivo' });
+    const pt = (pago_total != null && parseFloat(pago_total) > 0) ? parseFloat(pago_total) : null;
+    if (pt != null && pt < pm) return res.status(400).json({ error: 'el pago total no puede ser menor que el pago minimo' });
+    const tj = db.prepare('SELECT id FROM tarjetas WHERE id=?').get(tarjeta_id);
+    if (!tj) return res.status(404).json({ error: 'Tarjeta no encontrada' });
+    db.prepare(`INSERT INTO extractos_oficiales (tarjeta_id, ciclo, pago_minimo, pago_total, fuente)
+                VALUES (?,?,?,?,?)
+                ON CONFLICT(tarjeta_id, ciclo) DO UPDATE SET
+                  pago_minimo=excluded.pago_minimo, pago_total=excluded.pago_total, fuente=excluded.fuente`)
+      .run(tarjeta_id, ciclo, pm, pt, fuente || 'conciliacion');
+    logAction('editar', tjNombre(tarjeta_id) + 'Pago minimo oficial del extracto ' + ciclo + ': ' + Math.round(pm).toLocaleString('es-CO'));
+    res.json({ ok: true, ciclo, pago_minimo: pm, pago_total: pt });
   });
 
   // ── Registrar el pago que saldó un extracto (conciliación IA: acción registrar_pago) ──────────

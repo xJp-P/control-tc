@@ -562,6 +562,23 @@ function initDb(dbPathOverride) {
       UNIQUE(tarjeta_id, ciclo)
     );
 
+    -- Cifras OFICIALES impresas en el extracto del banco (v5.7.0). La app CALCULA el pago mínimo con
+    -- su modelo, pero ese modelo nunca puede ser exacto: el banco cobra además interés sobre la cuota
+    -- ya facturada hasta el día en que el usuario PAGA — información del futuro al proyectar (probado
+    -- contra 10 extractos de RappiCard, ver docs/bancos/RappiCard_Visa.md §4.3). Cuando se concilia un
+    -- PDF se guarda aquí el valor real, y la UI de pago lo usa en vez del estimado. NO reemplaza el
+    -- cálculo (que sigue alimentando deuda, cupo y proyecciones): solo manda al registrar el pago.
+    CREATE TABLE IF NOT EXISTS extractos_oficiales (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tarjeta_id INTEGER NOT NULL REFERENCES tarjetas(id) ON DELETE CASCADE,
+      ciclo TEXT NOT NULL,
+      pago_minimo REAL,
+      pago_total REAL,
+      fuente TEXT DEFAULT 'conciliacion',
+      created_at TEXT DEFAULT (datetime('now','localtime')),
+      UNIQUE(tarjeta_id, ciclo)
+    );
+
     CREATE TABLE IF NOT EXISTS cortes_custom (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       tarjeta_id INTEGER NOT NULL REFERENCES tarjetas(id) ON DELETE CASCADE,

@@ -37,7 +37,8 @@ const RE_PCT_SOLO = /^\d{1,2}[.,]?\d{0,4}\s*%$/;
 const RE_CUOTAS = /^(\d{1,3})\s*(?:de|\/)\s*(\d{1,3})$/i;
 
 function parsearVertical(texto) {
-  const lineas = String(texto || '').split(/\r?\n/).map(l => l.trim());
+  const crudas = String(texto || '').split(/\r?\n/);
+  const lineas = crudas.map(l => l.trim());
   const out = [];
   for (let i = 0; i < lineas.length; i++) {
     const mf = lineas[i].match(RE_FECHA_ISO);
@@ -48,35 +49,54 @@ function parsearVertical(texto) {
     const campos = [];
     for (let j = i + 1; j < lineas.length && campos.length < 10; j++) {
       if (RE_FECHA_ISO.test(lineas[j])) break;
-      if (lineas[j]) campos.push(lineas[j]);
+      // `sep` = el PDF traía un espacio al final de este trozo, así que la palabra NO venía cortada
+      // ("BFINITY BITFI " + "TECHNOLO"). Sin espacio final es un corte a mitad de palabra y hay que
+      // pegar los trozos directos ("Topper*Phantom-" + "Walle").
+      if (lineas[j]) campos.push({ v: lineas[j], sep: /\s$/.test(crudas[j]) });
     }
-    let descripcion = null, tasa = null, negativo = false;
+    // La descripción del comercio SE PARTE en varias líneas cuando no cabe en la celda (confirmado en
+    // los PDF reales: "Topper*Phantom-" + "Walle", "BFINITY BITFI " + "TECHNOLO"). Se concatenan TODAS
+    // las líneas de texto que preceden al primer campo numérico; quedarse con la primera truncaba el
+    // nombre y debilitaba el cruce por descripción (Dice) contra la compra de la app.
+    const partesDesc = [];
+    let tasa = null, negativo = false, vistoNumero = false;
     const montos = [];
-    campos.forEach(c => {
-      if (RE_CUOTAS.test(c)) return;
+    campos.forEach(campo => {
+      const c = campo.v;
+      if (RE_CUOTAS.test(c)) { vistoNumero = true; return; }
       const mm = c.match(RE_MONTO_SOLO);
       if (mm) {
+        vistoNumero = true;
         if (mm[1] || mm[2]) negativo = true;     // "$-237.136,05" → pago/reverso, no es una compra
         const v = parseMontoCol(c.replace('-', ''));
         if (v != null) montos.push(v);
         return;
       }
       if (RE_PCT_SOLO.test(c)) {
+        vistoNumero = true;
         const v = parseFloat(c.replace('%', '').replace(',', '.')) / 100;
         if (v > 0 && tasa == null) tasa = Math.round(v * 1e6) / 1e6;
         return;
       }
-      if (/^N\/A$/i.test(c)) return;
-      // Primer campo con texto real = la descripción del comercio.
-      if (descripcion == null && /[A-Za-zÁÉÍÓÚÑáéíóúñ]{3,}/.test(c)) descripcion = c;
+      if (/^N\/A$/i.test(c)) { vistoNumero = true; return; }
+      if (!vistoNumero) partesDesc.push(campo);
     });
+    // Une los fragmentos respetando el espacio que el propio PDF ya traía al final de cada trozo.
+    let descripcion = partesDesc.reduce((acc, p, k) => acc + (k && partesDesc[k - 1].sep ? ' ' : '') + p.v, '')
+      .replace(/\s{2,}/g, ' ').trim() || null;
+    if (descripcion && !/[A-Za-zÁÉÍÓÚÑáéíóúñ]{3,}/.test(descripcion)) descripcion = null;
     // Los movimientos NEGATIVOS (pagos, reversos) los detectan sus propios detectores en routes/ia.js
     // a partir del texto crudo; aquí se descartan para no ensuciar el pool del matcher.
     if (negativo || descripcion == null || !montos.length) continue;
     // 2º monto = capital facturado del periodo; si el bloque viene corto, cae al único disponible.
-    const monto = montos.length >= 2 ? montos[1] : montos[0];
+    // Si el capital es $0,00 (una compra que el extracto lista pero NO cobra en este periodo: ya venía
+    // saldada) se cae al VALOR de la transacción, para que la compra igual cruce contra la de la app.
+    // Descartarla la dejaría "sin cruce" y podría inducir un falso `compra_no_facturada`, que hoy es
+    // una acción DESTRUCTIVA.
+    let monto = montos.length >= 2 ? montos[1] : montos[0];
+    if (!(monto > 0)) monto = montos[0];
     if (!(monto > 0)) continue;
-    out.push({ dia, mes, descripcion, monto, tasa, raw: lineas.slice(i, i + campos.length + 1).join(' | ') });
+    out.push({ dia, mes, descripcion, monto, tasa, raw: [lineas[i]].concat(campos.map(x => x.v)).join(' | ') });
   }
   return out;
 }
@@ -125,6 +145,45 @@ module.exports = {
     const vertical = parsearVertical(limpio);
     if (vertical.length) return vertical;
     return parsearTabular(limpio, { parsearFecha: parsearFechaRappi });
+  },
+
+  // Lee las cifras OFICIALES del encabezado del extracto (v5.7.0). Determinista: NO pasa por el LLM.
+  // El layout vertical pone la etiqueta en una línea y el valor en la siguiente, así que se busca la
+  // etiqueta y se toma el primer monto de las líneas siguientes. Se ignoran las líneas del "Detalle
+  // pago mínimo" (que repiten la etiqueta) tomando la PRIMERA aparición, que es la del encabezado.
+  parsearResumen(texto) {
+    const ls = String(texto || '').split(/\r?\n/).map(l => l.trim());
+    // Normaliza la etiqueta antes de comparar: espacio duro (U+00A0), dos puntos y el asterisco de
+    // "Pago alternativo*" no deben impedir el match por una diferencia tipográfica.
+    const norm = (s) => String(s).toLowerCase().replace(/ /g, ' ').replace(/[\s:*]+$/, '').replace(/\s+/g, ' ').trim();
+    // El monto DEBE venir en formato colombiano estricto (miles de 3 en 3). Sin esa exigencia,
+    // "$320.582.14" (el PDF imprime algunos ceros como "$0.00", con punto decimal) se leería como
+    // 32.058.214 — cien veces el valor — porque parseMontoCol trata todos los puntos como miles.
+    const RE_IMPORTE = /^\$\s*(-)?\s*(\d{1,3}(?:\.\d{3})*(?:,\d{1,2})?)$/;
+    // Otra etiqueta del encabezado corta la búsqueda. CRÍTICO: "Pago alternativo" está a solo 3 líneas
+    // de "Pago mínimo" y vale 3,3 veces menos ($96.174 vs $320.582 en julio); si el importe propio no
+    // matcheara por cualquier variación de render, la ventana caería sobre ÉL y se guardaría como
+    // mínimo oficial un número plausible pero peligrosamente bajo. Al cortar, se cae a la segunda
+    // aparición de la etiqueta (el bloque "Detalle pago mínimo"), que trae el MISMO valor correcto.
+    const esOtraEtiqueta = (s) => /^(pago|saldo|cupo|periodo|fecha|total)\b/i.test(String(s).trim());
+    const buscar = (etiquetas, ventana) => {
+      for (let i = 0; i < ls.length; i++) {
+        if (!etiquetas.includes(norm(ls[i]))) continue;
+        for (let j = i + 1; j < Math.min(i + 1 + (ventana || 4), ls.length); j++) {
+          if (!ls[j]) continue;
+          const m = ls[j].match(RE_IMPORTE);
+          if (m) { const v = parseMontoCol(ls[j].replace('-', '')); if (v != null) return m[1] ? -v : v; }
+          if (esOtraEtiqueta(ls[j])) break;   // no invadir el importe de la etiqueta vecina
+        }
+      }
+      return null;
+    };
+    const out = {};
+    const pm = buscar(['pago mínimo', 'pago minimo']);
+    const pt = buscar(['pago total']);
+    if (pm != null) out.pago_minimo = pm;
+    if (pt != null) out.pago_total = pt;
+    return out;
   },
 
   // Reglas específicas de RappiCard para el system prompt de la IA.

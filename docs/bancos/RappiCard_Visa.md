@@ -1,6 +1,6 @@
 # RappiCard — Franquicia Visa (emisor: Davivienda)
 
-**Fuente:** 7 extractos consolidados de la tarjeta Virtual `[RappiCard_Virtual]` / Física `[RappiCard_Fisica]` ([USUARIO_PRINCIPAL]), períodos:
+**Fuente:** **10 extractos** (oct-2025 a jul-2026; los 7 primeros se listan abajo, y desde v5.7.0 el analisis incluye tambien mayo, junio y julio de 2026). Extractos consolidados de la tarjeta Virtual `[RappiCard_Virtual]` / Física `[RappiCard_Fisica]` ([USUARIO_PRINCIPAL]), períodos:
 
 | # | Periodo facturado | Fecha de pago | Días entre corte y pago |
 |---|-------------------|---------------|-------------------------|
@@ -12,7 +12,7 @@
 | 6 | 20 feb – 19 mar 2026 | 31 mar 2026 | 12 |
 | 7 | 20 mar – 20 abr 2026 | 04 may 2026 | 14 |
 
-**Estado del análisis:** documento VIVO. La versión original fue documentación pre-implementación (sin cambios de código). **Actualizado en v5.6.3** con la auditoría del extracto de julio-2026: el layout real del texto extraído (§1.1) y la calibración de los intereses (§4.3), que **deroga** la explicación anterior de "capitalización diaria". Esa versión **sí** modificó código (el parser de conciliación) y dejó identificado —pero NO implementado— un ajuste pendiente en el conteo de días del motor. Las conclusiones de §8 y §10 quedan matizadas por §4.3.
+**Estado del análisis:** documento VIVO. La versión original fue documentación pre-implementación (sin cambios de código). **Actualizado en v5.7.0** con el backtesting de los 10 extractos (oct-2025 → jul-2026): el layout real del texto extraído (§1.1), la fórmula de intereses CALIBRADA y su segundo término (§4.3.1) y por qué la app no puede predecir el mínimo (§4.3.2). Deroga la explicación anterior de "capitalización diaria". Esa versión **sí** modificó código (el parser de conciliación) y dejó identificado —pero NO implementado— un ajuste pendiente en el conteo de días del motor. Las conclusiones de §8 y §10 quedan matizadas por §4.3.
 
 ---
 
@@ -195,12 +195,58 @@ porque el corte de junio fue el **18**, un jueves: el 20-jun cayó sábado):
 | Con 32 días reales | $19.726,69 |
 | **Banco (PDF)** | **$20.150,51** |
 
-El conteo de días explica **~74%** del desfase. El residual restante (**$423,82**, 2,1% del interés y
-0,13% del pago mínimo) **sigue abierto**: es recurrente (≈0,18% del saldo facturado anterior, ~3 días
-de interés) y para desempatar sus candidatos —rotación parcial, cambio de tasa a mitad de ciclo (el
-periodo abarca dos meses calendario y la usura cambia el 1°), o convención distinta para saldos
-arrastrados— haría falta el PDF del extracto de junio. **Decisión del usuario (27-jul-2026): se acepta
-como margen de error, no se persigue.**
+El conteo de días explica **~74%** del desfase. El resto lo explica el segundo término de la fórmula,
+resuelto con el backtesting de los 10 extractos (abajo).
+
+### 4.3.1 La fórmula COMPLETA (calibrada contra 10 extractos, oct-2025 → jul-2026)
+
+```
+interés_del_ciclo =  Σ saldo_vivo(diferida) × tasaMV × días_del_periodo / 30
+                   + capital_facturado_anterior × tasaMV × día_del_pago / 30
+```
+
+El **segundo término** era el "residual de $424" que llevaba versiones sin explicación. Es interés
+sobre la **cuota que el banco ya facturó y que sigue sin pagarse**: se devenga desde el corte hasta el
+día en que el pago entra, y se cobra en el extracto SIGUIENTE. La prueba: dividir el residual entre
+`capital_facturado × tasaMV / 30` da **números enteros exactos**, y esos enteros son **el día del
+periodo en que el usuario pagó**:
+
+| ciclo | días | día del pago | residual | residual ÷ (capital×tasa/30) | error final |
+|---|---|---|---|---|---|
+| noviembre (nacimiento) | por compra | — | — | — | **+$0,01** |
+| diciembre | 28 | 13 | 385,30 | 10,00 | −115,58 |
+| enero | 33 | 15 | 1.060,45 | 27,52 | +482,52 |
+| **febrero** | 30 | **9** | 346,77 | **9,00** | **+0,01** |
+| **marzo** | 28 | **11** | 423,81 | **11,00** | **−0,00** |
+| abril | 32 | 13 | 515,01 | 13,37 | +14,13 |
+| **mayo** | 30 | **4** | 154,10 | **4,00** | **−0,02** |
+| **junio** | 29 | **9** | 346,77 | **9,00** | **+0,02** |
+| **julio** | 32 | **11** | 423,82 | **11,00** | **+0,00** |
+
+> El ciclo 1 (oct-2025) no aparece en la tabla: la tarjeta aun no tenia diferidas — su minimo fueron 8.188 de puro contado, sin intereses que calibrar.
+
+**5 ciclos cuadran al centavo** y el de nacimiento con $0,01 de error. El residual absoluto total cae
+de **$11.255** (modelo actual de la app) a **$612**, concentrado en diciembre y enero —los dos ciclos
+adyacentes al corte adelantado del 18-dic—, lo que apunta a un ajuste de timing que el banco aplica al
+mover un corte. No se persigue más (decisión del usuario, 27-jul-2026).
+
+**Hipótesis descartadas con aritmética, no con opinión:**
+- **Capitalización diaria** — la E.A. 24,36% *es* 1,8334% MV; aporta ~$12 y en convención 365 va en dirección contraria.
+- **Interés revolvente sobre el saldo anterior completo** — sobrepasa al banco por $1.000-$4.100; además el saldo se pagó completo cada mes (`Saldo pendiente de pago mínimo $0,00`).
+- **Interés sobre las compras de contado** — la tasa implícita salta entre 0,13% y 4,10% según el mes: no es una tasa.
+- **Tasa derivada de la E.A. en vez de la impresa** — difieren en 0,0024%, irrelevante.
+
+### 4.3.2 ⚠️ Por qué la app NUNCA podrá predecir el mínimo al peso
+
+El segundo término depende de **cuándo paga el usuario** — información del **futuro** en el momento de
+proyectar el extracto. Sobre el saldo de julio, ese término vale $38 si se paga el día 1 y $771 si se
+paga el día 20: **la misma deuda tiene un mínimo distinto según el día de pago**.
+
+> **Consecuencia de diseño (v5.7.0):** perseguir la exactitud dentro del motor es imposible por
+> construcción. Por eso la app deja de adivinar y **lee la cifra oficial del PDF** (tabla
+> `extractos_oficiales` + `estrategia.parsearResumen`, determinista, sin LLM, validado 10/10 contra
+> estos mismos extractos). El motor sigue alimentando deuda, cupo y proyecciones; la cifra oficial solo
+> manda al momento de pagar.
 
 **Lo irónico:** la app **ya conoce** el corte real — está en `cortes_custom` (`2026-06 → 2026-06-18`,
 motor de cortes adelantados de v4.6.0) y lo usan los candados y el display desde v4.7.0. Simplemente
@@ -215,9 +261,14 @@ motor de cortes adelantados de v4.6.0) y lo usan los candados y el display desde
 > Además, el sub-fix del día inclusivo en la cuota 1 **contaminaría el experimento de campo abierto**
 > (APPLE #70 / NETFLIX #71), cuya pregunta central es justamente desde qué fecha arranca el interés de
 > la primera cuota. Debe ir gateado por banco y esperar al extracto de agosto.
+>
+> Y aunque se implemente, **NO alcanza la exactitud**: arregla el primer término de la fórmula, no el
+> segundo (§4.3.2). Por eso la solución de producto fue leer la cifra oficial del PDF, no afinar más
+> el modelo.
 
 **Efecto práctico mientras tanto:** la app **subestima** el interés de RappiCard cuando el banco
-adelanta el corte. En julio-2026 fueron $1.657 de un pago mínimo de $320.582 (0,5%).
+adelanta el corte. En julio-2026 fueron $1.657 de un pago mínimo de $320.582 (0,5%) — y desde v5.7.0
+eso ya no obliga al usuario a mirar el PDF: la app le propone la cifra exacta del banco al pagar.
 
 ---
 
@@ -348,7 +399,7 @@ El patrón aparente es: la fecha de pago cae en el **último día calendario del
 | Compras diferidas: cuota 1 cobra intereses | ✅ **Sí (sin diferimiento)** ← diferencia con Bancolombia |
 | Cuota mostrada en diferidas | Capital puro (`monto/N`) |
 | Tasa de diferidas (al día del desembolso) | 1,8334% MV / 24,36% EA en los datos vistos. Se actualiza el 1° de cada mes según Tasa de Usura del Banco de la República |
-| Modelo de cálculo de intereses | `saldo × tasaMV × (días/30)` por cuota — la MISMA fórmula del motor. **No es capitalización diaria** (derogado en §4.3); el desfase viene del número de días del periodo |
+| Modelo de cálculo de intereses | **DOS términos**: `saldo vivo × tasaMV × días_periodo/30` **+** `capital ya facturado × tasaMV × día_del_pago/30`. El motor solo modela el primero. **No es capitalización diaria** (derogado en §4.3). Ver §4.3.1 y §4.3.2 |
 | Avances tradicionales | Modelados como diferidas (sin evidencia clara aún) |
 | Comisión de avance | No observada |
 | Pago Mínimo: fórmula | Capital + Intereses + Mora + Otros − Saldo a favor |

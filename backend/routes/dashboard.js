@@ -4,6 +4,7 @@ const { hoyLocal, daysBetween, addDays } = require('../helpers/dates');
 const { calcularAmortizacionAvance } = require('../engine/amortizacion');
 const { calcularAmortizacionDiferida } = require('../engine/amortizacion');
 const { calcExtracto } = require('../engine/extracto');
+const { minimoEfectivo } = require('../helpers/extractoOficial');
 const { nuOpts, nuOptsDif, avanceOpts, isDualExtracto, aplicaIntInternacional } = require('../helpers/banco');
 
 module.exports = function(db) {
@@ -370,7 +371,10 @@ module.exports = function(db) {
     const deudaTotalUsdEquivCop = deudaUsdDash * trmUsdCop;
     const deudaTotalEnCop = deudaTotal + (dualExtractoDash ? deudaTotalUsdEquivCop : 0);
 
-    let pagoMinimoBruto = comprasPendientesCiclo.total + cuotasCorte + interesesComprasIntl;
+    // Card "Pago Minimo": si el extracto de ese ciclo ya se concilio, manda la cifra del banco
+    // (v5.7.0). Sin esto la card mostraba el estimado y contradecia a la pestana Pagos.
+    let pagoMinimoBruto = minimoEfectivo(db, tarjeta_id, cicloActual,
+      comprasPendientesCiclo.total + cuotasCorte + interesesComprasIntl);
     let pagoMinimo = Math.max(0, pagoMinimoBruto - montoPagadoExtractoCiclo);
 
     let comprasCicloHistorico = null;
@@ -428,9 +432,12 @@ module.exports = function(db) {
     // incluirPagadas=false: el pago mínimo cuenta solo lo pendiente del ciclo.
     // Antes esta función duplicaba a mano la fórmula del extracto (compras + cuotas + intl);
     // unificado en v4.2.0 para tener un único punto de verdad (deuda técnica (c)).
+    // Respeta la cifra OFICIAL del extracto cuando se conoce (v5.7.0): sin esto, "Proximos Pagos"
+    // mostraba el estimado del motor mientras la pestana Pagos mostraba el del banco, y con el
+    // estimado por debajo el widget llegaba a DESAPARECER la tarjeta dandola por saldada.
     const calcPagoMinimoCiclo = (ciclo) => {
       const ext = calcExtracto(db, tarjeta_id, ciclo, false);
-      return ext ? ext.pagoMinimo : 0;
+      return minimoEfectivo(db, tarjeta_id, ciclo, ext ? ext.pagoMinimo : 0);
     };
 
     let extractosVencidos = [];
