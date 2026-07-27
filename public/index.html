@@ -263,9 +263,23 @@ const API = 'http://127.0.0.1:3500/api';
 // (el banco cobra interes sobre la cuota facturada hasta el dia del pago). Solo afecta el TEXTO del
 // boton y el aviso; quien decide es el backend.
 const TOLERANCIA_PAGO_COP = 2000;
+// Espejo EXACTO de la banda de backend/routes/extractos.js (pagarExtracto). Anunciar el tope absoluto
+// cuando la banda real es otra convierte el aviso en una promesa falsa: con cifra oficial del PDF el
+// margen cae a $1 (un faltante ahi no es imprecision del modelo, es plata que falta) y en ciclos de
+// minimo bajo manda el piso relativo del 2%. Devuelve 0 si no hay minimo (nada que tolerar).
+function bandaToleranciaCop(ext, minimo) {
+  if (!(minimo > 0)) return 0;
+  if (ext && ext.tiene_oficial) return 1;
+  return Math.min(TOLERANCIA_PAGO_COP, Math.round(minimo * 0.02));
+}
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '5.7.2': [
+    'EL AVISO DEL MARGEN AL PAGAR AHORA DICE LA VERDAD DE CADA MES. Cuando ya tienes cargada la cifra del extracto del banco, la app te avisa que ese valor va tal cual y que ahi no hay margen: antes te ofrecia dos mil pesos de holgura que en ese caso no existian, y pagar de menos confiando en eso dejaba el mes sin saldar.',
+    'Cuando el valor todavia es un estimado, el aviso y el boton muestran el margen real de ESE mes en vez de una cifra fija. En meses de cuota pequena el margen es menor a dos mil pesos, y antes se anunciaba siempre lo mismo.',
+    'Nota: el margen nunca fue algo de una tarjeta en particular. Aplica a todas las tarjetas mientras el valor sea un estimado de la app, porque el estimado no puede ser exacto por diseno.'
+  ],
   '5.7.1': [
     'PAGAR YA NO DEPENDE DE CONCILIAR. Conciliar el PDF es opcional; pagar no. Ahora puedes escribir el valor exacto que te pide el banco y la app lo acepta como pago completo aunque no coincida con su estimado, siempre que la diferencia sea menor a dos mil pesos. El extracto queda saldado y las compras del mes marcadas como pagadas, sin tener que subir ningun documento.',
     'Cuando eso pasa, la app ajusta sola el mes con la cifra que pagaste y te avisa cuanto absorbio, para que no te quede un aviso de "Falta" fantasma dando vueltas. Ese margen sale de haber medido 10 extractos: la diferencia nunca paso de mil seiscientos pesos, unas veces de mas y otras de menos, porque el banco cobra intereses por los dias que pasan hasta que pagas.',
@@ -5185,6 +5199,9 @@ function Pagos({ tarjeta, onDataChange }) {
         var pagoTotalActual  = esUsd ? (pagoExtracto.pago_total_usd  || pagoExtracto.pago_minimo_usd || 0) : pagoExtracto.pago_total;
         var yaPagado = esUsd ? (pagoExtracto.monto_pagado_usd || 0) : (pagoExtracto.monto_pagado || 0);
         var restante = Math.max(0, pagoMinimoActual - yaPagado);
+        // Banda sobre el minimo COMPLETO (como el backend), no sobre el restante: con un abono previo
+        // el 2% se calcularia sobre una base menor y el aviso prometeria menos de lo que se acepta.
+        var bandaCop = bandaToleranciaCop(pagoExtracto, pagoMinimoActual);
         var porcentaje = pagoMinimoActual > 0 ? Math.min(100, Math.round(yaPagado / pagoMinimoActual * 100)) : 0;
         var muestraSelector = pagoExtracto.dual_extracto && (pagoExtracto.pago_minimo_usd || 0) > 0;
         var copYaPagado = pagoExtracto.estado === 'pagado';
@@ -5261,8 +5278,13 @@ function Pagos({ tarjeta, onDataChange }) {
               e(MoneyInput, { value: pagoMonto, onChange: val => setPagoMonto(val), required: true }),
               // Desacople de la conciliacion: conciliar el PDF es opcional, pagar no. Si el banco pide
               // unos pesos mas (o menos) que el estimado, se acepta igual y el extracto queda saldado.
-              !esUsd && e('div', { style: { fontSize: 11, color: 'var(--text-muted)', marginTop: 4, lineHeight: 1.4 } },
-                'Puedes escribir el valor exacto que te pide el banco: las diferencias menores a ' + fmtCOP(TOLERANCIA_PAGO_COP) + ' se aceptan como pago completo y la app ajusta sola el ciclo.')
+              // El aviso anuncia la banda REAL de este ciclo, no el tope absoluto: con la cifra del
+              // extracto ya cargada no hay margen que ofrecer, y prometerlo llevaria al usuario a pagar
+              // de menos creyendo que sella (v5.7.2).
+              !esUsd && pagoExtracto.tiene_oficial && e('div', { style: { fontSize: 11, color: 'var(--text-muted)', marginTop: 4, lineHeight: 1.4 } },
+                'Este valor viene del extracto del banco: escribelo tal cual. Aqui no hay margen, un faltante deja el mes sin saldar.'),
+              !esUsd && !pagoExtracto.tiene_oficial && bandaCop > 0 && e('div', { style: { fontSize: 11, color: 'var(--text-muted)', marginTop: 4, lineHeight: 1.4 } },
+                'Puedes escribir el valor exacto que te pide el banco: las diferencias menores a ' + fmtCOP(bandaCop) + ' se aceptan como pago completo y la app ajusta sola el ciclo.')
             ),
             e('div', { className: 'form-group' },
               e('label', { className: 'form-label' }, 'Fecha del Pago'),
@@ -5272,7 +5294,7 @@ function Pagos({ tarjeta, onDataChange }) {
           e('div', { className: 'modal-actions' },
             e('button', { type: 'button', className: 'btn', onClick: () => setShowPagoModal(false) }, 'Cancelar'),
             e('button', { type: 'submit', className: 'btn btn-primary' },
-              (parseFloat(pagoMonto) >= (restante - (esUsd ? 0 : TOLERANCIA_PAGO_COP)) ? 'Completar Pago ' : 'Registrar Abono ') + (esUsd ? 'USD' : 'COP'))
+              (parseFloat(pagoMonto) >= (restante - (esUsd ? 0 : bandaCop)) ? 'Completar Pago ' : 'Registrar Abono ') + (esUsd ? 'USD' : 'COP'))
           )
         );
       })()
