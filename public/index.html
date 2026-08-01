@@ -275,6 +275,9 @@ function bandaToleranciaCop(ext, minimo) {
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '5.8.1': [
+    'SI ALGO NO CARGA, LA APP AHORA LO DICE EN VEZ DE QUEDARSE PENSANDO. Cuando la pantalla le pedia al programa algo que no existia, se quedaba esperando una respuesta que nunca llegaba: el boton giraba para siempre, sin aviso ni mensaje de error. Ahora responde de inmediato diciendo que no lo encontro, asi que un fallo se nota apenas ocurre en vez de parecer que la app se colgo.'
+  ],
   '5.8.0': [
     'UN MES SOLO SE CIERRA CUANDO LO PAGAS, NO CUANDO PASA LA FECHA DE CORTE. Antes, apenas cortaba el mes la app dejaba de aceptar movimientos suyos, aunque faltaran dos semanas para pagarlo: si el 2 de agosto te acordabas de una compra del 29 de julio, no habia forma de registrarla. Ahora puedes registrarla, editarla, borrarla, ponerla a cuotas o reprogramarla mientras ese mes siga sin pagar. Los meses ya pagados siguen completamente bloqueados, igual que siempre.',
     'Se quitaron de paso el aviso y la confirmacion que aparecian al tocar una compra de un mes ya cortado: no estabas alterando ningun cierre, asi que sobraba el susto.',
