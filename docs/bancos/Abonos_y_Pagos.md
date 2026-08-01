@@ -84,6 +84,6 @@ Cuando la IA analice el extracto:
 
 Para afinar estas reglas, el usuario hará el siguiente experimento con el extracto del próximo mes:
 pagar el pago mínimo **completo** y luego un **abono a capital pequeño e identificable** (un monto
-"raro", p. ej. $51.234), registrándolo en la app como abono a capital. Cuando llegue el extracto
+"raro", p. ej. $63.417), registrándolo en la app como abono a capital. Cuando llegue el extracto
 siguiente, se analizará **cómo el banco etiqueta y aplica** ese abono (orden, si reduce capital o
 intereses) para validar/corregir el orden de aplicación documentado arriba.

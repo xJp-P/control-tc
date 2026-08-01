@@ -11,12 +11,12 @@
 
 ## 1. Estructura general del extracto
 
-A diferencia de Mastercard, Visa Bancolombia genera un **único extracto en pesos (COP)**. Las compras realizadas en el exterior o por procesadores internacionales (Apple, Habbo, Rappi, MercadoPago, AirDNA) se convierten automáticamente a COP el día de la transacción y se mezclan con las compras locales.
+A diferencia de Mastercard, Visa Bancolombia genera un **único extracto en pesos (COP)**. Las compras realizadas en el exterior o por procesadores internacionales (SUSCRIPCION DIGITAL, JuegoWebA, DOMICILIOS DEMO, PASARELA PAGOS DEMO, DATOS ANALITICA LLC) se convierten automáticamente a COP el día de la transacción y se mezclan con las compras locales.
 
 En consecuencia:
 - **No** hay un extracto USD separado.
 - **No** hay un Pago Mínimo USD.
-- Las compras intl se identifican porque la línea trae una sub-fila `VR MONEDA ORIG <valor> <moneda>` (ej. `VR MONEDA ORIG 79.0 US`, `VR MONEDA ORIG 11.6 FI`) y porque su tasa de interés mensual mostrada es **distinta de 0%** (mientras que las compras nacionales 1/1 muestran 0,0000%).
+- Las compras intl se identifican porque la línea trae una sub-fila `VR MONEDA ORIG <valor> <moneda>` (ej. `VR MONEDA ORIG 64.0 US`, `VR MONEDA ORIG 9.4 FI`) y porque su tasa de interés mensual mostrada es **distinta de 0%** (mientras que las compras nacionales 1/1 muestran 0,0000%).
 
 > **Implicación en el motor:**
 > - `isDualExtracto('Visa')` → `false` ✓ (helper en `backend/helpers/banco.js`)
@@ -51,9 +51,9 @@ Comportamiento observado:
 - Si **no** se paga, el saldo pendiente entra al cargo "Intereses corrientes" del siguiente ciclo (ya no a 0%, sino a la tasa MV vigente).
 
 Ejemplo del ciclo 3 (`30 mar - 30 abr`):
-- `27/03 CAMARA DE COMERCIO MON $12.100 1/1 0,0000%` ← compra normal nacional
-- `13/04 EDS EL FULL $120.000 1/1 0,0000%`
-- `06/04 PAYU*NETFLIX $44.900 1/1 0,0000%`
+- `26/03 ENTIDAD GREMIAL DEMO $13.400 1/1 0,0000%` ← compra normal nacional
+- `12/04 EDS ESTACION DOS $135.000 1/1 0,0000%`
+- `04/04 PAYU*STREAMING DEMO $52.900 1/1 0,0000%`
 
 ### 3.2 Compras internacionales 1/1 (en COP)
 
@@ -66,22 +66,22 @@ Ejemplos del ciclo 2 (`28 feb - 30 mar 2026`, tasa 1,9110%):
 
 | Fecha | Comercio | Valor COP | Cuotas | Tasa MV | VR Moneda Orig |
 |-------|----------|-----------|--------|---------|----------------|
-| 21/03 | APPLE.COM/BILL  | 8.500       | 1/36 | 1,9110% | (diferida) |
-| 18/03 | HabboES         | 43.440,78   | 1/1  | 1,9110% | 11.6 FI |
-| 18/03 | HabboES         | 65.105,24   | 1/1  | 1,9110% | 17.4 FI |
-| 18/03 | HabboES         | 86.806,99   | 1/1  | 1,9110% | 23.2 FI |
+| 19/03 | SUSCRIPCION DIGITAL | 8.900   | 1/36 | 1,9110% | (diferida) |
+| 16/03 | JuegoWebA           | 35.176,21 | 1/1  | 1,9110% | 9.4 FI |
+| 16/03 | JuegoWebA           | 52.764,32 | 1/1  | 1,9110% | 14.1 FI |
+| 16/03 | JuegoWebA           | 70.352,42 | 1/1  | 1,9110% | 18.8 FI |
 
 Ejemplos del ciclo 3 (`30 mar - 30 abr`, tasa 1,9915%):
 
 | Fecha | Comercio | Valor COP | Cuotas | Tasa MV | VR Moneda Orig |
 |-------|----------|-----------|--------|---------|----------------|
-| 21/04 | APPLE.COM/BILL | 8.500     | 1/1 | 1,9915% | (sin sub-renglón) |
-| 20/04 | RAPPI          | 50.700    | 1/1 | 1,9915% | (sin sub-renglón) |
-| 15/04 | AIRDNA, LLC    | 287.890,49| 1/1 | 1,9915% | 79.0 US |
-| 11/04 | APPLE.COM/BILL | 44.900    | 1/1 | 1,9915% | (sin sub-renglón) |
-| 06/04 | PAYU*NETFLIX   | 44.900    | 1/1 | 0,0000% | (no es intl) |
+| 19/04 | SUSCRIPCION DIGITAL  | 8.900     | 1/1 | 1,9915% | (sin sub-renglón) |
+| 18/04 | DOMICILIOS DEMO      | 47.300    | 1/1 | 1,9915% | (sin sub-renglón) |
+| 14/04 | DATOS ANALITICA LLC  | 233.235,52| 1/1 | 1,9915% | 64.0 US |
+| 09/04 | SUSCRIPCION DIGITAL  | 39.900    | 1/1 | 1,9915% | (sin sub-renglón) |
+| 04/04 | PAYU*STREAMING DEMO  | 52.900    | 1/1 | 0,0000% | (no es intl) |
 
-> **Curiosidad:** RAPPI y APPLE.COM/BILL aparecen marcados con tasa MV (intl) pero **sin** la sub-fila `VR MONEDA ORIG`. Parece que el banco los marca como intl por el código de comercio (MCC), no por el medio de pago. AMAZON COM en cambio aparece a 0% en ese mismo ciclo: la clasificación es decisión interna de Bancolombia comercio por comercio.
+> **Curiosidad:** DOMICILIOS DEMO y SUSCRIPCION DIGITAL aparecen marcados con tasa MV (intl) pero **sin** la sub-fila `VR MONEDA ORIG`. Parece que el banco los marca como intl por el código de comercio (MCC), no por el medio de pago. TIENDA ONLINE DEMO en cambio aparece a 0% en ese mismo ciclo: la clasificación es decisión interna de Bancolombia comercio por comercio.
 
 > **Implicación en el motor:**
 > Por eso el flag `es_internacional` en la tabla `compras` es manual (lo marca el usuario) y no se infiere de `valor_usd`. El usuario sabe cuáles van a generar `INT INTL` y cuáles no.
@@ -99,9 +99,9 @@ Cada compra intl con tasa MV ≠ 0 aporta a un cargo agregado del ciclo siguient
 ```
 
 Ejemplos:
-- Ciclo 1 (28/02/2026): `INTERESES CORRIENTES $10.986,69` — sólo eran intereses sobre saldo del mes anterior, no había intl significativo
-- Ciclo 2 (30/03/2026): `INTERESES CORRIENTES $302.577,42` — incluye intereses de avances + intl
-- Ciclo 3 (30/04/2026): `INTERESES CORRIENTES $542.968,93` — avances + intl + diferida liquidada
+- Ciclo 1 (28/02/2026): `INTERESES CORRIENTES $9.412,35` — sólo eran intereses sobre saldo del mes anterior, no había intl significativo
+- Ciclo 2 (30/03/2026): `INTERESES CORRIENTES $274.318,60` — incluye intereses de avances + intl
+- Ciclo 3 (30/04/2026): `INTERESES CORRIENTES $498.126,44` — avances + intl + diferida liquidada
 
 Y en la sección "Detalle del pago mínimo" aparece el mismo monto bajo la línea `+ Intereses corrientes`.
 
@@ -214,12 +214,12 @@ La flag se activa cuando `nuOpts(db, tarjetaId)` devuelve `{ esBancolombia: true
 
 ### 5.3 Validación con el extracto
 
-Compra de prueba: `337869 - 21/03 APPLE.COM/BILL $8.500 a 36 cuotas`, ciclo 2 (tasa 1,9110%).
-- Cuota 1 mostrada en extracto 2: `$236,11` ← exactamente `8500 / 36 = 236,11` (sólo capital, ✓)
-- Cuota 2 mostrada en extracto 3 (sección "Movimientos antes de 30 mar"): `2/2 $8.263,72` ← saldo restante después de cuota 1 = `8500 - 236,11 = 8263,89` (la diferida fue **liquidada** en este ciclo).
-- En extracto 3 también aparece un nuevo `APPLE.COM/BILL $8.500 1/1` que reemplaza la suscripción del mes — no es la misma compra.
+Compra de prueba: `100001 - 19/03 SUSCRIPCION DIGITAL $8.900 a 36 cuotas`, ciclo 2 (tasa 1,9110%).
+- Cuota 1 mostrada en extracto 2: `$247,22` ← exactamente `8900 / 36 = 247,22` (sólo capital, ✓)
+- Cuota 2 mostrada en extracto 3 (sección "Movimientos antes de 30 mar"): `2/2 $8.652,61` ← saldo restante después de cuota 1 = `8900 - 247,22 = 8652,78` (la diferida fue **liquidada** en este ciclo).
+- En extracto 3 también aparece un nuevo `SUSCRIPCION DIGITAL $8.900 1/1` que reemplaza la suscripción del mes — no es la misma compra.
 
-El interés de la cuota 1 que se difirió y el interés del período 2 se cobran como parte del cargo agregado `INTERESES CORRIENTES $542.968,93` del ciclo 3.
+El interés de la cuota 1 que se difirió y el interés del período 2 se cobran como parte del cargo agregado `INTERESES CORRIENTES $498.126,44` del ciclo 3.
 
 ### 5.4 Reprogramación del número de cuotas DESPUÉS del corte (cuotas irregulares)
 
@@ -245,14 +245,14 @@ Es decir, **las cuotas resultantes NO son iguales** (no es `monto / 2` cada una)
 
 ### 6.1 Comportamiento del banco
 
-Avance ejemplo: `196157 - 12/03 AVANCE SUCURSAL VIRTUAL $20.000.000 a 24 cuotas`:
+Avance ejemplo: `100002 - 10/03 AVANCE SUCURSAL VIRTUAL $18.000.000 a 24 cuotas`:
 
 | Ciclo | Cuota | Cuota mostrada | Tasa MV | Saldo pendiente |
 |-------|-------|----------------|---------|-----------------|
-| Ciclo 2 (28 feb - 30 mar) | 1/24 | $833.333,33 | 1,9110% | $19.166.666,67 |
-| Ciclo 3 (30 mar - 30 abr) | 2/24 | $833.333,33 | 1,9110% (la del ciclo de origen) | $18.333.333,34 |
+| Ciclo 2 (28 feb - 30 mar) | 1/24 | $750.000,00 | 1,9110% | $17.250.000,00 |
+| Ciclo 3 (30 mar - 30 abr) | 2/24 | $750.000,00 | 1,9110% (la del ciclo de origen) | $16.500.000,00 |
 
-`$20.000.000 ÷ 24 = $833.333,33` — la **cuota mostrada en el detalle es CAPITAL puro** (igual que en Mastercard).
+`$18.000.000 ÷ 24 = $750.000,00` — la **cuota mostrada en el detalle es CAPITAL puro** (igual que en Mastercard).
 
 **Tasa fija desde el desembolso:** la tasa MV asociada al avance queda fija a la del ciclo en que se desembolsó. Aunque el banco actualice su política de tasas en ciclos posteriores, los avances vivos siguen amortizando con su tasa original. Por eso en el extracto 3 se ve la cuota 2/24 del avance con `1,9110%` (la del ciclo 2) y no `1,9915%` (la del ciclo 3).
 
@@ -271,14 +271,14 @@ interes = saldoFacturado × tasaMV × (dias / 30);
 ```
 
 **Ejemplo verificado contra el extracto:**
-- Avance $20M a 24 cuotas, en cuota 2:
-  - `saldoInicio` (saldo al cierre del ciclo anterior) = $19.166.666,67
-  - `cuotaCapitalFija` = $833.333,33
-  - `saldoFacturado` = $19.166.666,67 + $833.333,33 = $20.000.000
-  - Interés = $20.000.000 × 0,019110 = **$382.200**
-- Avance $5M en cuota 2: interés = $5.000.000 × 0,019110 = $95.550
-- Avance $4M (recién desembolsado en ciclo 3) en cuota 1: interés = 0 (cuota 1 difiere)
-- Suma de intereses de avances en ciclo 3 = $477.750
+- Avance $18M a 24 cuotas, en cuota 2:
+  - `saldoInicio` (saldo al cierre del ciclo anterior) = $17.250.000,00
+  - `cuotaCapitalFija` = $750.000,00
+  - `saldoFacturado` = $17.250.000,00 + $750.000,00 = $18.000.000
+  - Interés = $18.000.000 × 0,019110 = **$343.980**
+- Avance $4,8M en cuota 2: interés = $4.800.000 × 0,019110 = $91.728
+- Avance $3,6M (recién desembolsado en ciclo 3) en cuota 1: interés = 0 (cuota 1 difiere)
+- Suma de intereses de avances en ciclo 3 = $435.708
 
 Este monto se suma con los intereses de las diferidas y los intl para producir el cargo "INTERESES CORRIENTES" total que aparece como movimiento agregado en el extracto.
 
@@ -312,13 +312,13 @@ Pago Mínimo COP =
 
 | Concepto | Valor |
 |----------|-------|
-| Cuota transacciones del mes | $2.451.438,82 |
-| Cuota transacciones anteriores | $8.263,72 |
-| Cuota avances (separado) | $1.208.333,33 |
-| Intereses corrientes | $542.968,93 |
+| Cuota transacciones del mes | $2.309.514,75 |
+| Cuota transacciones anteriores | $8.652,61 |
+| Cuota avances (separado) | $1.100.000,00 |
+| Intereses corrientes | $498.126,44 |
 | Otros cargos | $6.840 |
-| **Suma** | **$4.217.844,80** |
-| **Pago Mínimo extracto** | **$4.217.845,00** |
+| **Suma** | **$3.923.133,80** |
+| **Pago Mínimo extracto** | **$3.923.134,00** |
 
 Diferencia de $0,20 — redondeo aceptable. **Cuadra al peso.** ✓
 
@@ -378,11 +378,11 @@ Donde:
 
 ## 10. Curiosidades detectadas al contrastar con Mastercard
 
-1. **Clasificación de comercios "intl"**: en el extracto de Visa, `RAPPI` y `APPLE.COM/BILL` aparecen marcados como intl (tasa MV ≠ 0) **sin** sub-renglón `VR MONEDA ORIG`. En Mastercard sí aparece el sub-renglón. La clasificación parece depender del MCC del comercio + la red de la franquicia, no del modo de pago. Esto refuerza la decisión arquitectónica de que el flag `es_internacional` lo marque el usuario manualmente — no se puede inferir confiablemente del lado del cliente.
+1. **Clasificación de comercios "intl"**: en el extracto de Visa, `DOMICILIOS DEMO` y `SUSCRIPCION DIGITAL` aparecen marcados como intl (tasa MV ≠ 0) **sin** sub-renglón `VR MONEDA ORIG`. En Mastercard sí aparece el sub-renglón. La clasificación parece depender del MCC del comercio + la red de la franquicia, no del modo de pago. Esto refuerza la decisión arquitectónica de que el flag `es_internacional` lo marque el usuario manualmente — no se puede inferir confiablemente del lado del cliente.
 
-2. **`AMAZON COM` aparece a 0%** en el ciclo 3 de Visa (`07/04/2026 AMAZON COM $324.502 1/1 0,0000%`), pero en otros ciclos sí aparece como compra internacional. La clasificación de Bancolombia para Amazon es inestable: a veces sale como nacional y a veces como intl, según cómo se enrutó la transacción (probablemente depende de si pasó por adquirente Colombia o adquirente USA). Conclusión: para Amazon el usuario debe revisar caso por caso al marcar `es_internacional`.
+2. **`TIENDA ONLINE DEMO` aparece a 0%** en el ciclo 3 de Visa (`05/04/2026 TIENDA ONLINE DEMO $286.400 1/1 0,0000%`), pero en otros ciclos sí aparece como compra internacional. La clasificación de Bancolombia para ese comercio es inestable: a veces sale como nacional y a veces como intl, según cómo se enrutó la transacción (probablemente depende de si pasó por adquirente Colombia o adquirente USA). Conclusión: para ese comercio el usuario debe revisar caso por caso al marcar `es_internacional`.
 
-3. **La línea `VR MONEDA ORIG` es informativa, no liquidadora**: en Visa, la conversión de USD a COP **ya está hecha** al momento de la transacción (a la TRM del día de la compra). El `VR MONEDA ORIG 79.0 US` para `AIRDNA $287.890,49` significa que el comercio cobró 79 USD originalmente y el banco los convirtió a COP usando una TRM ≈ $3.644. En Mastercard, en cambio, esa misma información viene en el extracto USD y la conversión a COP se hace solo cuando el cliente paga.
+3. **La línea `VR MONEDA ORIG` es informativa, no liquidadora**: en Visa, la conversión de USD a COP **ya está hecha** al momento de la transacción (a la TRM del día de la compra). El `VR MONEDA ORIG 64.0 US` para `DATOS ANALITICA LLC $233.235,52` significa que el comercio cobró 64 USD originalmente y el banco los convirtió a COP usando una TRM ≈ $3.644. En Mastercard, en cambio, esa misma información viene en el extracto USD y la conversión a COP se hace solo cuando el cliente paga.
 
 4. **La cuota mostrada en el detalle es siempre capital puro** en ambas franquicias. Lo que cambia es **dónde** aparecen los intereses:
    - Visa: en una línea agregada "INTERESES CORRIENTES" que en el motor exponemos como `interesesComprasIntl` (intl) + `cuotasInteres` (avances/diferidas) por separado.
@@ -402,19 +402,19 @@ Donde:
 
 | Ciclo | Tarjeta | Saldo a corte | Pago Total | Pago Mínimo | Tasa MV |
 |-------|---------|---------------|-----------|-------------|---------|
-| 1 (ene-feb 2026) | [Tarjeta_Visa_A] | $10.987     | $10.987     | $10.987     | 1,8895% |
-| 2 (feb-mar 2026) | [Tarjeta_Visa_B] | $30.896.362 | $30.896.362 | $6.929.764  | 1,9110% |
-| 3 (mar-abr 2026) | [Tarjeta_Visa_B] | $31.133.940 | $31.133.940 | $4.217.845  | 1,9915% |
+| 1 (ene-feb 2026) | [Tarjeta_Visa_A] | $9.412      | $9.412      | $9.412      | 1,8895% |
+| 2 (feb-mar 2026) | [Tarjeta_Visa_B] | $27.845.190 | $27.845.190 | $6.312.408  | 1,9110% |
+| 3 (mar-abr 2026) | [Tarjeta_Visa_B] | $28.117.455 | $28.117.455 | $3.923.134  | 1,9915% |
 
 ### Avances activos en ciclo 3 (referencia validación)
 
 | Avance | Desembolso | Monto | Cuota actual | Capital cuota | Saldo |
 |--------|------------|-------|--------------|----------------|-------|
-| `196157` | 12/03/2026 | $20.000.000 | 2/24 | $833.333,33 | $18.333.333,34 |
-| `196665` | 12/03/2026 | $5.000.000  | 2/24 | $208.333,33 | $4.583.333,34  |
-| `357775` | 14/04/2026 | $4.000.000  | 1/24 | $166.666,67 | $3.833.333,33  |
+| `100002` | 10/03/2026 | $18.000.000 | 2/24 | $750.000,00 | $16.500.000,00 |
+| `100003` | 10/03/2026 | $4.800.000  | 2/24 | $200.000,00 | $4.400.000,00  |
+| `100004` | 13/04/2026 | $3.600.000  | 1/24 | $150.000,00 | $3.450.000,00  |
 
-Suma cuotas avances ciclo 3 = $1.208.333,33 → cuadra con la línea "+ Cuota avances" del detalle del pago mínimo.
+Suma cuotas avances ciclo 3 = $1.100.000,00 → cuadra con la línea "+ Cuota avances" del detalle del pago mínimo.
 
 ---
 

@@ -39,19 +39,22 @@ como una tabla en pantalla, pero al extraer el texto **cada celda cae en su prop
 de 9 campos por movimiento:
 
 ```
-Virtual          <- canal (Virtual | Fisica | "-" en los pagos)
-2026-07-15       <- fecha, formato ISO YYYY-MM-DD
-RAPPI            <- descripcion del comercio
-$36.300,00       <- valor de la transaccion
-$36.300,00       <- capital facturado del periodo   <-- lo que cobra ESTE ciclo
-1 de 1           <- cuotas ("9 de 24" en diferidas)
-$0,00            <- capital pendiente por facturar
-0,0000%          <- tasa M.V de la linea
-0,00%            <- tasa E.A
+Virtual              <- canal (Virtual | Fisica | "-" en los pagos)
+2026-07-09           <- fecha, formato ISO YYYY-MM-DD
+DOMICILIOS DEMO      <- descripcion del comercio
+$34.700,00           <- valor de la transaccion
+$34.700,00           <- capital facturado del periodo   <-- lo que cobra ESTE ciclo
+1 de 1               <- cuotas ("9 de 24" en diferidas)
+$0,00                <- capital pendiente por facturar
+0,0000%              <- tasa M.V de la linea
+0,00%                <- tasa E.A
 ```
 
 Los pagos usan la misma estructura con `-` como canal, valor **negativo** y `N/A` en los campos de
-cuotas: `- | 2026-06-29 | PAGOS RAPPIPAY APP | $-237.136,05 | N/A | N/A | N/A | 0% | 0,00%`.
+cuotas: `- | 2026-06-29 | PAGOS RAPPIPAY APP | $-228.540,60 | N/A | N/A | N/A | 0% | 0,00%`.
+
+> La fecha del pago (29-jun) **sí es estructural**: es el día 11 del periodo facturado que arranca el
+> 19-jun, y ese "día 11" es el que aparece en la columna *día del pago* de la calibración de §4.3.1.
 
 > **Implicación en el motor (corregida en v5.6.3):** `parsearTabular` exige fecha **y** monto en la
 > MISMA línea, así que con este layout no cruzaba NADA y toda la conciliación de RappiCard caía sobre
@@ -101,14 +104,14 @@ cuotas: `- | 2026-06-29 | PAGOS RAPPIPAY APP | $-237.136,05 | N/A | N/A | N/A | 
 - Si no se pagan, entran al saldo del siguiente ciclo y a partir de ahí sí pueden generar interés (no se observó este caso en los datos).
 
 Ejemplos del ciclo 7 (todas a 0%):
-- `RAPPI $26.500 1/1 0,0000%`
-- `EURO SUPERMERCADO PLAC $331.975 1/1 0,0000%`
-- `DROGUERIA INGLESA 159 $35.200 1/1 0,0000%`
-- `RAPPI $62.883 1/1 0,0000%`
+- `DOMICILIOS DEMO $24.800 1/1 0,0000%`
+- `SUPERMERCADO DEMO CEN $318.400 1/1 0,0000%`
+- `DROGUERIA DEMO 100 $33.600 1/1 0,0000%`
+- `DOMICILIOS DEMO $59.740 1/1 0,0000%`
 
 ### 3.2 Compras "internacionales" en 1/1
-- Comercios como **HoYoverse**, **BPAY GLOBAL**, **BFINITY BITFI** procesan en USD pero RappiCard las convierte a COP el día de la compra y las muestra como compras COP normales.
-- Cuando son 1/1, aparecen con tasa **0,0000%** — confirmado en ciclo 2 con HoYoverse.
+- Comercios como **JuegoWebB**, **PASARELA GLOBAL DEMO**, **FINTECH DEMO** procesan en USD pero RappiCard las convierte a COP el día de la compra y las muestra como compras COP normales.
+- Cuando son 1/1, aparecen con tasa **0,0000%** — confirmado en ciclo 2 con JuegoWebB.
 - Cuando se difieren a más de 1 cuota (típicamente 24), aparecen con tasa **1,8334%** y siguen el modelo de diferidas (§4).
 
 > **Conclusión clave:** RappiCard **no diferencia** internamente entre compras nacionales e internacionales una vez hechas. El concepto de "compra internacional con cobro de interés especial" como en Bancolombia Visa **NO existe aquí**.
@@ -119,36 +122,36 @@ Ejemplos del ciclo 7 (todas a 0%):
 
 ### 4.1 Patrón de cuotas observado
 
-Diferida ejemplo: `BFINITY BITFI TECHNOLO $397.419,29` a 24 cuotas, ciclos 2-7:
+Diferida ejemplo: `FINTECH DEMO TECHNOLO $380.217,05` a 24 cuotas, ciclos 2-7:
 
 | Ciclo | Cuota | Capital cuota | Saldo pendiente al cierre |
 |-------|-------|---------------|---------------------------|
-| 2 | 1/24 | $16.559,13 | $380.860,16 |
-| 3 | 2/24 | $16.559,13 | $364.301,03 |
-| 4 | 3/24 | $16.559,13 | $347.741,90 |
-| 5 | 4/24 | $16.559,13 | $331.182,77 |
-| 6 | 5/24 | $16.559,13 | $314.623,64 |
-| 7 | 6/24 | $16.559,13 | $298.064,51 |
+| 2 | 1/24 | $15.842,37 | $364.374,68 |
+| 3 | 2/24 | $15.842,37 | $348.532,31 |
+| 4 | 3/24 | $15.842,37 | $332.689,94 |
+| 5 | 4/24 | $15.842,37 | $316.847,57 |
+| 6 | 5/24 | $15.842,37 | $301.005,20 |
+| 7 | 6/24 | $15.842,37 | $285.162,83 |
 
-`$397.419,29 ÷ 24 = $16.559,14` — la cuota mostrada es **CAPITAL puro** (igual que Bancolombia y Mastercard).
+`$380.217,05 ÷ 24 = $15.842,38` — la cuota mostrada es **CAPITAL puro** (igual que Bancolombia y Mastercard). El banco **trunca** el centavo (muestra $15.842,37), por eso la división redondeada difiere en $0,01.
 
 Otras diferidas verificadas, todas cuadran al peso:
-- `BPAY GLOBAL $210.632,22 ÷ 24 = $8.776,34` ✓
-- `BPAY GLOBAL $329.858,02 ÷ 24 = $13.744,08` ✓
-- `BPAY GLOBAL $330.863,13 ÷ 24 = $13.785,96` ✓
-- `PAGOS RAPPIPAY APP $244.298,94 ÷ 24 = $10.179,12` ✓
+- `PASARELA GLOBAL DEMO $201.478,56 ÷ 24 = $8.394,94` ✓
+- `PASARELA GLOBAL DEMO $316.204,80 ÷ 24 = $13.175,20` ✓
+- `PASARELA GLOBAL DEMO $318.291,36 ÷ 24 = $13.262,14` ✓
+- `PAGOS RAPPIPAY APP $234.117,12 ÷ 24 = $9.754,88` ✓
 
 ### 4.2 La cuota 1 SÍ cobra intereses (no hay diferimiento)
 
 A diferencia de Bancolombia (donde la cuota 1 difiere su interés a la cuota 2), **RappiCard cobra interés en la cuota 1 desde el primer ciclo**.
 
 Verificación con el ciclo 2 (primer ciclo donde aparecen 5 diferidas nuevas):
-- Capital del mes (cuotas 1/24): $63.044,63
-- Compras 1/1: $119.502,61 (HoYoverse + RAPPI)
-- **Total capital facturado del mes:** $182.547,24 ✓
-- **Intereses corrientes del mes:** $27.037,64
+- Capital del mes (cuotas 1/24): $60.429,53
+- Compras 1/1: $114.870,42 (JuegoWebB + DOMICILIOS DEMO)
+- **Total capital facturado del mes:** $175.299,95 ✓
+- **Intereses corrientes del mes:** $25.914,77
 
-Los $27.037,64 son intereses sobre las diferidas (incluyendo cuota 1), porque las compras 1/1 están a 0% y no aportan intereses.
+Los $25.914,77 son intereses sobre las diferidas (incluyendo cuota 1), porque las compras 1/1 están a 0% y no aportan intereses.
 
 > **Implicación en el motor:** la flag `difiere_intereses_cuota1` debe quedar en **`0` o `null`** para tarjetas RappiCard. Esto hace que `nuOpts(db, tarjetaId)` retorne `undefined` y `calcularAmortizacionDiferida` use el modelo estándar (`interesTotal = interesPeriodo` desde i=0).
 
@@ -157,7 +160,7 @@ Los $27.037,64 son intereses sobre las diferidas (incluyendo cuota 1), porque la
 > **Corrección importante (27-jul-2026).** Este apartado afirmaba antes que el residual se debía a
 > *"capitalización diaria sobre saldo pendiente diario"*. **Es FALSO** y se deroga: la E.A. impresa
 > (24,36%) es exactamente la misma tasa que 1,8334% M.V. (`1,018334^12 = 1,2436`), así que no hay
-> capitalización extra que explicar; en convención base-30 aporta ~$12 y en convención 365 días va en
+> capitalización extra que explicar; en convención base-30 aporta ~$11 y en convención 365 días va en
 > **dirección contraria**. La causa real es el **número de días del periodo**.
 
 **La fórmula del banco es la misma del motor** — `interés = saldo × tasaMV × (días / 30)`, por cuota y
@@ -168,16 +171,20 @@ previo que contamine. Con los días REALES (contando el día de la transacción,
 
 | Grupo | Capital | Días | Interés |
 |---|---|---|---|
-| 3 compras del 22-oct → corte 20-nov | $937.909,53 | 30 | $17.195,62 |
-| 2 compras del 24-oct → corte 20-nov | $575.162,07 | 28 | $9.842,03 |
-| **Total calculado** | | | **$27.037,65** |
-| **Total impreso en el PDF** | | | **$27.037,64** |
+| 3 compras del 22-oct → corte 20-nov | $897.900,41 | 30 | $16.462,11 |
+| 2 compras del 24-oct → corte 20-nov | $552.408,48 | 28 | $9.452,67 |
+| **Total calculado** | | | **$25.914,78** |
+| **Total impreso en el PDF** | | | **$25.914,77** |
 
-Error: **$0,013** sobre 5 términos. La forma de la fórmula queda confirmada al centavo. Con el conteo
-que hace hoy el motor (`daysBetween` exclusivo: 29 y 27 días) daría $26.112,96 → **−$924,68**.
+Error: **$0,01** sobre 5 términos. La forma de la fórmula queda confirmada al centavo. Con el conteo
+que hace hoy el motor (`daysBetween` exclusivo: 29 y 27 días) daría $25.028,44 → **−$886,33**.
 
-Dos convenciones rivales quedaron descartadas con este mismo ciclo: sin prorrateo por día → $27.740,66;
-`días_vivos / días_del_periodo` → $26.165,30.
+Dos convenciones rivales quedaron descartadas con este mismo ciclo: sin prorrateo por día → $26.589,97;
+`días_vivos / días_del_periodo` → $25.078,81.
+
+> Las fechas de compra (22-oct y 24-oct) y el corte (20-nov) **se conservan sin sustituir**: son las
+> que generan los periodos de 30 y 28 días, y son ellos —no los montos— los que sostienen la
+> calibración. Los capitales sí son sintéticos.
 
 #### La causa raíz: cortes sintéticos vs. cortes reales
 
@@ -191,9 +198,9 @@ porque el corte de junio fue el **18**, un jueves: el 20-jun cayó sábado):
 
 | | Interés |
 |---|---|
-| App (30 días sintéticos) | $18.493,77 |
-| Con 32 días reales | $19.726,69 |
-| **Banco (PDF)** | **$20.150,51** |
+| App (30 días sintéticos) | $17.726,10 |
+| Con 32 días reales | $18.907,84 |
+| **Banco (PDF)** | **$19.314,08** |
 
 El conteo de días explica **~74%** del desfase. El resto lo explica el segundo término de la fórmula,
 resuelto con el backtesting de los 10 extractos (abajo).
@@ -205,7 +212,7 @@ interés_del_ciclo =  Σ saldo_vivo(diferida) × tasaMV × días_del_periodo / 3
                    + capital_facturado_anterior × tasaMV × día_del_pago / 30
 ```
 
-El **segundo término** era el "residual de $424" que llevaba versiones sin explicación. Es interés
+El **segundo término** era el "residual de $406" que llevaba versiones sin explicación. Es interés
 sobre la **cuota que el banco ya facturó y que sigue sin pagarse**: se devenga desde el corte hasta el
 día en que el pago entra, y se cobra en el extracto SIGUIENTE. La prueba: dividir el residual entre
 `capital_facturado × tasaMV / 30` da **números enteros exactos**, y esos enteros son **el día del
@@ -214,32 +221,35 @@ periodo en que el usuario pagó**:
 | ciclo | días | día del pago | residual | residual ÷ (capital×tasa/30) | error final |
 |---|---|---|---|---|---|
 | noviembre (nacimiento) | por compra | — | — | — | **+$0,01** |
-| diciembre | 28 | 13 | 385,30 | 10,00 | −115,58 |
-| enero | 33 | 15 | 1.060,45 | 27,52 | +482,52 |
-| **febrero** | 30 | **9** | 346,77 | **9,00** | **+0,01** |
-| **marzo** | 28 | **11** | 423,81 | **11,00** | **−0,00** |
-| abril | 32 | 13 | 515,01 | 13,37 | +14,13 |
-| **mayo** | 30 | **4** | 154,10 | **4,00** | **−0,02** |
-| **junio** | 29 | **9** | 346,77 | **9,00** | **+0,02** |
-| **julio** | 32 | **11** | 423,82 | **11,00** | **+0,00** |
+| diciembre | 28 | 13 | 369,31 | 10,00 | −110,78 |
+| enero | 33 | 15 | 1.016,33 | 27,52 | +462,50 |
+| **febrero** | 30 | **9** | 332,37 | **9,00** | **+0,01** |
+| **marzo** | 28 | **11** | 406,23 | **11,00** | **−0,00** |
+| abril | 32 | 13 | 493,76 | 13,37 | +13,54 |
+| **mayo** | 30 | **4** | 147,72 | **4,00** | **−0,02** |
+| **junio** | 29 | **9** | 332,37 | **9,00** | **+0,02** |
+| **julio** | 32 | **11** | 406,24 | **11,00** | **+0,00** |
 
-> El ciclo 1 (oct-2025) no aparece en la tabla: la tarjeta aun no tenia diferidas — su minimo fueron 8.188 de puro contado, sin intereses que calibrar.
+> La unidad que divide cada residual es `capital_facturado × tasaMV / 30 = 60.429,53 × 0,018334 / 30 =
+> 36,9305` — el capital facturado del mes anterior (la suma de cuotas de §11, constante mes a mes).
+
+> El ciclo 1 (oct-2025) no aparece en la tabla: la tarjeta aun no tenia diferidas — su minimo fueron 26.940 de puro contado, sin intereses que calibrar.
 
 **5 ciclos cuadran al centavo** y el de nacimiento con $0,01 de error. El residual absoluto total cae
-de **$11.255** (modelo actual de la app) a **$612**, concentrado en diciembre y enero —los dos ciclos
+de **$10.788** (modelo actual de la app) a **$587**, concentrado en diciembre y enero —los dos ciclos
 adyacentes al corte adelantado del 18-dic—, lo que apunta a un ajuste de timing que el banco aplica al
 mover un corte. No se persigue más (decisión del usuario, 27-jul-2026).
 
 **Hipótesis descartadas con aritmética, no con opinión:**
-- **Capitalización diaria** — la E.A. 24,36% *es* 1,8334% MV; aporta ~$12 y en convención 365 va en dirección contraria.
-- **Interés revolvente sobre el saldo anterior completo** — sobrepasa al banco por $1.000-$4.100; además el saldo se pagó completo cada mes (`Saldo pendiente de pago mínimo $0,00`).
+- **Capitalización diaria** — la E.A. 24,36% *es* 1,8334% MV; aporta ~$11 y en convención 365 va en dirección contraria.
+- **Interés revolvente sobre el saldo anterior completo** — sobrepasa al banco por $960-$3.930; además el saldo se pagó completo cada mes (`Saldo pendiente de pago mínimo $0,00`).
 - **Interés sobre las compras de contado** — la tasa implícita salta entre 0,13% y 4,10% según el mes: no es una tasa.
 - **Tasa derivada de la E.A. en vez de la impresa** — difieren en 0,0024%, irrelevante.
 
 ### 4.3.2 ⚠️ Por qué la app NUNCA podrá predecir el mínimo al peso
 
 El segundo término depende de **cuándo paga el usuario** — información del **futuro** en el momento de
-proyectar el extracto. Sobre el saldo de julio, ese término vale $38 si se paga el día 1 y $771 si se
+proyectar el extracto. Sobre el saldo de julio, ese término vale $37 si se paga el día 1 y $739 si se
 paga el día 20: **la misma deuda tiene un mínimo distinto según el día de pago**.
 
 > **Consecuencia de diseño (v5.7.0):** perseguir la exactitud dentro del motor es imposible por
@@ -259,7 +269,7 @@ motor de cortes adelantados de v4.6.0) y lo usan los candados y el display desde
 > cada cuota a un ciclo, así que un corte que cruce el límite de mes podría duplicar una cuota en un
 > extracto y borrarla del siguiente. Corregirlo mueve números históricos en AMBAS direcciones.
 > Además, el sub-fix del día inclusivo en la cuota 1 **contaminaría el experimento de campo abierto**
-> (APPLE #70 / NETFLIX #71), cuya pregunta central es justamente desde qué fecha arranca el interés de
+> (SUSCRIPCION DIGITAL #70 / STREAMING DEMO #71), cuya pregunta central es justamente desde qué fecha arranca el interés de
 > la primera cuota. Debe ir gateado por banco y esperar al extracto de agosto.
 >
 > Y aunque se implemente, **NO alcanza la exactitud**: arregla el primer término de la fórmula, no el
@@ -267,7 +277,7 @@ motor de cortes adelantados de v4.6.0) y lo usan los candados y el display desde
 > el modelo.
 
 **Efecto práctico mientras tanto:** la app **subestima** el interés de RappiCard cuando el banco
-adelanta el corte. En julio-2026 fueron $1.657 de un pago mínimo de $320.582 (0,5%) — y desde v5.7.0
+adelanta el corte. En julio-2026 fueron $1.588 de un pago mínimo de $308.940 (0,5%) — y desde v5.7.0
 eso ya no obliga al usuario a mirar el PDF: la app le propone la cifra exacta del banco al pagar.
 
 ---
@@ -304,14 +314,14 @@ Pago Mínimo =
 |----------|-------|
 | Saldo en mora | $0,00 |
 | Saldo pendiente de pago mínimo | $0,00 |
-| Capital facturado consumos del mes | $182.547,24 |
-| Intereses corrientes del mes | $27.037,64 |
+| Capital facturado consumos del mes | $175.299,95 |
+| Intereses corrientes del mes | $25.914,77 |
 | Intereses de mora | $0,00 |
 | Cuota de Avances | $0,00 |
 | Otros cargos | $0,00 |
 | Saldo a favor | $0,00 |
-| **Suma** | **$209.584,88** |
-| **Pago Mínimo extracto** | **$209.584,88** ✓ |
+| **Suma** | **$201.214,72** |
+| **Pago Mínimo extracto** | **$201.214,72** ✓ |
 
 Cuadra al peso. ✓
 
@@ -319,11 +329,11 @@ Cuadra al peso. ✓
 
 | Ciclo | Capital | Intereses | Mora | Total calculado | Pago Mínimo extracto | Diff |
 |-------|---------|-----------|------|-----------------|----------------------|------|
-| 3     | $84.294,63  | $25.197,77 | $342,51 | $109.834,91 | $109.834,91 | 0 ✓ |
-| 4     | $127.944,63 | $29.032,28 | $0     | $156.976,91 | $156.976,91 | 0 ✓ |
-| 5     | $87.534,63  | $24.619,84 | $0     | $112.154,47 | $112.154,47 | 0 ✓ |
-| 6     | $96.034,63  | $21.999,88 | $0     | $118.034,51 | $118.034,51 | 0 ✓ |
-| 7     | $646.952,63 | $23.940,45 | $0     | $670.893,08 | $670.893,08 | 0 ✓ |
+| 3     | $80.829,53  | $24.151,80 | $328,20 | $105.309,53 | $105.309,53 | 0 ✓ |
+| 4     | $122.679,53 | $27.826,44 | $0     | $150.505,97 | $150.505,97 | 0 ✓ |
+| 5     | $83.909,53  | $23.598,12 | $0     | $107.507,65 | $107.507,65 | 0 ✓ |
+| 6     | $92.059,53  | $21.087,08 | $0     | $113.146,61 | $113.146,61 | 0 ✓ |
+| 7     | $620.149,53 | $22.945,92 | $0     | $643.095,45 | $643.095,45 | 0 ✓ |
 
 **La fórmula es exacta. Los componentes individuales (capital e intereses) son los aproximados.**
 
@@ -346,11 +356,11 @@ A partir del ciclo 3 aparece una tercera línea llamada **"Pago alternativo"**:
 
 | Ciclo | Pago Mínimo | Pago Alternativo | Ratio |
 |-------|-------------|------------------|-------|
-| 3 | $109.834,91 | $32.950,47 | **30,0%** |
-| 4 | $156.976,91 | $47.093,07 | **30,0%** |
-| 5 | $112.154,47 | $33.646,34 | **30,0%** |
-| 6 | $118.034,51 | $35.410,35 | **30,0%** |
-| 7 | $670.893,08 | $201.267,92 | **30,0%** |
+| 3 | $105.309,53 | $31.592,85 | **30,0%** |
+| 4 | $150.505,97 | $45.151,79 | **30,0%** |
+| 5 | $107.507,65 | $32.252,29 | **30,0%** |
+| 6 | $113.146,61 | $33.943,98 | **30,0%** |
+| 7 | $643.095,45 | $192.928,63 | **30,0%** |
 
 **Pago Alternativo = 30% del Pago Mínimo**, exacto en los 5 ciclos donde aparece.
 
@@ -483,7 +493,7 @@ const intlCheckboxLabel = aplicaIntlForm
 
 ✅ **La arquitectura actual ya distingue correctamente RappiCard** de las otras franquicias: la detección por banco, los flags y las ramas de cálculo están bien.
 
-⚠️ **La excepción:** el **conteo de días** del motor de amortización cuando el banco adelanta el corte (§4.3). Está identificado y cuantificado ($1.657 en el ciclo de julio-2026, el 74% del desfase de intereses), y **NO implementado por decisión del usuario** — es un sub-proyecto de alto riesgo que además contaminaría un experimento de campo en curso. No dar por cerrado este documento sin leer §4.3.
+⚠️ **La excepción:** el **conteo de días** del motor de amortización cuando el banco adelanta el corte (§4.3). Está identificado y cuantificado ($1.588 en el ciclo de julio-2026, el 74% del desfase de intereses), y **NO implementado por decisión del usuario** — es un sub-proyecto de alto riesgo que además contaminaría un experimento de campo en curso. No dar por cerrado este documento sin leer §4.3.
 
 ### 10.3 Mejoras opcionales (no bloqueantes)
 
@@ -500,25 +510,25 @@ const intlCheckboxLabel = aplicaIntlForm
 
 | Ciclo | Saldo a corte | Pago Total | Pago Mínimo | Pago Alternativo |
 |-------|---------------|------------|-------------|------------------|
-| 1 | $28.188 | $28.188 | $28.188 | n/a |
-| 2 | $1.659.611,85 | $1.659.611,85 | $209.584,88 | n/a |
-| 3 | $1.496.817,25 | $1.496.817,25 | $109.834,91 | $32.950,47 |
-| 4 | $1.480.914,62 | $1.480.914,62 | $156.976,91 | $47.093,07 |
-| 5 | $1.373.047,55 | $1.373.047,55 | $112.154,47 | $33.646,34 |
-| 6 | $1.315.882,96 | $1.315.882,96 | $118.034,51 | $35.410,35 |
-| 7 | $1.805.696,90 | $1.805.696,90 | $670.893,08 | $201.267,92 |
+| 1 | $26.940 | $26.940 | $26.940 | n/a |
+| 2 | $1.590.738,26 | $1.590.738,26 | $201.214,72 | n/a |
+| 3 | $1.434.689,40 | $1.434.689,40 | $105.309,53 | $31.592,85 |
+| 4 | $1.419.446,66 | $1.419.446,66 | $150.505,97 | $45.151,79 |
+| 5 | $1.315.716,08 | $1.315.716,08 | $107.507,65 | $32.252,29 |
+| 6 | $1.261.078,80 | $1.261.078,80 | $113.146,61 | $33.943,98 |
+| 7 | $1.730.760,47 | $1.730.760,47 | $643.095,45 | $192.928,63 |
 
 ### Diferidas activas a lo largo de los ciclos (todas con tasa 1,8334%)
 
 | Comercio | Monto | Plazo | Capital cuota | Ciclo desembolso |
 |----------|-------|-------|---------------|------------------|
-| BFINITY BITFI TECHNOLO | $397.419,29 | 24 | $16.559,13 | 22/10/2025 (ciclo 2) |
-| BPAY GLOBAL | $210.632,22 | 24 | $8.776,34 | 22/10/2025 (ciclo 2) |
-| BPAY GLOBAL | $329.858,02 | 24 | $13.744,08 | 22/10/2025 (ciclo 2) |
-| BPAY GLOBAL | $330.863,13 | 24 | $13.785,96 | 24/10/2025 (ciclo 2) |
-| PAGOS RAPPIPAY APP | $244.298,94 | 24 | $10.179,12 | 24/10/2025 (ciclo 2) |
+| FINTECH DEMO TECHNOLO | $380.217,05 | 24 | $15.842,37 | 22/10/2025 (ciclo 2) |
+| PASARELA GLOBAL DEMO | $201.478,56 | 24 | $8.394,94 | 22/10/2025 (ciclo 2) |
+| PASARELA GLOBAL DEMO | $316.204,80 | 24 | $13.175,20 | 22/10/2025 (ciclo 2) |
+| PASARELA GLOBAL DEMO | $318.291,36 | 24 | $13.262,14 | 24/10/2025 (ciclo 2) |
+| PAGOS RAPPIPAY APP | $234.117,12 | 24 | $9.754,88 | 24/10/2025 (ciclo 2) |
 
-Suma de cuotas mensuales constante: **$63.044,63** mes a mes (durante 24 meses) — confirma que la cuota es capital puro y no se ajusta por intereses.
+Suma de cuotas mensuales constante: **$60.429,53** mes a mes (durante 24 meses) — confirma que la cuota es capital puro y no se ajusta por intereses.
 
 ---
 

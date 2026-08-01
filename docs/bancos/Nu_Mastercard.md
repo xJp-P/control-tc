@@ -81,11 +81,11 @@ Cada compra hereda la tasa del día de su procesamiento. Las cuotas de una difer
 - La tasa que se muestra es la que **se aplicaría si entras en mora**, no un cargo automático.
 
 Ejemplos del ciclo 1 (mar 2024):
-- `15 MAR la Burgueria [Sucursal] $67.500 1 de 1 → 2.42% $0,00 → Total $67.500`
-- `13 MAR Alkosto-Ktronix $749.900 1 de 1 → 2.42% $0,00 → Total $749.900`
+- `12 MAR COMERCIO DEMO 1 $64.800 1 de 1 → 2.42% $0,00 → Total $64.800`
+- `09 MAR COMERCIO DEMO 2 $712.400 1 de 1 → 2.42% $0,00 → Total $712.400`
 
 ### 3.2 Compras "internacionales" en 1/1
-- Comercios como **Apple.Com/Bill**, **Spotify**, **Amazon.Com**, **Temu Com**, **Shein Com**, **Mpos Global*Versilia**, **Converter.Video** aparecen en COP convertidos.
+- Comercios como **SUSCRIPCION DIGITAL**, **COMERCIO DEMO 3**, **TIENDA ONLINE DEMO**, **COMERCIO DEMO 4**, **COMERCIO DEMO 5**, **COMERCIO DEMO 6**, **COMERCIO DEMO 7** aparecen en COP convertidos.
 - Llevan un cargo adicional de Mastercard del 0,45% en algunos casos visible como "Comisión por cambio de moneda".
 - **No generan intereses adicionales** estilo `INT INTL` — sólo el cargo de conversión Mastercard, una sola vez.
 
@@ -99,33 +99,33 @@ Ejemplos del ciclo 1 (mar 2024):
 
 Patrón **idéntico al diferimiento de Bancolombia con flag `difiere_intereses_cuota1=1`**: la cuota 1 NO cobra intereses. El primer cobro de interés aparece en la **cuota 2**.
 
-**Ejemplo verificado: `Pyu*Ela $212.865 a 5 cuotas`**, abierta el 30/03/2024:
+**Ejemplo verificado: `COMERCIO DEMO 8 $198.450 a 5 cuotas`**, abierta el 28/03/2024:
 
 | Ciclo | Cuota | Capital cuota | Interés del mes |
 |-------|-------|---------------|-----------------|
-| abr 2024 | 1/5 | $42.573 | **$0** ← cuota 1 sin interés |
-| may 2024 | 2/5 | $42.573 | $7.035,99 |
-| jun 2024 | 3/5 | $20.784 | $383,79 (cuota parcial — hubo abono) |
+| abr 2024 | 1/5 | $39.690 | **$0** ← cuota 1 sin interés |
+| may 2024 | 2/5 | $39.690 | $6.559,40 |
+| jun 2024 | 3/5 | $19.376 | $357,79 (cuota parcial — hubo abono) |
 
-`$212.865 ÷ 5 = $42.573` → **cuota = capital puro** ✓
+`$198.450 ÷ 5 = $39.690` → **cuota = capital puro** ✓
 
-**Otro ejemplo: `Bold*Gold Express Jo $690.000 a 2 cuotas`** (12/11/2024, tasa 2.07% en nov, 1.96% en dic):
-
-| Ciclo | Cuota | Capital cuota | Interés del mes |
-|-------|-------|---------------|-----------------|
-| nov 2024 | 1/2 | $345.000 | $0 ← capital puro |
-| dic 2024 | 2/2 | $345.000 | $9.926,77 |
-| ene 2025 | (residual) | $0 | $150,02 |
-
-**Otro ejemplo: `Mac Center Alamedas $139.000 a 2 cuotas`** (27/10/2024):
+**Otro ejemplo: `COMERCIO DEMO 9 $652.000 a 2 cuotas`** (08/11/2024, tasa 2.07% en nov, 1.96% en dic):
 
 | Ciclo | Cuota | Capital cuota | Interés del mes |
 |-------|-------|---------------|-----------------|
-| nov 2024 | 1/2 | $69.500 | $0 |
-| dic 2024 | 2/2 | $69.500 | $4.368,01 |
-| ene 2025 | (residual) | $0 | $273,11 |
+| nov 2024 | 1/2 | $326.000 | $0 ← capital puro |
+| dic 2024 | 2/2 | $326.000 | $9.380,13 |
+| ene 2025 | (residual) | $0 | $141,76 |
 
-`$139.000 ÷ 2 = $69.500` ✓
+**Otro ejemplo: `TIENDA TECNOLOGIA DEM $132.000 a 2 cuotas`** (24/10/2024):
+
+| Ciclo | Cuota | Capital cuota | Interés del mes |
+|-------|-------|---------------|-----------------|
+| nov 2024 | 1/2 | $66.000 | $0 |
+| dic 2024 | 2/2 | $66.000 | $4.148,05 |
+| ene 2025 | (residual) | $0 | $259,36 |
+
+`$132.000 ÷ 2 = $66.000` ✓
 
 ### 4.2 Implementación en el motor
 
@@ -160,8 +160,8 @@ A diferencia de la idea inicial de que Nu "es una tarjeta simple sin avances", *
 
 | Fecha | Movimiento | Valor | Cuotas | Interés del mes | Comisión |
 |-------|------------|-------|--------|-----------------|----------|
-| 16 MAY | Retiro en efectivo | $280.000 | **1 de 1** | 2.30% **$644,48** | (incluida en "Comisiones por servicio" del resumen) |
-| 16 MAY | Retiro en efectivo | $600.000 | **1 de 1** | 2.30% **$1.544,86** | |
+| 14 MAY | Retiro en efectivo | $310.000 | **1 de 1** | 2.30% **$1.190,15** | (incluida en "Comisiones por servicio" del resumen) |
+| 14 MAY | Retiro en efectivo | $540.000 | **1 de 1** | 2.30% **$2.073,17** | |
 
 Total Comisiones por servicio (ese ciclo): **$13.600,00** (suma de ambas comisiones de retiro).
 
@@ -169,7 +169,7 @@ Total Comisiones por servicio (ese ciclo): **$13.600,00** (suma de ambas comisio
 
 | Fecha | Movimiento | Valor | Cuotas | Interés del mes | Comisión |
 |-------|------------|-------|--------|-----------------|----------|
-| 21 MAY | Retiro en efectivo | $320.000 | 1 de 1 | 1.91% **$4.493,74** | $6.800 (Comisiones por servicio) |
+| 23 MAY | Retiro en efectivo | $350.000 | 1 de 1 | 1.91% **$4.914,96** | $6.800 (Comisiones por servicio) |
 
 ### 5.2 Reglas confirmadas
 
@@ -177,15 +177,15 @@ Total Comisiones por servicio (ese ciclo): **$13.600,00** (suma de ambas comisio
 2. **Plazo: 1 cuota** ("1 de 1"). NO se difieren a 24 cuotas como Bancolombia. Esto es una **diferencia estructural importante** vs. otros bancos.
 3. **Generan interés desde el ciclo en que se hicieron** (no hay diferimiento a cuota 2). El interés se calcula proporcional a los días: `monto × tasaMV × dias/30`.
 4. **Comisión por retiro:** se cobra como movimiento separado y aparece en la línea **"Comisiones por servicio"** del resumen (NO en "Comisiones de avances", que está siempre vacía).
-   - Comisión observada: **$6.800 por retiro** (validado en 3 retiros distintos: $280k+$600k=$13.600 = 2 retiros × $6.800; otro retiro de $320k = $6.800).
+   - Comisión observada: **$6.800 por retiro** (validado en 3 retiros distintos: $310k+$540k=$13.600 = 2 retiros × $6.800; otro retiro de $350k = $6.800).
    - Aparentemente la comisión es **fija** y **no proporcional al monto**.
 
 ### 5.3 Verificación matemática del interés
 
-Retiro 16/05/2024 de $280.000, tasa 2.30%, corte 19/05/2024:
-- Días (16 → 19) = 3 días
-- Interés esperado = $280.000 × 0,0230 × (3/30) = **$644,00**
-- Cobrado: **$644,48** → diferencia $0,48 (capitalización diaria vs aproximación). ✓
+Retiro 14/05/2024 de $310.000, tasa 2.30%, corte 19/05/2024:
+- Días (14 → 19) = 5 días
+- Interés esperado = $310.000 × 0,0230 × (5/30) = **$1.188,33**
+- Cobrado: **$1.190,15** → diferencia $1,82 (capitalización diaria vs aproximación). ✓
 
 Esto confirma: el interés del retiro se calcula con la fórmula estándar `monto × tasaMV × dias/30` desde el día del retiro hasta el corte.
 
@@ -219,7 +219,7 @@ Resumen de tipos de cargos vistos en los extractos de Nu:
 | Comisión por cambio de moneda | Por compras internacionales | Una vez por transacción | 0,45% del valor (Mastercard global) |
 | Comisión por servicio | Total agregado de comisiones del mes | En el resumen | Suma de las anteriores |
 | Cargos por conversión | Línea separada en el resumen | Generalmente en $0 | Casi nunca aparece — los 0,45% se incluyen implícitamente |
-| Devoluciones / Ajustes a favor | Reembolsos y bonificaciones | Variable | Ej: `Ajuste a tu favor $107.940`, `Devolución -Dlo*Rappi -$3.200` |
+| Devoluciones / Ajustes a favor | Reembolsos y bonificaciones | Variable | Ej: `Ajuste a tu favor $102.310`, `Devolución -DLO*DOMICILIOS DEMO -$3.450` |
 | Intereses de mora | Si no pagas a tiempo | Solo cuando hay mora | Ver §8 |
 
 ---
@@ -244,14 +244,14 @@ Pago Mínimo COP =
 
 | Concepto | Valor |
 |----------|-------|
-| Deuda a pagar este mes (capital) | $1.043.688 |
-| Intereses | $9.225,33 |
+| Deuda a pagar este mes (capital) | $1.008.450 |
+| Intereses | $9.822,72 |
 | Comisiones por servicio | $13.600 |
-| Abonos | -$833.000 |
-| Devoluciones/Ajustes | -$42.573 |
-| **Pago Mínimo extracto** | **$190.940,33** |
+| Abonos | -$798.000 |
+| Devoluciones/Ajustes | -$39.690 |
+| **Pago Mínimo extracto** | **$194.182,72** |
 
-Calculado: $1.043.688 + $9.225,33 + $13.600 - $833.000 - $42.573 = $190.940,33 ✓ EXACTO
+Calculado: $1.008.450 + $9.822,72 + $13.600 - $798.000 - $39.690 = $194.182,72 ✓ EXACTO
 
 ### 7.3 Pago hasta la fecha (~ Pago Total)
 
@@ -273,12 +273,12 @@ Cada compra del mes anterior aparece con **dos líneas de interés**:
 
 | Compra | Concepto | Valor | Tasa |
 |--------|----------|-------|------|
-| `Apple.Com/Bill $9.900` | Interés del mes | $149,17 | 1.81% |
-|                          | Intereses en mora | $29,83 | 1.81% |
-|                          | **Total a pagar este mes** | **$179,00** | |
-| `Amazon.Com $133.547` | Interés del mes | $2.414,63 | 1.81% |
-|                       | Intereses en mora | $402,44 | 1.81% |
-|                       | **Total** | **$2.817,07** | |
+| `SUSCRIPCION DIGITAL $10.400` | Interés del mes | $156,70 | 1.81% |
+|                          | Intereses en mora | $31,34 | 1.81% |
+|                          | **Total a pagar este mes** | **$188,04** | |
+| `TIENDA ONLINE DEMO $127.980` | Interés del mes | $2.313,97 | 1.81% |
+|                       | Intereses en mora | $385,66 | 1.81% |
+|                       | **Total** | **$2.699,63** | |
 
 ### 8.2 Reglas de mora
 
@@ -376,30 +376,30 @@ Cada compra del mes anterior aparece con **dos líneas de interés**:
 | # | Mes | Periodo | Pago Mínimo | Saldo final |
 |---|-----|---------|-------------|-------------|
 | 1 | mar 2024 | 04 mar - 19 mar | $0 | $0 |
-| 2 | abr 2024 | 20 mar - 18 abr | $138.591 | $308.883 |
-| 3 | may 2024 | 19 abr - 19 may | $190.940,33 | $253.292,33 |
-| 4 | jun 2024 | 20 may - 18 jun | $1.079.452,19 | $1.139.652,19 |
-| 5 | jul 2024 | 19 jun - 19 jul | $210.496,93 | $210.496,93 |
-| 6 | ago 2024 | 20 jul - 19 ago | $496.228 | $496.228 |
-| 7 | sep 2024 | 20 ago - 18 sep | $354.562 | $354.562 |
-| 8 | oct 2024 | 19 sep - 19 oct | $236.557 | $236.557 |
-| 9 | nov 2024 | 20 oct - 18 nov | $1.053.177 | $1.467.677 |
-| 10 | dic 2024 | 19 nov - 19 dic | $1.101.036,78 | $1.101.036,78 |
-| 11 | ene 2025 | 20 dic - 19 ene | $1.154.344,91 | $1.154.344,91 |
-| 12 | feb 2025 | 20 ene - 16 feb | $358.351 | $358.351 |
-| 13 | mar 2025 | 17 feb - 19 mar | $746.866 | $746.866 |
-| 14 | abr 2025 | 20 mar - 18 abr | $1.139.864 | $1.270.484 |
-| 15 | may 2025 | 19 abr - 19 may | $736.523,78 | $736.523,78 |
-| 16 | jun 2025 | 20 may - 18 jun | $557.148,75 | $557.148,75 |
-| 17 | jul 2025 | 19 jun - 19 jul | $974.804,83 | $1.285.848 |
-| 18 | ago 2025 | 20 jul - 19 ago | $790.651,77 | $878.873,11 |
-| 19 | sep 2025 | 20 ago - 18 sep | $1.097.464,47 | $1.097.464,47 |
-| 20 | oct 2025 | 19 sep - 19 oct | $1.792.956,76 | $1.792.956,76 |
-| 21 | nov 2025 | 20 oct - 18 nov | $1.799.570 | $1.799.570 |
-| 22 | dic 2025 | 19 nov - 19 dic | $663.520 | $663.520 |
-| 23 | ene 2026 | 20 dic - 19 ene | $1.278.927 | $1.278.927 |
-| 24 | feb 2026 | 20 ene - 16 feb | $146.105,31 | $146.105,31 (con mora) |
-| 25 | mar 2026 | 17 feb - 19 mar | $0 (saldo a favor $3.853,99) | -$3.853,99 |
+| 2 | abr 2024 | 20 mar - 18 abr | $132.470 | $296.140 |
+| 3 | may 2024 | 19 abr - 19 may | $194.182,72 | $249.582,72 |
+| 4 | jun 2024 | 20 may - 18 jun | $1.031.275,40 | $1.088.930,40 |
+| 5 | jul 2024 | 19 jun - 19 jul | $203.318,64 | $203.318,64 |
+| 6 | ago 2024 | 20 jul - 19 ago | $471.905 | $471.905 |
+| 7 | sep 2024 | 20 ago - 18 sep | $338.190 | $338.190 |
+| 8 | oct 2024 | 19 sep - 19 oct | $224.730 | $224.730 |
+| 9 | nov 2024 | 20 oct - 18 nov | $1.008.240 | $1.396.510 |
+| 10 | dic 2024 | 19 nov - 19 dic | $1.062.480,15 | $1.062.480,15 |
+| 11 | ene 2025 | 20 dic - 19 ene | $1.109.238,60 | $1.109.238,60 |
+| 12 | feb 2025 | 20 ene - 16 feb | $342.905 | $342.905 |
+| 13 | mar 2025 | 17 feb - 19 mar | $713.420 | $713.420 |
+| 14 | abr 2025 | 20 mar - 18 abr | $1.084.310 | $1.208.760 |
+| 15 | may 2025 | 19 abr - 19 may | $702.180,45 | $702.180,45 |
+| 16 | jun 2025 | 20 may - 18 jun | $531.470,20 | $531.470,20 |
+| 17 | jul 2025 | 19 jun - 19 jul | $928.615,30 | $1.224.390 |
+| 18 | ago 2025 | 20 jul - 19 ago | $754.208,90 | $838.512,55 |
+| 19 | sep 2025 | 20 ago - 18 sep | $1.045.320,80 | $1.045.320,80 |
+| 20 | oct 2025 | 19 sep - 19 oct | $1.710.485,25 | $1.710.485,25 |
+| 21 | nov 2025 | 20 oct - 18 nov | $1.718.640 | $1.718.640 |
+| 22 | dic 2025 | 19 nov - 19 dic | $631.905 | $631.905 |
+| 23 | ene 2026 | 20 dic - 19 ene | $1.218.470 | $1.218.470 |
+| 24 | feb 2026 | 20 ene - 16 feb | $151.480,26 | $151.480,26 (con mora) |
+| 25 | mar 2026 | 17 feb - 19 mar | $0 (saldo a favor $4.126,45) | -$4.126,45 |
 
 Para la extracción completa de transacciones por ciclo, ver `docs/temp/Nu_Portable_Data.md`.
 

@@ -16,7 +16,7 @@ Igual que Mastercard, **Amex Bancolombia genera dos extractos físicos por ciclo
 | Extracto         | Qué incluye                                                                                       | Pago en                |
 |------------------|---------------------------------------------------------------------------------------------------|------------------------|
 | **Estado de cuenta en PESOS** | Compras nacionales, avances en COP, comisiones, cuota de manejo, IVA, CMF | COP                    |
-| **Estado de cuenta en DOLARES** | Compras internacionales (Apple, Uber, Hoyoverse, etc.), avances internacionales | USD (o COP a tasa del día de pago) |
+| **Estado de cuenta en DOLARES** | Compras internacionales (SUSCRIPCION DIGITAL, TRANSPORTE DEMO, JuegoWebB, etc.), avances internacionales | USD (o COP a tasa del día de pago) |
 
 **Por lo tanto:**
 - `isDualExtracto('American Express')` → `true` ✓ (ya implementado)
@@ -47,23 +47,23 @@ Igual que Mastercard, **Amex Bancolombia genera dos extractos físicos por ciclo
 - Si no se paga, entra al cargo agregado `INTERESES CORRIENTES` del siguiente ciclo (a tasa MV del momento).
 
 Ejemplos del ciclo 2 COP:
-- `13/10 MERCADOPAGO AEROLINEAS $208.050 1/1 0,0000%`
-- `06/10 NETFLIX DL $44.900 1/1 0,0000%`
-- `28/09 EDS AVENIDA $50.000 1/1 0,0000%`
-- `27/09 RAPPI COLOMBIA*DL $26.150 1/1 0,0000%`
+- `11/10 PASARELA PAGOS AEROL $215.400 1/1 0,0000%`
+- `04/10 STREAMING DEMO DL $38.900 1/1 0,0000%`
+- `26/09 EDS ESTACION DEMO $55.000 1/1 0,0000%`
+- `24/09 DOMICILIOS DEMO*DL $28.300 1/1 0,0000%`
 
 ### 3.2 En USD (extracto en DOLARES)
 - Cada compra muestra la tasa MV del ciclo (ej. 1,8312% en ciclo 2).
 - La tasa **no se cobra** si la compra se paga al vencimiento (verificado en los 3 ciclos: `Intereses corrientes USD = $0` salvo cuando hubo saldo previo no pagado).
 
 Ejemplos del ciclo 1 USD (`31 ago - 15 sep`, tasa 1,8771%):
-- `10/09 APPLE.COM/BILL $11,50 1/1` — VR MONEDA ORIG 44900.0 USA
-- `10/09 UBER TRIP $2,68 1/1` — VR MONEDA ORIG 2.6 USA
-- `09/09 UBER TRIP $3,92 1/1` — VR MONEDA ORIG 3.9 USA
-- `09/09 UBER TRIP $5,92 1/1` — VR MONEDA ORIG 5.9 USA
-- Total compras del mes USD = $24,02 → Pago Total USD = $25 → Pago Mínimo USD = $25 (toca pagar todo en este ciclo corto)
+- `08/09 SUSCRIPCION DIGITAL $10,80 1/1` — VR MONEDA ORIG 42500.0 USA
+- `08/09 TRANSPORTE DEMO $3,15 1/1` — VR MONEDA ORIG 3.1 USA
+- `05/09 TRANSPORTE DEMO $4,45 1/1` — VR MONEDA ORIG 4.4 USA
+- `05/09 TRANSPORTE DEMO $6,20 1/1` — VR MONEDA ORIG 6.1 USA
+- Total compras del mes USD = $24,60 → Pago Total USD = $25 → Pago Mínimo USD = $25 (toca pagar todo en este ciclo corto)
 
-> **Nota:** APPLE.COM/BILL aparece con `VR MONEDA ORIG 44900.0 USA`. Como en Mastercard, cuando el VR MONEDA ORIG es un valor "redondo" en pesos (44.900 COP) con sufijo `USA`, lo que significa es que el comercio cobró en COP pero la red Amex enrutó la transacción como internacional, así que el banco la presenta convertida a USD (≈$11,50 USD para 44.900 COP).
+> **Nota:** SUSCRIPCION DIGITAL aparece con `VR MONEDA ORIG 42500.0 USA`. Como en Mastercard, cuando el VR MONEDA ORIG es un valor "redondo" en pesos (42.500 COP) con sufijo `USA`, lo que significa es que el comercio cobró en COP pero la red Amex enrutó la transacción como internacional, así que el banco la presenta convertida a USD (≈$10,80 USD para 42.500 COP).
 
 ---
 
@@ -71,11 +71,11 @@ Ejemplos del ciclo 1 USD (`31 ago - 15 sep`, tasa 1,8771%):
 
 ### 4.1 La cuota mostrada es CAPITAL puro
 
-Validado con `APPLE.COM/BILL $11,57 USD a 1/36 cuotas`, ciclo 2:
-- Cuota 1 mostrada: `$0,32` ← exactamente `11,57 / 36 = 0,3214` (sólo capital, ✓)
+Validado con `SUSCRIPCION DIGITAL $12,11 USD a 1/36 cuotas`, ciclo 2:
+- Cuota 1 mostrada: `$0,33` ← exactamente `12,11 / 36 = 0,3364` (sólo capital, ✓)
 - En el extracto USD del ciclo 2 NO se cobró interés sobre esta cuota.
 
-Y con `HOYOVERSE $4,99 USD a 36/36 cuotas`, ciclo 2:
+Y con `JUEGOWEBB $5,45 USD a 36/36 cuotas`, ciclo 2:
 - Aparece como cuota 36/36 con valor $0 (ya liquidada — fue la última cuota de un período anterior).
 
 ### 4.2 Los intereses se cobran como cargo agregado separado
@@ -85,16 +85,16 @@ Igual que en Mastercard, la cuota mostrada es capital puro y los intereses van a
 | Ciclo COP | Movimiento explícito | Valor |
 |-----------|---------------------|-------|
 | 1 (15/09/2025) | (no aplicó — saldo anterior $0) | $0 |
-| 2 (15/10/2025) | `INTERESES CORRIENTES` | $14.649,72 |
-| 3 (17/11/2025) | `INTERESES CORRIENTES` | $68.663,85 |
+| 2 (15/10/2025) | `INTERESES CORRIENTES` | $13.480,52 |
+| 3 (17/11/2025) | `INTERESES CORRIENTES` | $71.925,10 |
 
 ### 4.3 Diferimiento de intereses cuota 1 (regla Bancolombia)
 
 Aplica el mismo principio confirmado en Visa y Mastercard: **la cuota 1 de una diferida o un avance recién desembolsado se factura como capital puro**, y los intereses correspondientes a su período se difieren al cargo `INTERESES CORRIENTES` del ciclo siguiente.
 
-Verificado con el avance `765093 - 08/10 AVANCE SUCURSAL VIRTUAL $3.000.000 a 24 cuotas`:
-- Ciclo 2 (cuota 1/24): cuota = $125.000 = `3.000.000 / 24` (capital puro). Saldo después: $2.875.000.
-- Ciclo 3 (cuota 2/24): cuota = $125.000 (capital puro de nuevo). El interés del período 2 va al cargo `INTERESES CORRIENTES`.
+Verificado con el avance `100001 - 06/10 AVANCE SUCURSAL VIRTUAL $3.360.000 a 24 cuotas`:
+- Ciclo 2 (cuota 1/24): cuota = $140.000 = `3.360.000 / 24` (capital puro). Saldo después: $3.220.000.
+- Ciclo 3 (cuota 2/24): cuota = $140.000 (capital puro de nuevo). El interés del período 2 va al cargo `INTERESES CORRIENTES`.
 
 > **Implicación en el motor:** la flag `difiere_intereses_cuota1 = 1` en la tarjeta y los helpers `nuOpts(db, tarjetaId)` / `avanceOpts(db, tarjetaId)` ya manejan este comportamiento. Se aplican igual a Visa, Mastercard y Amex Bancolombia sin cambios.
 
@@ -106,8 +106,8 @@ Verificado con el avance `765093 - 08/10 AVANCE SUCURSAL VIRTUAL $3.000.000 a 24
 
 | Avance | Desembolso | Monto | Plazo | Comisión |
 |--------|------------|-------|-------|----------|
-| `765093` | 08/10/2025 | $3.000.000 | 24 cuotas | $6.500 |
-| `770178` | 01/11/2025 | $1.037.532 | 24 cuotas | $6.500 |
+| `100001` | 06/10/2025 | $3.360.000 | 24 cuotas | $6.500 |
+| `100002` | 04/11/2025 | $1.184.640 | 24 cuotas | $6.500 |
 
 - Plazo estándar: **24 cuotas**.
 - Comisión: **$6.500** (consistente entre los avances vistos en Amex; en Mastercard se vio entre $6.500 y $6.840 según monto).
@@ -116,11 +116,11 @@ Verificado con el avance `765093 - 08/10 AVANCE SUCURSAL VIRTUAL $3.000.000 a 24
 
 ### 5.2 Detalle peculiar: el saldo del avance entre ciclos
 
-Avance $3M ciclo 2 → ciclo 3:
-- Saldo después de cuota 1 (ciclo 2): $2.875.000
-- Saldo después de cuota 2 (ciclo 3): $2.564.999,36 — **NO** es $2.875.000 − $125.000 = $2.750.000
+Avance $3,36M ciclo 2 → ciclo 3:
+- Saldo después de cuota 1 (ciclo 2): $3.220.000
+- Saldo después de cuota 2 (ciclo 3): $2.874.499,28 — **NO** es $3.220.000 − $140.000 = $3.080.000
 
-La diferencia ($310.000,64) sugiere que parte del pago del cliente se aplicó como **abono a capital del avance**, no solo a la cuota mensual. Esto coincide con la lógica de Bancolombia: si el cliente paga más que el Pago Mínimo del extracto, el sobrante puede aplicarse como abono a capital de las deudas vivas (avances/diferidas) según la jerarquía interna del banco.
+La diferencia ($345.500,72) sugiere que parte del pago del cliente se aplicó como **abono a capital del avance**, no solo a la cuota mensual. Esto coincide con la lógica de Bancolombia: si el cliente paga más que el Pago Mínimo del extracto, el sobrante puede aplicarse como abono a capital de las deudas vivas (avances/diferidas) según la jerarquía interna del banco.
 
 > **Nota técnica:** este comportamiento ya está modelado en nuestro motor de `abono_capital` (`backend/routes/abonoCapital.js`), que distribuye el sobrante entre compras → avances → diferidas. La aplicación específica del banco puede diferir, pero es un detalle menor de presentación.
 
@@ -132,22 +132,22 @@ La diferencia ($310.000,64) sugiere que parte del pago del cliente se aplicó co
 - Toda la operativa internacional vive en el extracto USD.
 - La tabla de tasas USD lista solo: `Compra Internacional`, `Avance Internacional`, `Mora` (todas con la misma MV del ciclo).
 - Se ven dos categorías:
-  - **1/1 (no diferidas):** Apple, Uber, Hoyoverse — cuota 1 = total. Si se paga al vencimiento → 0% efectivo.
-  - **2-36 cuotas (diferidas):** Apple a 36 cuotas — cuota = capital puro; interés al ciclo siguiente.
+  - **1/1 (no diferidas):** SUSCRIPCION DIGITAL, TRANSPORTE DEMO, JuegoWebB — cuota 1 = total. Si se paga al vencimiento → 0% efectivo.
+  - **2-36 cuotas (diferidas):** SUSCRIPCION DIGITAL a 36 cuotas — cuota = capital puro; interés al ciclo siguiente.
 
 ### 6.2 Cargo "INTERESES CORRIENTES" en USD
 
 | Ciclo | Cargo USD | Comentario |
 |-------|-----------|------------|
 | 1     | $0,00 | Saldo anterior $0 → no hay base sobre qué cobrar |
-| 2     | $0,00 | Saldo anterior USD ($24,02) se pagó completo → cero intereses |
-| 3     | $0,00 | Saldo anterior USD ($12) se pagó completo → cero intereses |
+| 2     | $0,00 | Saldo anterior USD ($24,60) se pagó completo → cero intereses |
+| 3     | $0,00 | Saldo anterior USD ($13) se pagó completo → cero intereses |
 
 > **Observación:** en los 3 ciclos analizados, el cliente pagó el saldo USD completo a tiempo. Por eso nunca se generó interés USD (revolving). En Mastercard sí vimos casos donde el saldo USD quedó parcial y entonces el banco cobró interés en el siguiente ciclo. Misma regla aplicada — solo no se observó porque el pago fue puntual.
 
 ### 6.3 NO existe el cargo `INT INTL` estilo Visa
 
-Igual que en Mastercard, las compras internacionales no producen un cargo intercalado en el extracto COP. Lo que sí ocurre es que las compras procesadas como internacionales (Apple, Uber, Hoyoverse) caen al extracto USD. **El usuario las paga en USD** (o COP convertidos a la TRM del día de pago).
+Igual que en Mastercard, las compras internacionales no producen un cargo intercalado en el extracto COP. Lo que sí ocurre es que las compras procesadas como internacionales (SUSCRIPCION DIGITAL, TRANSPORTE DEMO, JuegoWebB) caen al extracto USD. **El usuario las paga en USD** (o COP convertidos a la TRM del día de pago).
 
 Esto valida la regla actual del código:
 - `aplicaIntInternacional('Bancolombia', 'American Express')` → `false` ✓
@@ -176,13 +176,13 @@ Pago Mínimo COP =
 
 | Concepto | Valor |
 |----------|-------|
-| Cuota transacciones del mes | $1.953.230,92 |
+| Cuota transacciones del mes | $1.887.415,12 |
 | Cuota transacciones anteriores | $0 |
-| Cuota avances (separado) | $125.000 |
-| Intereses corrientes | $14.649,72 |
+| Cuota avances (separado) | $140.000 |
+| Intereses corrientes | $13.480,52 |
 | Otros cargos | (en este ciclo, el banco incluyó la comisión $6.500 dentro de "Cuota transacciones del mes") |
-| **Suma** | **$2.092.880,64** |
-| **Pago Mínimo extracto** | **$2.092.881,00** |
+| **Suma** | **$2.040.895,64** |
+| **Pago Mínimo extracto** | **$2.040.896,00** |
 
 Diferencia de $0,36 → redondeo aceptable. ✓
 
@@ -190,13 +190,13 @@ Diferencia de $0,36 → redondeo aceptable. ✓
 
 | Concepto | Valor |
 |----------|-------|
-| Cuota transacciones del mes | $1.281.219,00 |
-| Cuota transacciones anteriores | $168.230,50 |
+| Cuota transacciones del mes | $1.352.480,00 |
+| Cuota transacciones anteriores | $174.615,25 |
 | Cuota avances | $0 |
-| Intereses corrientes | $68.663,85 |
+| Intereses corrientes | $71.925,10 |
 | Otros cargos | $6.500 (esta vez sí separó la comisión de avance) |
-| **Suma** | **$1.524.613,35** |
-| **Pago Mínimo extracto** | **$1.524.614,00** |
+| **Suma** | **$1.605.520,35** |
+| **Pago Mínimo extracto** | **$1.605.521,00** |
 
 Diferencia de $0,65 → redondeo aceptable. ✓
 
@@ -283,13 +283,13 @@ Diferencia de $0,65 → redondeo aceptable. ✓
 
 1. **Comisión de avance estable en Amex** ($6.500 en los dos avances vistos), mientras que en Mastercard observamos variabilidad ($6.500–$6.840). Posible explicación: la categoría de tarjeta (Amex vs Mastercard Platinum) puede tener tarifas distintas, y dentro de la misma categoría puede variar por monto del avance. Es un dato a tener en cuenta para una calculadora de avances futura.
 
-2. **Cuota fraccionada con redondeo conservador**: en Amex `APPLE.COM/BILL $11,57 / 36 = 0,3214` se redondea a `$0,32` (favor banco), mientras que el saldo restante `11,57 - 0,32 = 11,25` cuadra con el saldo pendiente mostrado. Este redondeo "hacia abajo" en la cuota es consistente con lo visto en Mastercard.
+2. **Cuota fraccionada con redondeo conservador**: en Amex `SUSCRIPCION DIGITAL $12,11 / 36 = 0,3364` se redondea a `$0,33` (favor banco), mientras que el saldo restante `12,11 - 0,33 = 11,78` cuadra con el saldo pendiente mostrado. Este redondeo "hacia abajo" en la cuota es consistente con lo visto en Mastercard.
 
 3. **Comisión de avance presentada flexiblemente**: el banco a veces la mete en "Cuota transacciones del mes" y a veces en "Otros cargos" (mismo extracto, distinta línea según decisión interna del editor del PDF). Nuestro motor la modela como `comision` en la cuota 1 del avance, lo cual la captura correctamente sin importar dónde la pongan.
 
-4. **Hoyoverse (HOYOVERSE)** aparece en USD con `VR MONEDA ORIG 4.9 SGP` (dólares de Singapur). Esto confirma que el sufijo `VR MONEDA ORIG` en Mastercard/Amex puede ser diferentes monedas (FIN, SGP, USA), no solo USD. La red Amex/Mastercard convierte primero a USD antes de presentarlo en el extracto. En Visa, ese paso intermedio no existe — todo se convierte directo a COP.
+4. **JuegoWebB (JUEGOWEBB)** aparece en USD con `VR MONEDA ORIG 5.4 SGP` (dólares de Singapur). Esto confirma que el sufijo `VR MONEDA ORIG` en Mastercard/Amex puede ser diferentes monedas (FIN, SGP, USA), no solo USD. La red Amex/Mastercard convierte primero a USD antes de presentarlo en el extracto. En Visa, ese paso intermedio no existe — todo se convierte directo a COP.
 
-5. **Compras COP de comercios "intl" caen al extracto USD en Amex**: APPLE.COM/BILL pagado en COP $44.900 aparece como $11,50 USD con `VR MONEDA ORIG 44900.0 USA` en el extracto USD. En Visa, esa misma transacción aparecería en el extracto COP marcada con tasa MV. Esto lo confirma una vez más: la decisión de qué se considera "internacional" es de la **red de la franquicia** (Amex / Mastercard / Visa), no del banco.
+5. **Compras COP de comercios "intl" caen al extracto USD en Amex**: SUSCRIPCION DIGITAL pagado en COP $42.500 aparece como $10,80 USD con `VR MONEDA ORIG 42500.0 USA` en el extracto USD. En Visa, esa misma transacción aparecería en el extracto COP marcada con tasa MV. Esto lo confirma una vez más: la decisión de qué se considera "internacional" es de la **red de la franquicia** (Amex / Mastercard / Visa), no del banco.
 
 ---
 
@@ -299,9 +299,9 @@ Diferencia de $0,65 → redondeo aceptable. ✓
 
 | Ciclo | Saldo COP corte | Saldo USD corte | Pago Mínimo COP | Pago Mínimo USD |
 |-------|-----------------|-----------------|-----------------|-----------------|
-| 1 (ago-sep 2025)  | $862.514    | $25  | $862.514    | $25 |
-| 2 (sep-oct 2025)  | $4.967.881  | $12  | $2.092.881  | $1  |
-| 3 (oct-nov 2025)  | $5.083.915  | $12  | $1.524.614  | $1  |
+| 1 (ago-sep 2025)  | $915.230    | $25  | $915.230    | $25 |
+| 2 (sep-oct 2025)  | $5.214.660  | $13  | $2.040.896  | $1  |
+| 3 (oct-nov 2025)  | $5.360.140  | $13  | $1.605.521  | $1  |
 
 ### Tasas observadas por ciclo
 

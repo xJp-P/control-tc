@@ -16,8 +16,8 @@ Mastercard genera **dos extractos físicos por ciclo**, uno para cada moneda —
 
 | Extracto         | Qué incluye                                                                                       | Pago en                |
 |------------------|---------------------------------------------------------------------------------------------------|------------------------|
-| **Estado de cuenta en PESOS** | Compras nacionales (incluso de "procesadores intl" como Apple, Rappi, MercadoPago si fueron facturadas en COP), avances en COP, diferidas en COP, comisiones | COP                    |
-| **Estado de cuenta en DOLARES** | Compras y avances clasificados como internacionales (la red Mastercard los devuelve marcados en USD), incluyendo Apple, Habbo, PayPal, etc. | USD (o COP a tasa del día de pago) |
+| **Estado de cuenta en PESOS** | Compras nacionales (incluso de "procesadores intl" como SUSCRIPCION DIGITAL, DOMICILIOS DEMO, PASARELA PAGOS DEMO si fueron facturadas en COP), avances en COP, diferidas en COP, comisiones | COP                    |
+| **Estado de cuenta en DOLARES** | Compras y avances clasificados como internacionales (la red Mastercard los devuelve marcados en USD), incluyendo SUSCRIPCION DIGITAL, JuegoWebA, COMERCIO DEMO 1, etc. | USD (o COP a tasa del día de pago) |
 
 Cada extracto tiene su propio:
 - Periodo facturado (mismas fechas en ambos)
@@ -54,10 +54,10 @@ Cada extracto tiene su propio:
 
 ### 3.2 En USD (extracto en DOLARES)
 - También aparecen como `1/1` con tasa MV indicada (ej. `1.8781% 25.0172%`).
-- La tasa **NO se cobra** durante el primer ciclo si la compra se paga a tiempo (verificado: pago de USD 33 en extracto 1 saldó las HabboES, no aparecen intereses cobrados).
-- Algunas compras tienen una línea adicional `VR MONEDA ORIG <valor> USA` (ej. `VR MONEDA ORIG 44900.0 USA`). Indica el valor original en otra moneda — la red Mastercard la convirtió a USD antes de presentarla. Se observa que cuando el comercio es Apple Colombia o similar, el valor original suele coincidir con el cargo COP que aparecería en otra tarjeta no-dual.
+- La tasa **NO se cobra** durante el primer ciclo si la compra se paga a tiempo (verificado: pago de USD 28 en extracto 1 saldó las JuegoWebA, no aparecen intereses cobrados).
+- Algunas compras tienen una línea adicional `VR MONEDA ORIG <valor> USA` (ej. `VR MONEDA ORIG 39900.0 USA`). Indica el valor original en otra moneda — la red Mastercard la convirtió a USD antes de presentarla. Se observa que cuando el comercio es SUSCRIPCION DIGITAL o similar, el valor original suele coincidir con el cargo COP que aparecería en otra tarjeta no-dual.
 
-> **Implicación:** los procesadores como Apple, Habbo, PayPal, Hoyoverse aparecen en el extracto USD para Mastercard. Esto difiere de Visa, donde Apple y Rappi aparecen en COP con `es_internacional = 1`.
+> **Implicación:** los procesadores como SUSCRIPCION DIGITAL, JuegoWebA, COMERCIO DEMO 1, JuegoWebB aparecen en el extracto USD para Mastercard. Esto difiere de Visa, donde SUSCRIPCION DIGITAL y DOMICILIOS DEMO aparecen en COP con `es_internacional = 1`.
 
 ---
 
@@ -65,24 +65,24 @@ Cada extracto tiene su propio:
 
 ### 4.1 Patrón de cuotas observado
 
-Avance C03536 (`AVANCE SUCURSAL VIRTUAL` $845.000 a 24 cuotas, desembolsado 05/12/2025):
+Avance C10001 (`AVANCE SUCURSAL VIRTUAL` $869.000 a 24 cuotas, desembolsado 03/12/2025):
 
 | Ciclo | Cuota | Valor cuota mostrada | Saldo pendiente al cierre |
 |-------|-------|----------------------|---------------------------|
-| Extracto 2 (17 nov-15 dic) | 1/24 | $35.208,33 | $809.791,67 |
-| Extracto 3 (15 dic-15 ene) | 2/24 | $35.208,33 | $774.583,34 |
-| Extracto 4 (15 ene-15 feb) | 3/24 | $35.208,33 | $739.375,01 |
+| Extracto 2 (17 nov-15 dic) | 1/24 | $36.208,33 | $832.791,67 |
+| Extracto 3 (15 dic-15 ene) | 2/24 | $36.208,33 | $796.583,34 |
+| Extracto 4 (15 ene-15 feb) | 3/24 | $36.208,33 | $760.375,01 |
 
-`$845.000 ÷ 24 = $35.208,33` — la **cuota mostrada en el detalle es CAPITAL puro**.
+`$869.000 ÷ 24 = $36.208,33` — la **cuota mostrada en el detalle es CAPITAL puro**.
 
-Otro caso — diferida `R00891 AMAZON.COM $2.712.990 a 4 cuotas`:
+Otro caso — diferida `R10001 TIENDA ONLINE DEMO $2.545.990 a 4 cuotas`:
 
 | Ciclo | Cuota | Valor cuota | Saldo |
 |-------|-------|-------------|-------|
-| Extracto 2 | 1/4 | $678.247,50 | $2.034.742,50 (implícito) |
-| Extracto 3 | 2/4 | $678.247,50 | $1.147.322,27 |
+| Extracto 2 | 1/4 | $636.497,50 | $1.909.492,50 (implícito) |
+| Extracto 3 | 2/4 | $636.497,50 | $1.076.669,42 |
 
-`$2.712.990 ÷ 4 = $678.247,50` ✓ — capital puro.
+`$2.545.990 ÷ 4 = $636.497,50` ✓ — capital puro.
 
 ### 4.2 Los intereses van como cargo separado
 
@@ -90,9 +90,9 @@ En el extracto en PESOS de los ciclos 2, 3 y 4 aparece un movimiento explícito 
 
 | Ciclo | Movimiento | Valor |
 |-------|------------|-------|
-| 2 (15/12/2025) | `INTERESES CORRIENTES` | $100.769,11 |
-| 3 (15/01/2026) | `INTERESES CORRIENTES` | $239.039,04 |
-| 4 (15/02/2026) | `INTERESES CORRIENTES` | $162.102,25 |
+| 2 (15/12/2025) | `INTERESES CORRIENTES` | $94.310,51 |
+| 3 (15/01/2026) | `INTERESES CORRIENTES` | $221.475,44 |
+| 4 (15/02/2026) | `INTERESES CORRIENTES` | $151.640,18 |
 
 Y el detalle del pago mínimo lista `Intereses corrientes` con esos mismos valores.
 
@@ -100,9 +100,9 @@ Y el detalle del pago mínimo lista `Intereses corrientes` con esos mismos valor
 
 ### 4.3 Diferimiento de la cuota 1
 
-Los avances `C03536`, `C05517`, `C02093`, `C01615` y la diferida `R00891` se desembolsaron dentro del ciclo 2 (entre 21/11 y 05/12). En el extracto 2:
+Los avances `C10001`, `C10002`, `C10003`, `C10004` y la diferida `R10001` se desembolsaron dentro del ciclo 2 (entre 21/11 y 03/12). En el extracto 2:
 - Aparecen en cuota 1 con valor = capital/N.
-- El cargo "Intereses corrientes" del extracto 2 ($100.769,11) **probablemente NO incluye intereses sobre estas cuotas 1**, sino sobre saldos previos no cubiertos.
+- El cargo "Intereses corrientes" del extracto 2 ($94.310,51) **probablemente NO incluye intereses sobre estas cuotas 1**, sino sobre saldos previos no cubiertos.
 
 Esto es consistente con el comportamiento ya conocido de Visa Bancolombia con `difiere_intereses_cuota1=1`: la cuota 1 se factura como capital y los intereses comienzan desde la cuota 2.
 
@@ -128,10 +128,10 @@ Esto es consistente con el comportamiento ya conocido de Visa Bancolombia con `d
 
 | Movimiento | Monto | Plazo | Comisión observada |
 |------------|-------|-------|--------------------|
-| C03536 (05/12) | $845.000   | 24 cuotas | $6.840 |
-| C05517 (01/12) | $500.000   | 24 cuotas | $6.500 |
-| C02093 (26/11) | $3.800.000 | 24 cuotas | $6.500 |
-| C01615 (25/11) | $3.261.904 | 24 cuotas | (no aparece comisión separada en el extracto, posible error de extracción) |
+| C10001 (03/12) | $869.000   | 24 cuotas | $6.920 |
+| C10002 (28/11) | $612.000   | 24 cuotas | $6.580 |
+| C10003 (24/11) | $3.450.000 | 24 cuotas | $6.580 |
+| C10004 (21/11) | $2.987.450 | 24 cuotas | (no aparece comisión separada en el extracto, posible error de extracción) |
 
 - Plazo estándar de avance: **24 cuotas** (igual que Visa).
 - La comisión se factura como movimiento separado el mismo día del avance (`COMISION AVANCE SUCURSAL`).
@@ -145,26 +145,26 @@ Esto es consistente con el comportamiento ya conocido de Visa Bancolombia con `d
 - Toda la operativa va por el extracto en DOLARES.
 - La tabla de tasas USD sólo lista: `Compra Internacional`, `Avance Internacional`, `Mora` — todas con la misma MV del ciclo.
 - Se ven los siguientes tipos:
-  - Compras 1/1 (Habbo, Hoyoverse, Apple, PayPal): si se pagan al vencimiento → 0% efectivo.
-  - Compras a cuotas (Apple a 12 cuotas, Apple a 36 cuotas): comportamiento idéntico al COP — cuota = capital, intereses agregados aparte.
+  - Compras 1/1 (JuegoWebA, JuegoWebB, SUSCRIPCION DIGITAL, COMERCIO DEMO 1): si se pagan al vencimiento → 0% efectivo.
+  - Compras a cuotas (SUSCRIPCION DIGITAL a 12 cuotas, SUSCRIPCION DIGITAL a 36 cuotas): comportamiento idéntico al COP — cuota = capital, intereses agregados aparte.
 
 ### 6.2 Cargo "INTERESES CORRIENTES" en USD
 
 | Ciclo | Cargo USD | Comentario |
 |-------|-----------|------------|
-| 2 (15/12/2025) | $0,00     | Saldo anterior del ciclo 1 fue $32,97 y se pagó completo → cero intereses |
-| 3 (15/01/2026) | $40,85    | Saldo anterior del ciclo 2 fue $1.262,89 y sólo se pagó $309 → genera interés sobre el saldo restante |
-| 4 (15/02/2026) | $16,00    | Saldo anterior del ciclo 3 fue $1.084,88 y se pagó $388 → interés sobre lo no cubierto |
+| 2 (15/12/2025) | $0,00     | Saldo anterior del ciclo 1 fue $28,45 y se pagó completo → cero intereses |
+| 3 (15/01/2026) | $37,10    | Saldo anterior del ciclo 2 fue $1.147,60 y sólo se pagó $274 → genera interés sobre el saldo restante |
+| 4 (15/02/2026) | $14,20    | Saldo anterior del ciclo 3 fue $982,35 y se pagó $351 → interés sobre lo no cubierto |
 
 **Hipótesis del cálculo:** `intereses_USD ≈ saldo_no_pagado × tasa_MV`. Verificación rápida:
-- Ciclo 3: saldo no cubierto = 1.262,89 − 309 = $953,89 → 953,89 × 0.018781 ≈ $17,91. **No cuadra** con $40,85.
-- Si fuera sobre el saldo total al cierre anterior: 1.262,89 × 0.018781 ≈ $23,72. **Tampoco cuadra**.
+- Ciclo 3: saldo no cubierto = 1.147,60 − 274 = $873,60 → 873,60 × 0.018781 ≈ $16,41. **No cuadra** con $37,10.
+- Si fuera sobre el saldo total al cierre anterior: 1.147,60 × 0.018781 ≈ $21,55. **Tampoco cuadra**.
 
 > ⚠️ La fórmula exacta del cobro de intereses USD requiere más datos (días, fecha de pago real, prorrateo). Anotamos el patrón cualitativo: **se cobran intereses sólo cuando el saldo no se paga completo, y la magnitud crece con el saldo no cubierto**.
 
 ### 6.3 NO existe el cargo `INT INTL` estilo Visa
 
-A diferencia de Visa Bancolombia, donde compras como `RAPPI`, `APPLE.COM`, `MERCADOPAGO` aparecen en el extracto en COP marcadas como internacionales y generan un interés mensual proporcional `valor × tasa × dias/30` desde la primera cuota, en **Mastercard estas compras son procesadas vía la red Mastercard como USD** y aparecen en el extracto de DOLARES. El usuario las paga directamente en USD (o COP convertidos a tasa del día de pago).
+A diferencia de Visa Bancolombia, donde compras como `DOMICILIOS DEMO`, `SUSCRIPCION DIGITAL`, `PASARELA PAGOS DEMO` aparecen en el extracto en COP marcadas como internacionales y generan un interés mensual proporcional `valor × tasa × dias/30` desde la primera cuota, en **Mastercard estas compras son procesadas vía la red Mastercard como USD** y aparecen en el extracto de DOLARES. El usuario las paga directamente en USD (o COP convertidos a tasa del día de pago).
 
 Esto valida la regla actual del código:
 - `aplicaIntInternacional(banco, franquicia)` retorna `false` para Bancolombia Mastercard ✓
@@ -195,16 +195,16 @@ Pago Mínimo COP =
 
 | Concepto | Valor |
 |----------|-------|
-| Cuota transacciones del mes | $5.032.379,50 |
-| Cuota transacciones anteriores | $350.287,66 |
+| Cuota transacciones del mes | $4.688.240,50 |
+| Cuota transacciones anteriores | $324.115,26 |
 | Cuota avances | (vacío) |
 | Intereses de mora | $0 |
-| Intereses corrientes | $100.769,11 |
-| Otros cargos | $26.340 |
+| Intereses corrientes | $94.310,51 |
+| Otros cargos | $26.660 |
 | En mora | $0 |
 | A favor | $0 |
-| **Suma**           | **$5.509.776,27** |
-| **Pago Mínimo extracto** | **$5.509.777,00** |
+| **Suma**           | **$5.133.326,27** |
+| **Pago Mínimo extracto** | **$5.133.327,00** |
 
 Diferencia de $0,73 — redondeo aceptable. ✓
 
@@ -212,11 +212,11 @@ Diferencia de $0,73 — redondeo aceptable. ✓
 
 | Concepto | Valor |
 |----------|-------|
-| Cuota transacciones del mes | $9.089.501,00 |
-| Cuota transacciones anteriores | $678.247,50 + $350.287,66 = $1.028.535,16 |
-| Intereses corrientes | $239.039,04 |
-| **Suma aprox.** | **$10.357.075,20** |
-| **Pago Mínimo extracto** | **$10.357.076,00** |
+| Cuota transacciones del mes | $8.472.180,00 |
+| Cuota transacciones anteriores | $636.497,50 + $324.115,26 = $960.612,76 |
+| Intereses corrientes | $221.475,44 |
+| **Suma aprox.** | **$9.654.268,20** |
+| **Pago Mínimo extracto** | **$9.654.269,00** |
 
 Cuadra. ✓
 
@@ -249,7 +249,7 @@ Validado en los ciclos 2, 3 y 4 con diferencias menores a USD 1 (redondeo).
 | Compras a cuotas: cuota N≥2 cobra intereses | ✅ Sí (vía cargo agregado "Intereses corrientes") |
 | Cargo "INT INTL" sobre compras intl en COP | ❌ No existe (caen al extracto USD) |
 | Avances: plazo estándar | 24 cuotas |
-| Avances: cobran comisión separada | ✅ Sí (variable, ~$6.500-$6.840) |
+| Avances: cobran comisión separada | ✅ Sí (variable, ~$6.580-$6.920) |
 | Tasa MV cambia ciclo a ciclo | ✅ Sí (1.8311% – 1.8895% en los datos vistos) |
 
 ---
@@ -259,13 +259,13 @@ Validado en los ciclos 2, 3 y 4 con diferencias menores a USD 1 (redondeo).
 | Aspecto | Bancolombia **Visa** | Bancolombia **Mastercard** |
 |---------|----------------------|----------------------------|
 | **Estructura de extracto** | Único (COP) — las compras USD se convierten a COP automáticamente | **Dual**: COP + USD por separado |
-| **Compras internacionales en COP (Apple, Rappi, MercadoPago)** | Aparecen en COP con `es_internacional=1` y generan **INT INTL** mensual `valor × tasa × días/30` | Aparecen en el extracto USD; no existe el rubro `INT INTL` |
+| **Compras internacionales en COP (SUSCRIPCION DIGITAL, DOMICILIOS DEMO, PASARELA PAGOS DEMO)** | Aparecen en COP con `es_internacional=1` y generan **INT INTL** mensual `valor × tasa × días/30` | Aparecen en el extracto USD; no existe el rubro `INT INTL` |
 | **Flag `aplicaIntInternacional`** | `true` (Bancolombia + no-dual) | `false` (Bancolombia pero dual) |
 | **Flag `isDualExtracto`** | `false` | `true` |
 | **Pago mínimo USD** | N/A (no hay extracto USD) | Línea independiente con su propio total |
 | **Cuota 1 de diferidas** | Capital puro si `difiere_intereses_cuota1=1`; los intereses de la cuota 1 se acumulan y se facturan en cuota 2 (modelo "saldo facturado") | Capital puro siempre; los intereses van al cargo agregado "Intereses corrientes" del ciclo, calculado sobre saldos vigentes |
 | **Avances: modelo de intereses** | "Saldo facturado": `interes(N) = (saldoInicio + cuotaCapital) × tasaMV`, validado vs extracto Visa Platinum abr 2026 | Cuota mostrada = capital/N puro; los intereses van al cargo agregado. Modelo subyacente posiblemente similar pero requiere otro ciclo para reconciliar al peso |
-| **Comisión de avance** | Se factura una sola vez al desembolso | Igual: comisión separada (~$6.500–$6.840), día del avance |
+| **Comisión de avance** | Se factura una sola vez al desembolso | Igual: comisión separada (~$6.580–$6.920), día del avance |
 | **Tasa Compra a 1 cuota** | 0% MV | 0% MV ✓ |
 | **Variación de tasas** | Igual: tasa MV se ajusta cada ciclo según política Bancolombia | Igual |
 
@@ -280,7 +280,7 @@ Validado en los ciclos 2, 3 y 4 con diferencias menores a USD 1 (redondeo).
 4. ✅ **Vista del extracto Mastercard** — el desglose ya muestra capital y los intereses corrientes agrupados (línea "Intereses Internacionales" / "Intereses Compras USD") en lugar de mezclarlos por línea.
 
 ### 10.2 Pendientes para una iteración futura (requieren más datos)
-1. **Modelo de revolving USD**: el banco cobra interés sobre el saldo USD que NO se pagó del extracto anterior (ver §6.2: ciclo 3 cobró $40,85 sobre saldo previo no cubierto). Nuestra app aún no rastrea el saldo USD pendiente entre extractos. Para implementarlo se requiere:
+1. **Modelo de revolving USD**: el banco cobra interés sobre el saldo USD que NO se pagó del extracto anterior (ver §6.2: ciclo 3 cobró $37,10 sobre saldo previo no cubierto). Nuestra app aún no rastrea el saldo USD pendiente entre extractos. Para implementarlo se requiere:
    - Persistir `pago_minimo_usd` y `monto_pagado_usd` por extracto (similar a `intereses_intl`).
    - En el cálculo del nuevo extracto, agregar `interesesRevolvingUsd = saldoNoPagadoExtractoAnterior × tasaMV` aproximado.
 2. **Ciclo 5 de Mastercard** para confirmar el modelo de cuotas N≥2 en COP — específicamente la transición cuota 2 → 3 sobre las mismas diferidas, comparando `Intereses Corrientes` ciclo a ciclo.
@@ -293,18 +293,18 @@ Validado en los ciclos 2, 3 y 4 con diferencias menores a USD 1 (redondeo).
 
 | Ciclo | Saldo COP corte | Saldo USD corte | Pago Mínimo COP | Pago Mínimo USD |
 |-------|-----------------|-----------------|-----------------|-----------------|
-| 1 (03-17 nov)   | $0          | $33     | $0          | $1   |
-| 2 (17 nov-15 dic) | $15.391.964 | $1.263  | $5.509.777  | $177 |
-| 3 (15 dic-15 ene) | $19.345.177 | $1.085  | $10.357.076 | $252 |
-| 4 (15 ene-15 feb) | $8.762.513  | $875    | $4.390.340  | $275 |
+| 1 (03-17 nov)   | $0          | $28     | $0          | $1   |
+| 2 (17 nov-15 dic) | $14.028.735 | $1.148  | $5.133.327  | $158 |
+| 3 (15 dic-15 ene) | $17.664.320 | $982    | $9.654.269  | $228 |
+| 4 (15 ene-15 feb) | $7.985.640  | $790    | $4.012.580  | $242 |
 
 ### Pagos / abonos por ciclo
 
 | Ciclo | Pagos COP    | Pagos USD |
 |-------|--------------|-----------|
-| 1     | $14.150      | $0        |
-| 2     | $209.172     | $165      |
-| 3     | $5.509.777   | $309      |
-| 4     | $14.857.076  | $388      |
+| 1     | $12.870      | $0        |
+| 2     | $187.430     | $142      |
+| 3     | $5.133.327   | $274      |
+| 4     | $14.154.269  | $351      |
 
-(Los abonos COP del ciclo 3 cubren exactamente el pago mínimo del ciclo 2; los abonos del ciclo 4 cubren ~$10.36M del pago mínimo del ciclo 3.)
+(Los abonos COP del ciclo 3 cubren exactamente el pago mínimo del ciclo 2; los abonos del ciclo 4 cubren ~$9.65M del pago mínimo del ciclo 3.)
