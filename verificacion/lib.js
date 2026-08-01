@@ -131,6 +131,44 @@ function limpiarTmp() {
   catch (e) { return false; }
 }
 
+// ─── Cliente HTTP contra la app real ─────────────────────────────────────────
+// Vivian en detectores/escrituras.js, que era su unico usuario. Suben aqui porque ahora hay dos
+// detectores que EJECUTAN handlers (R6 escribe en la BD, R7 ejercita la conciliacion), y duplicar
+// el andamiaje es la via mas comoda para que las dos copias se separen sin que nadie lo note.
+function pedir(port, metodo, ruta, cuerpo, msTimeout) {
+  return new Promise((resolve) => {
+    const datos = cuerpo ? Buffer.from(JSON.stringify(cuerpo), 'utf8') : null;
+    const req = require('http').request({
+      host: '127.0.0.1', port, path: ruta, method: metodo,
+      headers: datos ? { 'Content-Type': 'application/json', 'Content-Length': datos.length } : {},
+    }, (res) => {
+      let b = '';
+      res.on('data', d => { b += d; });
+      res.on('end', () => { let j = null; try { j = JSON.parse(b); } catch (e) {} resolve({ s: res.statusCode, j, b }); });
+    });
+    req.setTimeout(msTimeout || 8000, () => { req.destroy(); resolve({ s: 'TIMEOUT', j: null, b: '' }); });
+    req.on('error', (e) => resolve({ s: 'ERROR', j: null, b: String(e.message) }));
+    if (datos) req.write(datos);
+    req.end();
+  });
+}
+
+// Abre la app sobre una copia FRESCA de la BD y ejecuta `fn(port, db)` con un servidor ya escuchando.
+function conApp(raiz, sufijo, fn) {
+  const createApp = require(path.join(raiz, 'backend', 'app.js'));
+  // El nombre de la copia incluye el arbol: sin esto, la corrida real y la del control negativo
+  // reutilizan los MISMOS archivos .db mientras las conexiones de la primera siguen abiertas, y el
+  // control negativo "detecta" por un disk I/O error en vez de por el defecto que se le inyecto.
+  const bd = copiarBd('W' + sufijo + '_' + path.basename(raiz));
+  const { app, db } = createApp(bd.destino);
+  return new Promise((resolve, reject) => {
+    const srv = app.listen(0, '127.0.0.1', async () => {
+      try { const r = await fn(srv.address().port, db); srv.close(); resolve(r); }
+      catch (e) { srv.close(); reject(e); }
+    });
+  });
+}
+
 // ─── Utilidades de lectura ───────────────────────────────────────────────────
 function leer(p) { return fs.readFileSync(p, 'utf8'); }
 
@@ -246,6 +284,7 @@ module.exports = {
   RAIZ, TMP,
   congelarReloj, verificarCongeladoATiempo, relojCongelado: () => relojCongelado,
   copiarArbol, copiarBd, limpiarTmp,
+  pedir, conApp,
   hashArchivo, hashTexto, huellaArbol, leer, listarJs, analizarIndexHtml,
   Registro, resultado,
 };

@@ -12,42 +12,9 @@
 
 const fs = require('fs');
 const path = require('path');
-const http = require('http');
-const { resultado, copiarBd, leer } = require('../lib');
-
-function pedir(port, metodo, ruta, cuerpo) {
-  return new Promise((resolve) => {
-    const datos = cuerpo ? Buffer.from(JSON.stringify(cuerpo), 'utf8') : null;
-    const req = http.request({
-      host: '127.0.0.1', port, path: ruta, method: metodo,
-      headers: datos ? { 'Content-Type': 'application/json', 'Content-Length': datos.length } : {},
-    }, (res) => {
-      let b = '';
-      res.on('data', d => { b += d; });
-      res.on('end', () => { let j = null; try { j = JSON.parse(b); } catch (e) {} resolve({ s: res.statusCode, j, b }); });
-    });
-    req.setTimeout(8000, () => { req.destroy(); resolve({ s: 'TIMEOUT', j: null, b: '' }); });
-    req.on('error', (e) => resolve({ s: 'ERROR', j: null, b: String(e.message) }));
-    if (datos) req.write(datos);
-    req.end();
-  });
-}
-
-// Abre la app sobre una copia FRESCA y ejecuta `fn` con un cliente HTTP ya listo.
-async function conApp(raiz, sufijo, fn) {
-  const createApp = require(path.join(raiz, 'backend', 'app.js'));
-  // El nombre de la copia incluye el arbol: sin esto, la corrida real y la del control negativo
-  // reutilizan los MISMOS archivos .db mientras las conexiones de la primera siguen abiertas, y el
-  // control negativo "detecta" por un disk I/O error en vez de por el defecto que se le inyecto.
-  const bd = copiarBd('W' + sufijo + '_' + path.basename(raiz));
-  const { app, db } = createApp(bd.destino);
-  return await new Promise((resolve, reject) => {
-    const srv = app.listen(0, '127.0.0.1', async () => {
-      try { const r = await fn(srv.address().port, db); srv.close(); resolve(r); }
-      catch (e) { srv.close(); reject(e); }
-    });
-  });
-}
+// `pedir` y `conApp` viven ahora en lib.js: R7 (conciliacion) tambien ejecuta handlers y tener dos
+// copias del andamiaje HTTP es la via mas comoda para que se separen sin que nadie lo note.
+const { resultado, leer, pedir, conApp } = require('../lib');
 
 const R6 = {
   id: 'R6',

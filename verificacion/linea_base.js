@@ -26,7 +26,18 @@ module.exports = {
   // 67 declaraciones en columna 0 (51 function + 3 async function + 12 const + 1 let)
   // + 1 sentencia de bootstrap (ReactDOM.createRoot(...).render(e(App))) = 68 unidades.
   // Es EXACTO: mover codigo no crea ni destruye simbolos de nivel superior.
+  //
+  // LAS DOS MITADES DE ESE CONTRATO LAS COMPRUEBAN DETECTORES DISTINTOS, y durante un tiempo solo
+  // existio una: F4 y F5 recorren la base y comprueban que cada simbolo siga en el arbol ("no
+  // destruye"), pero NINGUNO hacia el camino inverso, asi que un simbolo AÑADIDO o DUPLICADO
+  // pasaba invisible ("no crea" no lo implementaba nadie). Peor con las funciones: en scripts
+  // clasicos una `function` se puede redeclarar sin error, asi que F2 -que existe para cazar la
+  // colision de `const e`- tampoco la ve, y F1 solo tiene cotas INFERIORES de volumen. F6 cierra
+  // ese lado contando las declaraciones que hay REALMENTE en el arbol.
   EXACTO_SIMBOLOS: 68,
+  // Lo que cuenta F6: declaraciones de nivel superior halladas en el arbol, sin el bootstrap (que
+  // es una sentencia, no una declaracion; a ese lo cubre F3 EJECUTANDO la carga).
+  EXACTO_DECLARACIONES: 67,
 
   // Tolerancia de tamano POR SIMBOLO. Un refactor que solo MUEVE cumple esto por definicion;
   // un stub, un borrado o una "mejora" colada, no. Son 2 lineas para absorber el ajuste de
@@ -76,6 +87,14 @@ module.exports = {
   // al MONTAR, o sea al arrancar la app entera. Un router escrito copiando la cabecera
   // equivocada revienta en casa del usuario, no en la suite.
   FACTORIES_UN_ARGUMENTO: ['calculadora.js', 'config.js', 'dashboard.js', 'proyecciones.js'],
+
+  // ─── Conciliacion IA ───────────────────────────────────────────────────────
+  // Asertos minimos de R7. El handler POST /api/ia/analizar tiene NUEVE bloques deterministas y
+  // seis de ellos estan envueltos en su propio try/catch que traga la excepcion: un ReferenceError
+  // ahi devuelve 200 con el bloque silenciado. Por eso R7 exige la huella observable de cada uno y
+  // este piso impide que el detector se quede corto sin avisar (un escenario no encontrado, un 500
+  // que corta la cadena de comprobaciones).
+  PISO_ASERTOS_IA: 13,
 
   // ─── Base de datos ─────────────────────────────────────────────────────────
   // grep -c 'CREATE TABLE IF NOT EXISTS' backend/config/db.js  -> 20

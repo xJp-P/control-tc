@@ -253,7 +253,9 @@ const RUTA_SIMBOLOS = path.join(__dirname, '..', 'simbolos_base.json');
 
 const F4 = {
   id: 'F4',
-  nombre: 'Manifiesto de simbolos por identificador (68 exactos)',
+  // El rotulo decia "(68 exactos)" mientras la unica comparacion numerica era contra 67, y esa
+  // yuxtaposicion con "vistos=67 esperados=67" hacia parecer inconsistente una salida correcta.
+  nombre: 'Manifiesto de simbolos por identificador (67 + el bootstrap, que cubre F3)',
   medir(raiz) {
     const notas = [];
     // Un archivo de la suite AUSENTE es un FALLO, jamas un exito por omision.
@@ -400,7 +402,80 @@ const F5 = {
   },
 };
 
-module.exports = [F1, F2, F3, F4, F5];
+// ─── F6: el arbol no tiene simbolos de MAS (sobrantes ni duplicados) ────────
+// LA MITAD QUE FALTABA DEL CONTRATO. linea_base.js declara que el conteo de simbolos es EXACTO
+// porque "mover codigo no crea ni destruye simbolos de nivel superior", pero F4 y F5 solo
+// recorren base -> arbol: comprueban que nada se DESTRUYO. Nadie recorria arbol -> base, asi que
+// un simbolo AÑADIDO o DUPLICADO pasaba invisible.
+//
+// El caso peligroso es el duplicado, porque ningun otro detector puede verlo: en scripts clasicos
+// una `function` se puede redeclarar sin error (F2 solo caza la colision de `const`), F1 tiene
+// cotas inferiores de volumen, y el mapa de F5 es ultima-escritura-gana, asi que una copia
+// colocada en una pieza ANTERIOR a la original queda tapada por el valor de la original. Un
+// refactor que copia en vez de mover es exactamente lo que produce ese estado.
+const F6 = {
+  id: 'F6',
+  nombre: 'El arbol no tiene simbolos de MAS (sobrantes ni duplicados)',
+  medir(raiz) {
+    const notas = [];
+    if (!fs.existsSync(RUTA_SIMBOLOS)) return resultado(false, {}, ['FALLO: falta simbolos_base.json']);
+    const base = JSON.parse(leer(RUTA_SIMBOLOS));
+    const enBase = new Set(base.simbolos.map(s => s.nombre));
+    const { piezas } = piezasEnOrden(raiz);
+
+    const primeraVez = {};
+    const duplicados = [], sobrantes = [];
+    let halladas = 0;
+    for (const p of piezas) {
+      if (!p.fuente) continue;
+      for (const s of medirSimbolos(p.fuente)) {
+        halladas++;
+        if (primeraVez[s.nombre] !== undefined) {
+          duplicados.push(s.nombre + ' (en ' + primeraVez[s.nombre] + ' y en ' + p.nombre + ')');
+        } else {
+          primeraVez[s.nombre] = p.nombre;
+        }
+        if (!enBase.has(s.nombre)) sobrantes.push(s.nombre + ' (en ' + p.nombre + ')');
+      }
+    }
+
+    if (duplicados.length) notas.push('FALLO: ' + duplicados.length + ' simbolos DUPLICADOS entre piezas: ' + duplicados.slice(0, 5).join(' | '));
+    if (sobrantes.length) notas.push('FALLO: ' + sobrantes.length + ' simbolos en el arbol que NO estan en el manifiesto: ' + sobrantes.slice(0, 5).join(' | '));
+    // EXACTO, no un piso: si aparece una declaracion de nivel superior que la base no conoce, o el
+    // refactor la creo (y entonces ya no es "solo movimiento") o el manifiesto se quedo viejo. Las
+    // dos cosas tienen que resolverse a mano, nunca en silencio.
+    if (halladas !== B.EXACTO_DECLARACIONES) {
+      notas.push('FALLO: ESPERADAS ' + B.EXACTO_DECLARACIONES + ' declaraciones de nivel superior, halladas ' + halladas);
+    }
+    return resultado(duplicados.length === 0 && sobrantes.length === 0 && halladas === B.EXACTO_DECLARACIONES,
+      { halladas: halladas, esperadas: B.EXACTO_DECLARACIONES, duplicados: duplicados.length, sobrantes: sobrantes.length }, notas);
+  },
+  defecto: 'se copia una funcion existente en una pieza ANTERIOR a la original (un refactor que copia en vez de mover): ningun otro detector puede verlo',
+  mutar(raiz) {
+    // La copia va en la PRIMERA pieza a proposito. Como el mapa de F5 es ultima-escritura-gana, el
+    // tamano que acaba comparando es el de la declaracion original -que sigue intacta-, asi que F5
+    // no ve nada; F4 tampoco (el identificador existe), ni F2 (redeclarar una function es legal),
+    // ni F1 (sus pisos son cotas inferiores). Si la copia se pusiera en una pieza POSTERIOR, F5 la
+    // cazaria por el cambio de tamano y este control negativo dejaria de ser especifico de F6.
+    const { piezas } = piezasEnOrden(raiz);
+    const conRuta = piezas.filter(p => p.fuente && p.ruta);
+    if (conRuta.length < 2) throw new Error('hacen falta al menos dos piezas con archivo propio para inyectar el duplicado');
+    const primera = conRuta[0];
+    // Se duplica un simbolo declarado en una pieza POSTERIOR a la primera, para que la original
+    // gane en el mapa de F5 y el defecto quede invisible para todos menos para F6.
+    let objetivo = null;
+    for (let i = 1; i < conRuta.length && !objetivo; i++) {
+      for (const s of medirSimbolos(conRuta[i].fuente)) {
+        if (s.tipo === 'function') { objetivo = s.nombre; break; }
+      }
+    }
+    if (!objetivo) throw new Error('no se encontro ninguna funcion en las piezas posteriores para duplicar');
+    fs.writeFileSync(primera.ruta,
+      leer(primera.ruta) + '\nfunction ' + objetivo + '() { return null; }\n', 'utf8');
+  },
+};
+
+module.exports = [F1, F2, F3, F4, F5, F6];
 module.exports.medirSimbolos = medirSimbolos;
 module.exports.piezasEnOrden = piezasEnOrden;
 module.exports.RUTA_SIMBOLOS = RUTA_SIMBOLOS;

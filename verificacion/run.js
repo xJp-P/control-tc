@@ -24,7 +24,8 @@ const DETECTORES = []
   .concat(require('./detectores/frontend'))
   .concat(require('./detectores/backend'))
   .concat(require('./detectores/runtime'))
-  .concat(require('./detectores/escrituras'));
+  .concat(require('./detectores/escrituras'))
+  .concat(require('./detectores/conciliacion'));
 
 async function principal() {
   const L = console.log;
