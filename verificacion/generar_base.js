@@ -80,6 +80,8 @@ if (h.notas.length) console.log('  AVISOS: ' + h.notas.join(' | '));
     generado: B.FECHA_CONGELADA,
     nota: 'Hash por respuesta de los GET inocuos, con el reloj congelado y ciclos explicitos. Si el refactor solo mueve codigo, ninguno puede cambiar. NO regenerar sin una razon aprobada.',
     total: Object.keys(claves).length,
+    // Huella del estado de la BD al generar: si cambia, la referencia caduco por DATOS y no por codigo.
+    datos: runtime.huellaDeDatos(lib.RAIZ, bdG.destino),
     claves,
   }, null, 2) + '\n', 'utf8');
   console.log('golden_base.json: ' + Object.keys(claves).length + ' respuestas' + (vacias ? ' (' + vacias + ' vacias!)' : ''));

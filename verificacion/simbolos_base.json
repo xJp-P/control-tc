@@ -7,211 +7,211 @@
       "nombre": "e",
       "tipo": "const",
       "lineas": 1,
-      "pieza": "<inline>"
+      "pieza": "js/core.js"
     },
     {
       "nombre": "{hooks}",
       "tipo": "destructuring",
       "lineas": 1,
-      "pieza": "<inline>"
+      "pieza": "js/core.js"
     },
     {
       "nombre": "API",
       "tipo": "const",
       "lineas": 1,
-      "pieza": "<inline>"
+      "pieza": "js/core.js"
     },
     {
       "nombre": "TOLERANCIA_PAGO_COP",
       "tipo": "const",
       "lineas": 1,
-      "pieza": "<inline>"
+      "pieza": "js/core.js"
     },
     {
       "nombre": "bandaToleranciaCop",
       "tipo": "function",
       "lineas": 5,
-      "pieza": "<inline>"
-    },
-    {
-      "nombre": "CHANGELOG",
-      "tipo": "const",
-      "lineas": 720,
-      "pieza": "<inline>"
+      "pieza": "js/core.js"
     },
     {
       "nombre": "api",
       "tipo": "async function",
       "lineas": 8,
-      "pieza": "<inline>"
+      "pieza": "js/core.js"
     },
     {
       "nombre": "fmtCOP",
       "tipo": "function",
       "lineas": 6,
-      "pieza": "<inline>"
+      "pieza": "js/formato.js"
     },
     {
       "nombre": "badgeCuotaLabel",
       "tipo": "function",
       "lineas": 4,
-      "pieza": "<inline>"
+      "pieza": "js/formato.js"
     },
     {
       "nombre": "fmtNumInput",
       "tipo": "function",
       "lineas": 12,
-      "pieza": "<inline>"
-    },
-    {
-      "nombre": "MoneyInput",
-      "tipo": "function",
-      "lineas": 31,
-      "pieza": "<inline>"
-    },
-    {
-      "nombre": "ICONS",
-      "tipo": "const",
-      "lineas": 32,
-      "pieza": "<inline>"
-    },
-    {
-      "nombre": "Ico",
-      "tipo": "function",
-      "lineas": 6,
-      "pieza": "<inline>"
+      "pieza": "js/formato.js"
     },
     {
       "nombre": "fmtCOPDec",
       "tipo": "function",
       "lineas": 6,
-      "pieza": "<inline>"
+      "pieza": "js/formato.js"
     },
     {
       "nombre": "fmtCicloLabel",
       "tipo": "function",
       "lineas": 5,
-      "pieza": "<inline>"
+      "pieza": "js/formato.js"
     },
     {
       "nombre": "fmtDate",
       "tipo": "function",
       "lineas": 5,
-      "pieza": "<inline>"
+      "pieza": "js/formato.js"
     },
     {
       "nombre": "fmtUsd",
       "tipo": "function",
       "lineas": 3,
-      "pieza": "<inline>"
-    },
-    {
-      "nombre": "personasTableBimon",
-      "tipo": "function",
-      "lineas": 42,
-      "pieza": "<inline>"
-    },
-    {
-      "nombre": "bimonCard",
-      "tipo": "function",
-      "lineas": 37,
-      "pieza": "<inline>"
+      "pieza": "js/formato.js"
     },
     {
       "nombre": "cicloActual",
       "tipo": "function",
       "lineas": 1,
-      "pieza": "<inline>"
+      "pieza": "js/ciclos.js"
     },
     {
       "nombre": "todayISO",
       "tipo": "function",
       "lineas": 1,
-      "pieza": "<inline>"
+      "pieza": "js/ciclos.js"
     },
     {
       "nombre": "calcCicloLocal",
       "tipo": "function",
       "lineas": 1,
-      "pieza": "<inline>"
+      "pieza": "js/ciclos.js"
     },
     {
       "nombre": "cicloVigente",
       "tipo": "function",
       "lineas": 1,
-      "pieza": "<inline>"
+      "pieza": "js/ciclos.js"
     },
     {
       "nombre": "cicloSiguiente",
       "tipo": "function",
       "lineas": 1,
-      "pieza": "<inline>"
+      "pieza": "js/ciclos.js"
     },
     {
       "nombre": "cicloConCorteFront",
       "tipo": "function",
       "lineas": 1,
-      "pieza": "<inline>"
+      "pieza": "js/ciclos.js"
     },
     {
       "nombre": "corteDeCiclo",
       "tipo": "function",
       "lineas": 1,
-      "pieza": "<inline>"
+      "pieza": "js/ciclos.js"
+    },
+    {
+      "nombre": "ICONS",
+      "tipo": "const",
+      "lineas": 32,
+      "pieza": "js/iconos.js"
+    },
+    {
+      "nombre": "Ico",
+      "tipo": "function",
+      "lineas": 6,
+      "pieza": "js/iconos.js"
+    },
+    {
+      "nombre": "MoneyInput",
+      "tipo": "function",
+      "lineas": 31,
+      "pieza": "js/ui.js"
+    },
+    {
+      "nombre": "personasTableBimon",
+      "tipo": "function",
+      "lineas": 42,
+      "pieza": "js/ui.js"
+    },
+    {
+      "nombre": "bimonCard",
+      "tipo": "function",
+      "lineas": 37,
+      "pieza": "js/ui.js"
     },
     {
       "nombre": "CicloPicker",
       "tipo": "function",
       "lineas": 13,
-      "pieza": "<inline>"
-    },
-    {
-      "nombre": "toastId",
-      "tipo": "let",
-      "lineas": 1,
-      "pieza": "<inline>"
-    },
-    {
-      "nombre": "ToastContainer",
-      "tipo": "function",
-      "lineas": 12,
-      "pieza": "<inline>"
-    },
-    {
-      "nombre": "toast",
-      "tipo": "function",
-      "lineas": 1,
-      "pieza": "<inline>"
-    },
-    {
-      "nombre": "toastErr",
-      "tipo": "function",
-      "lineas": 1,
-      "pieza": "<inline>"
-    },
-    {
-      "nombre": "ConfirmDialog",
-      "tipo": "function",
-      "lineas": 31,
-      "pieza": "<inline>"
-    },
-    {
-      "nombre": "confirmDialog",
-      "tipo": "async function",
-      "lineas": 1,
-      "pieza": "<inline>"
-    },
-    {
-      "nombre": "infoDialog",
-      "tipo": "async function",
-      "lineas": 1,
-      "pieza": "<inline>"
+      "pieza": "js/ui.js"
     },
     {
       "nombre": "Modal",
       "tipo": "function",
       "lineas": 11,
-      "pieza": "<inline>"
+      "pieza": "js/ui.js"
+    },
+    {
+      "nombre": "toastId",
+      "tipo": "let",
+      "lineas": 1,
+      "pieza": "js/avisos.js"
+    },
+    {
+      "nombre": "ToastContainer",
+      "tipo": "function",
+      "lineas": 12,
+      "pieza": "js/avisos.js"
+    },
+    {
+      "nombre": "toast",
+      "tipo": "function",
+      "lineas": 1,
+      "pieza": "js/avisos.js"
+    },
+    {
+      "nombre": "toastErr",
+      "tipo": "function",
+      "lineas": 1,
+      "pieza": "js/avisos.js"
+    },
+    {
+      "nombre": "ConfirmDialog",
+      "tipo": "function",
+      "lineas": 31,
+      "pieza": "js/avisos.js"
+    },
+    {
+      "nombre": "confirmDialog",
+      "tipo": "async function",
+      "lineas": 1,
+      "pieza": "js/avisos.js"
+    },
+    {
+      "nombre": "infoDialog",
+      "tipo": "async function",
+      "lineas": 1,
+      "pieza": "js/avisos.js"
+    },
+    {
+      "nombre": "CHANGELOG",
+      "tipo": "const",
+      "lineas": 720,
+      "pieza": "js/changelog.js"
     },
     {
       "nombre": "GlobalDashboard",

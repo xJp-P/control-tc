@@ -17,6 +17,22 @@ const B = require('../linea_base');
 
 const INDEX = (raiz) => path.join(raiz, 'public', 'index.html');
 
+// Aplica una sustitucion en la pieza que REALMENTE contiene la aguja (index.html o cualquier
+// public/js/*.js). Devuelve false si no la encuentra en ninguna, para que el control negativo
+// falle ruidosamente en vez de mutar la nada.
+function mutarEnAlgunaPieza(raiz, aguja, reemplazo) {
+  const candidatos = [INDEX(raiz)];
+  const dirJs = path.join(raiz, 'public', 'js');
+  if (fs.existsSync(dirJs)) {
+    for (const f of fs.readdirSync(dirJs)) if (f.endsWith('.js')) candidatos.push(path.join(dirJs, f));
+  }
+  for (const p of candidatos) {
+    const src = leer(p);
+    if (src.indexOf(aguja) !== -1) { fs.writeFileSync(p, src.replace(aguja, reemplazo), 'utf8'); return true; }
+  }
+  return false;
+}
+
 // Junta las piezas de JavaScript EN EL ORDEN EN QUE EL NAVEGADOR LAS EJECUTA.
 // Es el orden de las etiquetas en el documento: los <script> clasicos son bloqueantes y
 // secuenciales, asi que ese orden es el contrato real.
@@ -243,11 +259,16 @@ const F4 = {
     if (vistos !== esperados) notas.push('FALLO: ESPERADO ' + esperados + ' simbolos, vistos ' + vistos);
     return resultado(faltan.length === 0 && vistos === esperados, { vistos, esperados, faltan: faltan.length }, notas);
   },
-  defecto: 'se comenta la declaracion de la funcion fmtUsd (un simbolo desaparece sin error de sintaxis)',
+  defecto: 'se renombra la declaracion de fmtUsd alli donde viva (un simbolo desaparece sin error de sintaxis)',
   mutar(raiz) {
-    const p = INDEX(raiz);
-    const html = leer(p);
-    fs.writeFileSync(p, html.replace('function fmtUsd(', 'function fmtUsd_RENOMBRADA_POR_LA_MUTACION('), 'utf8');
+    // La mutacion busca su objetivo en TODAS las piezas, no solo en index.html. Anclarla al archivo
+    // donde el simbolo vivia ayer es la forma de que deje de aplicarse en silencio en cuanto el
+    // refactor lo mueva: paso con este mismo detector al sacar fmtUsd a public/js/formato.js — la
+    // sustitucion no encontraba nada, el arbol "defectuoso" era identico al bueno y F4 se declaraba
+    // invalido sin que nada estuviera mal en el codigo.
+    if (!mutarEnAlgunaPieza(raiz, 'function fmtUsd(', 'function fmtUsd_RENOMBRADA_POR_LA_MUTACION(')) {
+      throw new Error('no se encontro fmtUsd en ninguna pieza: la mutacion no se pudo aplicar');
+    }
   },
 };
 

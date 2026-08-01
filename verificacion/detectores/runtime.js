@@ -245,6 +245,22 @@ function capturar(raiz, rutaBd) {
   });
 }
 
+// Huella del ESTADO DE LOS DATOS que alimentan el corpus. Sirve para separar "el codigo cambio
+// la respuesta" de "los datos de debajo se movieron", que son dos rojos con causas opuestas.
+function huellaDeDatos(raiz, rutaBd) {
+  const { initDb } = require(path.join(raiz, 'backend', 'config', 'db.js'));
+  const db = initDb(rutaBd);
+  const tablas = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all();
+  const partes = [];
+  for (const t of tablas) {
+    const c = db.prepare('SELECT COUNT(*) c FROM "' + t.name + '"').get().c;
+    let mx = '';
+    try { mx = String(db.prepare('SELECT COALESCE(MAX(id),0) m FROM "' + t.name + '"').get().m); } catch (e) { mx = 'n/a'; }
+    partes.push(t.name + '=' + c + '/' + mx);
+  }
+  return hashTexto(partes.join('|'));
+}
+
 const R4 = {
   id: 'R4',
   nombre: 'Golden masters deterministas (A/B en la misma corrida)',
@@ -273,11 +289,27 @@ const R4 = {
     // corpus es DETERMINISTA, pero no que siga siendo el MISMO: si el refactor cambia una
     // respuesta, las dos capturas cambian igual y A/B sigue coincidiendo. Se descubrio con una
     // prueba de mutacion: invertir el ORDER BY de GET /api/compras sobrevivia intacto.
-    let cambiadas = 0;
+    let cambiadas = 0, datosMovidos = false;
     if (!fs.existsSync(RUTA_GOLDEN)) {
       notas.push('FALLO: falta ' + path.basename(RUTA_GOLDEN) + ' (sin referencia no hay golden master, solo un test de determinismo)');
     } else {
       const ref = JSON.parse(leer(RUTA_GOLDEN));
+
+      // ANTES de acusar al codigo, comprobar si lo que se movio fueron los DATOS.
+      // Un golden master atado a la BD de produccion caduca en cuanto el usuario usa la app: basta
+      // un `npm start` para que la app escriba una fila en `historial` y cuatro respuestas del
+      // corpus cambien sin que nadie haya tocado una linea de codigo. Ese rojo es indistinguible de
+      // una regresion, y la reaccion natural -relajar el comparador- es exactamente como se pierde
+      // el detector. Asi que se mide tambien la huella de los DATOS y se nombra la causa real.
+      // Sigue siendo FALLO en los dos casos: caducar no es pasar.
+      const huellaDatos = huellaDeDatos(raiz, ctx.bd);
+      if (ref.datos && ref.datos !== huellaDatos) {
+        datosMovidos = true;
+        notas.push('FALLO: REFERENCIA CADUCADA — la BD de produccion cambio desde que se genero ' +
+          'golden_base.json (huella de datos ' + String(ref.datos).slice(0, 12) + ' -> ' + huellaDatos.slice(0, 12) + '). ' +
+          'NO es una regresion del codigo: regenera la referencia a proposito con generar_base.js ' +
+          'y deja constancia de por que cambiaron los datos.');
+      }
       const dif = [];
       for (const k of claves) {
         if (a[k].s === 'TIMEOUT') continue;
@@ -290,7 +322,7 @@ const R4 = {
       if (cambiadas) notas.push('FALLO: ' + cambiadas + ' respuestas cambiaron respecto a la referencia: ' + dif.slice(0, 4).join(' | '));
     }
     return resultado(!notas.length, {
-      capturas: claves.length, distintos, cambiadas, timeouts, vacios,
+      capturas: claves.length, distintos, cambiadas, datosMovidos, timeouts, vacios,
       huella: hashTexto(claves.sort().map(k => k + '=' + a[k].b).join('\n')).slice(0, 16),
     }, notas);
   },
@@ -413,5 +445,6 @@ module.exports.RUTA_HUELLA = RUTA_HUELLA;
 module.exports.calcularHuella = calcularHuella;
 module.exports.RUTA_GOLDEN = RUTA_GOLDEN;
 module.exports.capturar = capturar;
+module.exports.huellaDeDatos = huellaDeDatos;
 module.exports.R5 = R5;
 module.exports.tablaDeMontaje = tablaDeMontaje;
