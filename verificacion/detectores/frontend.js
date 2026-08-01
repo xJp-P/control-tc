@@ -386,11 +386,17 @@ const F5 = {
   },
   defecto: 'el cuerpo de CardResumen (el simbolo mas grande, ~1.792 lineas) se sustituye por un stub de una linea',
   mutar(raiz) {
-    const p = INDEX(raiz);
-    const html = leer(p);
-    const i = html.indexOf('function CardResumen(');
-    const j = html.indexOf('\nfunction ', i + 10);
-    fs.writeFileSync(p, html.slice(0, i) + 'function CardResumen() { return null; }\n' + html.slice(j), 'utf8');
+    // Se localiza la pieza que contiene el simbolo. Anclarla a index.html tenia un fallo peor que
+    // no encontrarlo: con indexOf devolviendo -1, el slice(0,-1)+slice(-1) inyectaba el stub al
+    // final del HTML, FUERA de cualquier <script>. El arbol quedaba "mutado" sin que el codigo
+    // cambiara, F5 medira lo mismo y el control negativo daba un falso "no detectado".
+    const p = piezaQueContiene(raiz, 'function CardResumen(');
+    if (!p) throw new Error('no se encontro CardResumen en ninguna pieza');
+    const src = leer(p);
+    const i = src.indexOf('function CardResumen(');
+    const j = src.indexOf('\nfunction ', i + 10);
+    const cola = (j === -1) ? '' : src.slice(j);   // es el ultimo simbolo de su archivo
+    fs.writeFileSync(p, src.slice(0, i) + 'function CardResumen() { return null; }\n' + cola, 'utf8');
   },
 };
 

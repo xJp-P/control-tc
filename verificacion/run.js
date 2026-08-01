@@ -82,7 +82,14 @@ async function principal() {
         await det.mutarDatos(ctxMut);
       } else {
         raizMut = lib.copiarArbol('_' + det.id);
+        // Se comprueba que la mutacion CAMBIE algo. Una mutacion anclada al archivo donde un
+        // simbolo vivia ayer se aplica a la nada en cuanto el refactor lo mueve: el arbol
+        // "defectuoso" queda identico al bueno y el detector, sano, aparece como INVALIDO.
+        const antes = lib.huellaArbol(raizMut);
         det.mutar(raizMut);
+        if (lib.huellaArbol(raizMut) === antes) {
+          throw new Error('la mutacion no cambio NADA del codigo (probablemente esta anclada a un archivo donde el simbolo ya no vive)');
+        }
         const bdM = lib.copiarBd('M' + det.id);
         ctxMut = { bd: bdM.destino, bdB: bdM.destino, tmp: lib.TMP };
       }

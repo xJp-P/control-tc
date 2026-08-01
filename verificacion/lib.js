@@ -93,6 +93,30 @@ function copiarBd(sufijo) {
   return { destino, origen, hashOrigen: hashArchivo(origen) };
 }
 
+// Huella del CODIGO de la aplicacion en un arbol. La usa el runner para comprobar que una
+// mutacion cambio algo de verdad.
+//
+// GUARD SISTEMICO, nacido de haberlo sufrido tres veces: una mutacion anclada al archivo donde un
+// simbolo vivia AYER se aplica a la nada en cuanto el refactor lo mueve. El arbol "defectuoso"
+// sale identico al bueno, el detector mide lo mismo, y el informe declara INVALIDO a un detector
+// que esta perfectamente sano. Comparando la huella antes y despues de mutar, ese caso se nombra
+// por lo que es -el control negativo no llego a ejecutarse- en vez de disfrazarse de detector roto.
+function huellaArbol(raiz) {
+  const h = require('crypto').createHash('sha256');
+  for (const r of ['public', 'backend', 'desktop']) {
+    const base = path.join(raiz, r);
+    if (!fs.existsSync(base)) continue;
+    (function anda(d) {
+      for (const e of fs.readdirSync(d, { withFileTypes: true }).sort((a, b) => a.name < b.name ? -1 : 1)) {
+        const p = path.join(d, e.name);
+        if (e.isDirectory()) { if (e.name !== 'node_modules') anda(p); }
+        else if (/\.(js|html|css|json)$/.test(e.name)) { h.update(path.relative(raiz, p)); h.update(fs.readFileSync(p)); }
+      }
+    })(base);
+  }
+  return h.digest('hex');
+}
+
 function hashArchivo(p) {
   return require('crypto').createHash('sha256').update(fs.readFileSync(p)).digest('hex');
 }
@@ -222,6 +246,6 @@ module.exports = {
   RAIZ, TMP,
   congelarReloj, verificarCongeladoATiempo, relojCongelado: () => relojCongelado,
   copiarArbol, copiarBd, limpiarTmp,
-  hashArchivo, hashTexto, leer, listarJs, analizarIndexHtml,
+  hashArchivo, hashTexto, huellaArbol, leer, listarJs, analizarIndexHtml,
   Registro, resultado,
 };
