@@ -265,7 +265,22 @@ function medirSimbolos(fuente) {
   }
   const out = [];
   for (let k = 0; k < marcas.length; k++) {
-    const hasta = (k + 1 < marcas.length ? marcas[k + 1].desde : lineas.length) - 1;
+    let hasta = (k + 1 < marcas.length ? marcas[k + 1].desde : lineas.length) - 1;
+    // ENDURECIMIENTO PREVENTIVO (auditoria previa a la Etapa 1 del refactor).
+    // La medida ingenua "desde la declaracion hasta la siguiente menos uno" incluye las lineas en
+    // blanco y los comentarios que preceden al simbolo SIGUIENTE, asi que el tamano de un simbolo
+    // depende de lo que venga detras. En cuanto el refactor mueve un simbolo a otro archivo, el
+    // que quedaba justo antes ABSORBE su hueco y F5 da un rojo que no corresponde a ningun cambio
+    // de codigo — un falso positivo que empuja a relajar la tolerancia, que es justo como se
+    // pierde el detector. Recortando hacia atras las lineas en blanco y de comentario, la medida
+    // pasa a depender solo del propio simbolo y sobrevive a que se le mueva de archivo.
+    // Ejemplo medido: bandaToleranciaCop daba 7 lineas porque se llevaba el comentario de
+    // CHANGELOG; con el recorte da 5, y sigue dando 5 despues de sacar CHANGELOG del archivo.
+    while (hasta > marcas[k].desde) {
+      const t = (lineas[hasta] || '').trim();
+      if (t === '' || t.indexOf('//') === 0) hasta--;
+      else break;
+    }
     out.push({ nombre: marcas[k].nombre, tipo: marcas[k].tipo, lineas: hasta - marcas[k].desde + 1 });
   }
   return out;

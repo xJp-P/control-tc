@@ -18,55 +18,55 @@
     {
       "nombre": "API",
       "tipo": "const",
-      "lineas": 5,
+      "lineas": 1,
       "pieza": "<inline>"
     },
     {
       "nombre": "TOLERANCIA_PAGO_COP",
       "tipo": "const",
-      "lineas": 5,
+      "lineas": 1,
       "pieza": "<inline>"
     },
     {
       "nombre": "bandaToleranciaCop",
       "tipo": "function",
-      "lineas": 7,
+      "lineas": 5,
       "pieza": "<inline>"
     },
     {
       "nombre": "CHANGELOG",
       "tipo": "const",
-      "lineas": 721,
+      "lineas": 720,
       "pieza": "<inline>"
     },
     {
       "nombre": "api",
       "tipo": "async function",
-      "lineas": 9,
+      "lineas": 8,
       "pieza": "<inline>"
     },
     {
       "nombre": "fmtCOP",
       "tipo": "function",
-      "lineas": 12,
+      "lineas": 6,
       "pieza": "<inline>"
     },
     {
       "nombre": "badgeCuotaLabel",
       "tipo": "function",
-      "lineas": 6,
+      "lineas": 4,
       "pieza": "<inline>"
     },
     {
       "nombre": "fmtNumInput",
       "tipo": "function",
-      "lineas": 14,
+      "lineas": 12,
       "pieza": "<inline>"
     },
     {
       "nombre": "MoneyInput",
       "tipo": "function",
-      "lineas": 33,
+      "lineas": 31,
       "pieza": "<inline>"
     },
     {
@@ -78,31 +78,31 @@
     {
       "nombre": "Ico",
       "tipo": "function",
-      "lineas": 7,
+      "lineas": 6,
       "pieza": "<inline>"
     },
     {
       "nombre": "fmtCOPDec",
       "tipo": "function",
-      "lineas": 10,
+      "lineas": 6,
       "pieza": "<inline>"
     },
     {
       "nombre": "fmtCicloLabel",
       "tipo": "function",
-      "lineas": 6,
+      "lineas": 5,
       "pieza": "<inline>"
     },
     {
       "nombre": "fmtDate",
       "tipo": "function",
-      "lineas": 9,
+      "lineas": 5,
       "pieza": "<inline>"
     },
     {
       "nombre": "fmtUsd",
       "tipo": "function",
-      "lineas": 12,
+      "lineas": 3,
       "pieza": "<inline>"
     },
     {
@@ -114,7 +114,7 @@
     {
       "nombre": "bimonCard",
       "tipo": "function",
-      "lineas": 38,
+      "lineas": 37,
       "pieza": "<inline>"
     },
     {
@@ -132,37 +132,37 @@
     {
       "nombre": "calcCicloLocal",
       "tipo": "function",
-      "lineas": 3,
+      "lineas": 1,
       "pieza": "<inline>"
     },
     {
       "nombre": "cicloVigente",
       "tipo": "function",
-      "lineas": 2,
+      "lineas": 1,
       "pieza": "<inline>"
     },
     {
       "nombre": "cicloSiguiente",
       "tipo": "function",
-      "lineas": 4,
+      "lineas": 1,
       "pieza": "<inline>"
     },
     {
       "nombre": "cicloConCorteFront",
       "tipo": "function",
-      "lineas": 3,
+      "lineas": 1,
       "pieza": "<inline>"
     },
     {
       "nombre": "corteDeCiclo",
       "tipo": "function",
-      "lineas": 2,
+      "lineas": 1,
       "pieza": "<inline>"
     },
     {
       "nombre": "CicloPicker",
       "tipo": "function",
-      "lineas": 17,
+      "lineas": 13,
       "pieza": "<inline>"
     },
     {
@@ -186,7 +186,7 @@
     {
       "nombre": "toastErr",
       "tipo": "function",
-      "lineas": 5,
+      "lineas": 1,
       "pieza": "<inline>"
     },
     {
@@ -204,19 +204,19 @@
     {
       "nombre": "infoDialog",
       "tipo": "async function",
-      "lineas": 5,
+      "lineas": 1,
       "pieza": "<inline>"
     },
     {
       "nombre": "Modal",
       "tipo": "function",
-      "lineas": 15,
+      "lineas": 11,
       "pieza": "<inline>"
     },
     {
       "nombre": "GlobalDashboard",
       "tipo": "function",
-      "lineas": 207,
+      "lineas": 201,
       "pieza": "<inline>"
     },
     {
@@ -228,91 +228,91 @@
     {
       "nombre": "DEFAULT_BANCO_COLORS",
       "tipo": "const",
-      "lineas": 9,
+      "lineas": 5,
       "pieza": "<inline>"
     },
     {
       "nombre": "BANCOS_PRESETS",
       "tipo": "const",
-      "lineas": 7,
+      "lineas": 5,
       "pieza": "<inline>"
     },
     {
       "nombre": "getBancoUrl",
       "tipo": "function",
-      "lineas": 6,
+      "lineas": 5,
       "pieza": "<inline>"
     },
     {
       "nombre": "TarjetaForm",
       "tipo": "function",
-      "lineas": 302,
+      "lineas": 298,
       "pieza": "<inline>"
     },
     {
       "nombre": "CardResumen",
       "tipo": "function",
-      "lineas": 1793,
+      "lineas": 1792,
       "pieza": "<inline>"
     },
     {
       "nombre": "CompraForm",
       "tipo": "function",
-      "lineas": 722,
+      "lineas": 721,
       "pieza": "<inline>"
     },
     {
       "nombre": "AvanceForm",
       "tipo": "function",
-      "lineas": 82,
+      "lineas": 81,
       "pieza": "<inline>"
     },
     {
       "nombre": "AbonoForm",
       "tipo": "function",
-      "lineas": 18,
+      "lineas": 17,
       "pieza": "<inline>"
     },
     {
       "nombre": "DiferidaForm",
       "tipo": "function",
-      "lineas": 96,
+      "lineas": 92,
       "pieza": "<inline>"
     },
     {
       "nombre": "ReprogramarForm",
       "tipo": "function",
-      "lineas": 92,
+      "lineas": 88,
       "pieza": "<inline>"
     },
     {
       "nombre": "Pagos",
       "tipo": "function",
-      "lineas": 671,
+      "lineas": 667,
       "pieza": "<inline>"
     },
     {
       "nombre": "Proyecciones",
       "tipo": "function",
-      "lineas": 58,
+      "lineas": 54,
       "pieza": "<inline>"
     },
     {
       "nombre": "Calculadora",
       "tipo": "function",
-      "lineas": 241,
+      "lineas": 237,
       "pieza": "<inline>"
     },
     {
       "nombre": "Historial",
       "tipo": "function",
-      "lineas": 60,
+      "lineas": 56,
       "pieza": "<inline>"
     },
     {
       "nombre": "BancosUrlsConfig",
       "tipo": "function",
-      "lineas": 143,
+      "lineas": 140,
       "pieza": "<inline>"
     },
     {
@@ -342,67 +342,67 @@
     {
       "nombre": "iaProviderModels",
       "tipo": "function",
-      "lineas": 8,
+      "lineas": 4,
       "pieza": "<inline>"
     },
     {
       "nombre": "tasaIntlTd",
       "tipo": "function",
-      "lineas": 16,
+      "lineas": 14,
       "pieza": "<inline>"
     },
     {
       "nombre": "estadoColor",
       "tipo": "function",
-      "lineas": 9,
+      "lineas": 8,
       "pieza": "<inline>"
     },
     {
       "nombre": "Configuracion",
       "tipo": "function",
-      "lineas": 263,
+      "lineas": 261,
       "pieza": "<inline>"
     },
     {
       "nombre": "IaResultado",
       "tipo": "function",
-      "lineas": 458,
+      "lineas": 456,
       "pieza": "<inline>"
     },
     {
       "nombre": "IaAsistente",
       "tipo": "function",
-      "lineas": 330,
+      "lineas": 329,
       "pieza": "<inline>"
     },
     {
       "nombre": "PersonaForm",
       "tipo": "function",
-      "lineas": 25,
+      "lineas": 21,
       "pieza": "<inline>"
     },
     {
       "nombre": "Terceros",
       "tipo": "function",
-      "lineas": 550,
+      "lineas": 546,
       "pieza": "<inline>"
     },
     {
       "nombre": "CARD_TABS",
       "tipo": "const",
-      "lineas": 7,
+      "lineas": 6,
       "pieza": "<inline>"
     },
     {
       "nombre": "CardView",
       "tipo": "function",
-      "lineas": 85,
+      "lineas": 81,
       "pieza": "<inline>"
     },
     {
       "nombre": "App",
       "tipo": "function",
-      "lineas": 411,
+      "lineas": 410,
       "pieza": "<inline>"
     },
     {
