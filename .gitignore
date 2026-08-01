@@ -20,3 +20,6 @@ Thumbs.db
 # Documentos internos del proyecto (NO publicar — solo README.md es publico)
 CLAUDE.md
 ESTADO_DEL_PROYECTO.md
+
+# Temporales de la suite de verificacion (se crean y borran en cada corrida)
+.verificacion_tmp/

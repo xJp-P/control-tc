@@ -8,6 +8,7 @@
     "start": "electron .",
     "dev": "cross-env NODE_ENV=development electron .",
     "server": "node backend/app.js",
+    "test": "cross-env ELECTRON_RUN_AS_NODE=1 electron verificacion/run.js",
     "dist": "electron-builder",
     "dist:win": "electron-builder --win",
     "dist:mac": "electron-builder --mac"

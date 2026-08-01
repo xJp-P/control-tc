@@ -1,0 +1,415 @@
+{
+  "generado": "2026-08-01",
+  "nota": "Inventario de simbolos de nivel superior del frontend. F4 comprueba que existen; F5, que conservan su tamano. NO regenerar sin una razon aprobada.",
+  "total": 68,
+  "simbolos": [
+    {
+      "nombre": "e",
+      "tipo": "const",
+      "lineas": 1,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "{hooks}",
+      "tipo": "destructuring",
+      "lineas": 1,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "API",
+      "tipo": "const",
+      "lineas": 5,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "TOLERANCIA_PAGO_COP",
+      "tipo": "const",
+      "lineas": 5,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "bandaToleranciaCop",
+      "tipo": "function",
+      "lineas": 7,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "CHANGELOG",
+      "tipo": "const",
+      "lineas": 721,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "api",
+      "tipo": "async function",
+      "lineas": 9,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "fmtCOP",
+      "tipo": "function",
+      "lineas": 12,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "badgeCuotaLabel",
+      "tipo": "function",
+      "lineas": 6,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "fmtNumInput",
+      "tipo": "function",
+      "lineas": 14,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "MoneyInput",
+      "tipo": "function",
+      "lineas": 33,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "ICONS",
+      "tipo": "const",
+      "lineas": 32,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "Ico",
+      "tipo": "function",
+      "lineas": 7,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "fmtCOPDec",
+      "tipo": "function",
+      "lineas": 10,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "fmtCicloLabel",
+      "tipo": "function",
+      "lineas": 6,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "fmtDate",
+      "tipo": "function",
+      "lineas": 9,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "fmtUsd",
+      "tipo": "function",
+      "lineas": 12,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "personasTableBimon",
+      "tipo": "function",
+      "lineas": 42,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "bimonCard",
+      "tipo": "function",
+      "lineas": 38,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "cicloActual",
+      "tipo": "function",
+      "lineas": 1,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "todayISO",
+      "tipo": "function",
+      "lineas": 1,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "calcCicloLocal",
+      "tipo": "function",
+      "lineas": 3,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "cicloVigente",
+      "tipo": "function",
+      "lineas": 2,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "cicloSiguiente",
+      "tipo": "function",
+      "lineas": 4,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "cicloConCorteFront",
+      "tipo": "function",
+      "lineas": 3,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "corteDeCiclo",
+      "tipo": "function",
+      "lineas": 2,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "CicloPicker",
+      "tipo": "function",
+      "lineas": 17,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "toastId",
+      "tipo": "let",
+      "lineas": 1,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "ToastContainer",
+      "tipo": "function",
+      "lineas": 12,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "toast",
+      "tipo": "function",
+      "lineas": 1,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "toastErr",
+      "tipo": "function",
+      "lineas": 5,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "ConfirmDialog",
+      "tipo": "function",
+      "lineas": 31,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "confirmDialog",
+      "tipo": "async function",
+      "lineas": 1,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "infoDialog",
+      "tipo": "async function",
+      "lineas": 5,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "Modal",
+      "tipo": "function",
+      "lineas": 15,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "GlobalDashboard",
+      "tipo": "function",
+      "lineas": 207,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "DEFAULT_BANCO_URLS",
+      "tipo": "const",
+      "lineas": 5,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "DEFAULT_BANCO_COLORS",
+      "tipo": "const",
+      "lineas": 9,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "BANCOS_PRESETS",
+      "tipo": "const",
+      "lineas": 7,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "getBancoUrl",
+      "tipo": "function",
+      "lineas": 6,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "TarjetaForm",
+      "tipo": "function",
+      "lineas": 302,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "CardResumen",
+      "tipo": "function",
+      "lineas": 1793,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "CompraForm",
+      "tipo": "function",
+      "lineas": 722,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "AvanceForm",
+      "tipo": "function",
+      "lineas": 82,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "AbonoForm",
+      "tipo": "function",
+      "lineas": 18,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "DiferidaForm",
+      "tipo": "function",
+      "lineas": 96,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "ReprogramarForm",
+      "tipo": "function",
+      "lineas": 92,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "Pagos",
+      "tipo": "function",
+      "lineas": 671,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "Proyecciones",
+      "tipo": "function",
+      "lineas": 58,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "Calculadora",
+      "tipo": "function",
+      "lineas": 241,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "Historial",
+      "tipo": "function",
+      "lineas": 60,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "BancosUrlsConfig",
+      "tipo": "function",
+      "lineas": 143,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "IA_PROVIDERS",
+      "tipo": "const",
+      "lineas": 7,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "IA_LINKS",
+      "tipo": "const",
+      "lineas": 6,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "iaProviderDefaultModel",
+      "tipo": "function",
+      "lineas": 4,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "iaProviderLabel",
+      "tipo": "function",
+      "lineas": 4,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "iaProviderModels",
+      "tipo": "function",
+      "lineas": 8,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "tasaIntlTd",
+      "tipo": "function",
+      "lineas": 16,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "estadoColor",
+      "tipo": "function",
+      "lineas": 9,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "Configuracion",
+      "tipo": "function",
+      "lineas": 263,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "IaResultado",
+      "tipo": "function",
+      "lineas": 458,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "IaAsistente",
+      "tipo": "function",
+      "lineas": 330,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "PersonaForm",
+      "tipo": "function",
+      "lineas": 25,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "Terceros",
+      "tipo": "function",
+      "lineas": 550,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "CARD_TABS",
+      "tipo": "const",
+      "lineas": 7,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "CardView",
+      "tipo": "function",
+      "lineas": 85,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "App",
+      "tipo": "function",
+      "lineas": 411,
+      "pieza": "<inline>"
+    },
+    {
+      "nombre": "<bootstrap ReactDOM.createRoot>",
+      "tipo": "bootstrap",
+      "lineas": 1,
+      "pieza": "<inline>"
+    }
+  ]
+}
