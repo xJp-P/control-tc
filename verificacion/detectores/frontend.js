@@ -109,13 +109,24 @@ const F1 = {
     return resultado(okSintaxis && !faltantes.length && cumpleBytes && cumpleLineas,
       { piezas: piezas.length, locales: info.locales.length, cdn: info.cdn.length, bytes: v.bytes, lineas: v.lineas }, notas);
   },
-  defecto: 'index.html reducido a un <script> con solo el bootstrap (simula el codigo mudado a archivos externos que el detector ya no mira)',
+  defecto: 'se borran las etiquetas <script src> y el inline queda solo con el bootstrap (el detector deja de ver el codigo)',
   mutar(raiz) {
     const p = INDEX(raiz);
-    const html = leer(p);
+    let html = leer(p);
+    // Se quitan PRIMERO las etiquetas de los modulos externos. Sin este paso, la mutacion original
+    // -reducir el inline al bootstrap- se convierte en un NO-OP en cuanto el refactor deja el
+    // inline con solo el bootstrap: el arbol "defectuoso" sale identico al bueno y F1 se declara
+    // invalido sin que nada este mal. La ceguera que este detector persigue es "dejo de mirar el
+    // codigo", y desde la Etapa 2 el codigo vive en los archivos externos.
+    const antes = html;
+    html = html.replace(/[ \t]*<script src="js\/[^"]+"><\/script>\r?\n?/g, '');
+    if (html === antes && /<script src="js\//.test(antes)) {
+      throw new Error('la mutacion no pudo quitar las etiquetas <script src>');
+    }
     const desde = html.indexOf('<script>');
     const hasta = html.indexOf('</script>', desde);
-    fs.writeFileSync(p, html.slice(0, desde) + '<script>\nReactDOM.createRoot(document.getElementById("root")).render(e(App));\n' + html.slice(hasta), 'utf8');
+    html = html.slice(0, desde) + '<script>\nReactDOM.createRoot(document.getElementById("root")).render(e(App));\n' + html.slice(hasta);
+    fs.writeFileSync(p, html, 'utf8');
   },
 };
 
@@ -218,15 +229,22 @@ const F3 = {
   },
   defecto: 'BANCOS_PRESETS se mueve ANTES de los dos Object.freeze que lee (rompe el unico orden de carga obligatorio)',
   mutar(raiz) {
-    const p = INDEX(raiz);
-    let html = leer(p);
-    // Mueve la declaracion de BANCOS_PRESETS por encima de DEFAULT_BANCO_URLS.
-    const iPres = html.indexOf('const BANCOS_PRESETS');
-    const fin = html.indexOf('\n];', iPres) + 3;
-    const bloque = html.slice(iPres, fin);
-    html = html.slice(0, iPres) + html.slice(fin);
-    const iUrls = html.indexOf('const DEFAULT_BANCO_URLS');
-    fs.writeFileSync(p, html.slice(0, iUrls) + bloque + '\n' + html.slice(iUrls), 'utf8');
+    // Se localiza la pieza que contiene BANCOS_PRESETS en vez de asumir index.html: es el simbolo
+    // que sostiene la UNICA dependencia de tiempo de carga del frontend, y el refactor lo mueve.
+    // Si no se encuentra, se LANZA: mutar la nada daria un falso "no detectado" que parece culpa
+    // del detector cuando en realidad el control negativo no llego a ejecutarse.
+    const p = piezaQueContiene(raiz, 'const BANCOS_PRESETS');
+    if (!p) throw new Error('no se encontro BANCOS_PRESETS en ninguna pieza');
+    let src = leer(p);
+    const iPres = src.indexOf('const BANCOS_PRESETS');
+    const fin = src.indexOf('\n];', iPres) + 3;
+    const bloque = src.slice(iPres, fin);
+    src = src.slice(0, iPres) + src.slice(fin);
+    const iUrls = src.indexOf('const DEFAULT_BANCO_URLS');
+    if (iUrls === -1) {
+      throw new Error('DEFAULT_BANCO_URLS no vive en la misma pieza que BANCOS_PRESETS: el orden de carga ENTRE archivos ya no lo cubre este control');
+    }
+    fs.writeFileSync(p, src.slice(0, iUrls) + bloque + '\n' + src.slice(iUrls), 'utf8');
   },
 };
 
@@ -313,6 +331,22 @@ function medirSimbolos(fuente) {
       const t = (lineas[hasta] || '').trim();
       if (t === '' || t.indexOf('//') === 0) hasta--;
       else break;
+    }
+    // SEGUNDO ENDURECIMIENTO: buscar el CIERRE REAL del simbolo, no fiarse de lo que venga detras.
+    // El recorte de arriba solo quita blancos y comentarios, asi que cualquier codigo de nivel
+    // superior que NO sea una declaracion queda absorbido por el simbolo anterior. En este frontend
+    // hay exactamente uno: el bootstrap ReactDOM.createRoot(...).render(e(App)), que se contabilizaba
+    // dentro de App (410 lineas en vez de 407). Al mover App a su archivo el bootstrap se queda en
+    // index.html y F5 canta un cambio de tamano que no corresponde a ninguna modificacion de codigo.
+    // Con el cierre real -la primera llave o corchete en columna 0 despues de la declaracion- la
+    // medida deja de depender del entorno del simbolo.
+    const decl = (lineas[marcas[k].desde] || '').trim();
+    if (/[};]$/.test(decl)) {
+      hasta = marcas[k].desde;                       // declaracion de una sola linea
+    } else {
+      for (let j = marcas[k].desde + 1; j <= hasta; j++) {
+        if (/^[}\]]/.test(lineas[j] || '')) { hasta = j; break; }
+      }
     }
     out.push({ nombre: marcas[k].nombre, tipo: marcas[k].tipo, lineas: hasta - marcas[k].desde + 1 });
   }
