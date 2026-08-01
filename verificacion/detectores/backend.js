@@ -61,14 +61,22 @@ function resuelveExacto(rutaSinExt) {
   const base = path.basename(rutaSinExt);
   if (!fs.existsSync(dir)) return null;
   const entradas = fs.readdirSync(dir);
+  // ORDEN DE RESOLUCION DE NODE, y en este orden: primero las formas de ARCHIVO (exacto, .js,
+  // .json) y solo si ninguna existe, el directorio con index.js. La version anterior probaba el
+  // nombre pelado primero y, si resultaba ser un DIRECTORIO sin index.js, devolvia null en vez de
+  // seguir probando. Bastaba con que existieran a la vez `routes/diferidas.js` y la carpeta
+  // `routes/diferidas/` -que es justo lo que produce este refactor- para que el detector declarara
+  // rota una arista que Node resuelve perfectamente.
   for (const cand of [base, base + '.js', base + '.json']) {
-    if (entradas.indexOf(cand) !== -1) {
-      const p = path.join(dir, cand);
-      if (fs.statSync(p).isDirectory()) {
-        const sub = fs.readdirSync(p);
-        return sub.indexOf('index.js') !== -1 ? path.join(p, 'index.js') : null;
-      }
-      return p;
+    if (entradas.indexOf(cand) === -1) continue;
+    const p = path.join(dir, cand);
+    if (fs.statSync(p).isDirectory()) continue;      // el directorio se prueba al final
+    return p;
+  }
+  if (entradas.indexOf(base) !== -1) {
+    const p = path.join(dir, base);
+    if (fs.statSync(p).isDirectory() && fs.readdirSync(p).indexOf('index.js') !== -1) {
+      return path.join(p, 'index.js');
     }
   }
   return null;

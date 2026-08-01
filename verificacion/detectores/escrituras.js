@@ -164,8 +164,25 @@ const R6 = {
   },
   defecto: 'se cambia `>=` por `>` en el sellado del pago minimo (pagar el minimo exacto dejaria de cerrar el mes)',
   mutar(raiz) {
-    const p = path.join(raiz, 'backend', 'routes', 'extractos.js');
-    fs.writeFileSync(p, leer(p).replace('(nuevoMontoPagado >= minimoRef)', '(nuevoMontoPagado > minimoRef)'), 'utf8');
+    // Se busca el operador ALLI DONDE VIVA dentro de backend/routes, en vez de anclarlo a
+    // extractos.js: la Etapa 4 lo movio a extractos/_compartido.js y la mutacion se quedo
+    // apuntando a un archivo que ya no lo contiene. El guard sistematico del runner lo nombro
+    // (la mutacion no cambiaba nada) en lugar de dejar que pareciera un detector roto.
+    const base = path.join(raiz, 'backend', 'routes');
+    const pendientes = [base];
+    while (pendientes.length) {
+      const d = pendientes.pop();
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        const p = path.join(d, e.name);
+        if (e.isDirectory()) { pendientes.push(p); continue; }
+        if (!e.name.endsWith('.js')) continue;
+        const src = leer(p);
+        if (src.indexOf('(nuevoMontoPagado >= minimoRef)') === -1) continue;
+        fs.writeFileSync(p, src.replace('(nuevoMontoPagado >= minimoRef)', '(nuevoMontoPagado > minimoRef)'), 'utf8');
+        return;
+      }
+    }
+    throw new Error('no se encontro el comparador del sellado en ningun archivo de backend/routes');
   },
 };
 

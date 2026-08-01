@@ -82,6 +82,18 @@
       "pieza": "js/formato.js"
     },
     {
+      "nombre": "tasaIntlTd",
+      "tipo": "function",
+      "lineas": 14,
+      "pieza": "js/formato.js"
+    },
+    {
+      "nombre": "estadoColor",
+      "tipo": "function",
+      "lineas": 8,
+      "pieza": "js/formato.js"
+    },
+    {
       "nombre": "cicloActual",
       "tipo": "function",
       "lineas": 1,
@@ -217,193 +229,181 @@
       "nombre": "GlobalDashboard",
       "tipo": "function",
       "lineas": 201,
-      "pieza": "<inline>"
+      "pieza": "js/dashboard.js"
     },
     {
       "nombre": "DEFAULT_BANCO_URLS",
       "tipo": "const",
       "lineas": 5,
-      "pieza": "<inline>"
+      "pieza": "js/tarjetas.js"
     },
     {
       "nombre": "DEFAULT_BANCO_COLORS",
       "tipo": "const",
       "lineas": 5,
-      "pieza": "<inline>"
+      "pieza": "js/tarjetas.js"
     },
     {
       "nombre": "BANCOS_PRESETS",
       "tipo": "const",
       "lineas": 5,
-      "pieza": "<inline>"
+      "pieza": "js/tarjetas.js"
     },
     {
       "nombre": "getBancoUrl",
       "tipo": "function",
       "lineas": 5,
-      "pieza": "<inline>"
+      "pieza": "js/tarjetas.js"
     },
     {
       "nombre": "TarjetaForm",
       "tipo": "function",
       "lineas": 298,
-      "pieza": "<inline>"
+      "pieza": "js/tarjetas.js"
     },
     {
       "nombre": "CardResumen",
       "tipo": "function",
       "lineas": 1792,
-      "pieza": "<inline>"
+      "pieza": "js/resumen.js"
     },
     {
       "nombre": "CompraForm",
       "tipo": "function",
       "lineas": 721,
-      "pieza": "<inline>"
+      "pieza": "js/formularios.js"
     },
     {
       "nombre": "AvanceForm",
       "tipo": "function",
       "lineas": 81,
-      "pieza": "<inline>"
+      "pieza": "js/formularios.js"
     },
     {
       "nombre": "AbonoForm",
       "tipo": "function",
       "lineas": 17,
-      "pieza": "<inline>"
+      "pieza": "js/formularios.js"
     },
     {
       "nombre": "DiferidaForm",
       "tipo": "function",
       "lineas": 92,
-      "pieza": "<inline>"
+      "pieza": "js/formularios.js"
     },
     {
       "nombre": "ReprogramarForm",
       "tipo": "function",
       "lineas": 88,
-      "pieza": "<inline>"
-    },
-    {
-      "nombre": "Pagos",
-      "tipo": "function",
-      "lineas": 667,
-      "pieza": "<inline>"
-    },
-    {
-      "nombre": "Proyecciones",
-      "tipo": "function",
-      "lineas": 54,
-      "pieza": "<inline>"
-    },
-    {
-      "nombre": "Calculadora",
-      "tipo": "function",
-      "lineas": 237,
-      "pieza": "<inline>"
-    },
-    {
-      "nombre": "Historial",
-      "tipo": "function",
-      "lineas": 56,
-      "pieza": "<inline>"
-    },
-    {
-      "nombre": "BancosUrlsConfig",
-      "tipo": "function",
-      "lineas": 140,
-      "pieza": "<inline>"
-    },
-    {
-      "nombre": "IA_PROVIDERS",
-      "tipo": "const",
-      "lineas": 7,
-      "pieza": "<inline>"
-    },
-    {
-      "nombre": "IA_LINKS",
-      "tipo": "const",
-      "lineas": 6,
-      "pieza": "<inline>"
-    },
-    {
-      "nombre": "iaProviderDefaultModel",
-      "tipo": "function",
-      "lineas": 4,
-      "pieza": "<inline>"
-    },
-    {
-      "nombre": "iaProviderLabel",
-      "tipo": "function",
-      "lineas": 4,
-      "pieza": "<inline>"
-    },
-    {
-      "nombre": "iaProviderModels",
-      "tipo": "function",
-      "lineas": 4,
-      "pieza": "<inline>"
-    },
-    {
-      "nombre": "tasaIntlTd",
-      "tipo": "function",
-      "lineas": 14,
-      "pieza": "<inline>"
-    },
-    {
-      "nombre": "estadoColor",
-      "tipo": "function",
-      "lineas": 8,
-      "pieza": "<inline>"
-    },
-    {
-      "nombre": "Configuracion",
-      "tipo": "function",
-      "lineas": 261,
-      "pieza": "<inline>"
-    },
-    {
-      "nombre": "IaResultado",
-      "tipo": "function",
-      "lineas": 456,
-      "pieza": "<inline>"
-    },
-    {
-      "nombre": "IaAsistente",
-      "tipo": "function",
-      "lineas": 329,
-      "pieza": "<inline>"
+      "pieza": "js/formularios.js"
     },
     {
       "nombre": "PersonaForm",
       "tipo": "function",
       "lineas": 21,
-      "pieza": "<inline>"
+      "pieza": "js/formularios.js"
+    },
+    {
+      "nombre": "Pagos",
+      "tipo": "function",
+      "lineas": 667,
+      "pieza": "js/pagos.js"
+    },
+    {
+      "nombre": "Proyecciones",
+      "tipo": "function",
+      "lineas": 54,
+      "pieza": "js/proyecciones.js"
+    },
+    {
+      "nombre": "Calculadora",
+      "tipo": "function",
+      "lineas": 237,
+      "pieza": "js/calculadora.js"
+    },
+    {
+      "nombre": "Historial",
+      "tipo": "function",
+      "lineas": 56,
+      "pieza": "js/historial.js"
     },
     {
       "nombre": "Terceros",
       "tipo": "function",
       "lineas": 546,
-      "pieza": "<inline>"
+      "pieza": "js/terceros.js"
+    },
+    {
+      "nombre": "IA_PROVIDERS",
+      "tipo": "const",
+      "lineas": 7,
+      "pieza": "js/ia.js"
+    },
+    {
+      "nombre": "IA_LINKS",
+      "tipo": "const",
+      "lineas": 6,
+      "pieza": "js/ia.js"
+    },
+    {
+      "nombre": "iaProviderDefaultModel",
+      "tipo": "function",
+      "lineas": 4,
+      "pieza": "js/ia.js"
+    },
+    {
+      "nombre": "iaProviderLabel",
+      "tipo": "function",
+      "lineas": 4,
+      "pieza": "js/ia.js"
+    },
+    {
+      "nombre": "iaProviderModels",
+      "tipo": "function",
+      "lineas": 4,
+      "pieza": "js/ia.js"
+    },
+    {
+      "nombre": "IaResultado",
+      "tipo": "function",
+      "lineas": 456,
+      "pieza": "js/ia.js"
+    },
+    {
+      "nombre": "IaAsistente",
+      "tipo": "function",
+      "lineas": 329,
+      "pieza": "js/ia.js"
+    },
+    {
+      "nombre": "BancosUrlsConfig",
+      "tipo": "function",
+      "lineas": 140,
+      "pieza": "js/configuracion.js"
+    },
+    {
+      "nombre": "Configuracion",
+      "tipo": "function",
+      "lineas": 261,
+      "pieza": "js/configuracion.js"
     },
     {
       "nombre": "CARD_TABS",
       "tipo": "const",
       "lineas": 6,
-      "pieza": "<inline>"
+      "pieza": "js/app.js"
     },
     {
       "nombre": "CardView",
       "tipo": "function",
       "lineas": 81,
-      "pieza": "<inline>"
+      "pieza": "js/app.js"
     },
     {
       "nombre": "App",
       "tipo": "function",
       "lineas": 407,
-      "pieza": "<inline>"
+      "pieza": "js/app.js"
     },
     {
       "nombre": "<bootstrap ReactDOM.createRoot>",
