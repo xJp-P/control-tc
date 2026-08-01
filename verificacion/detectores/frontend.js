@@ -33,6 +33,18 @@ function mutarEnAlgunaPieza(raiz, aguja, reemplazo) {
   return false;
 }
 
+// Devuelve la ruta de la pieza que contiene la aguja, o null. Las mutaciones lo usan para no
+// quedarse ancladas al archivo donde un simbolo vivia AYER.
+function piezaQueContiene(raiz, aguja) {
+  const candidatos = [INDEX(raiz)];
+  const dirJs = path.join(raiz, 'public', 'js');
+  if (fs.existsSync(dirJs)) {
+    for (const f of fs.readdirSync(dirJs)) if (f.endsWith('.js')) candidatos.push(path.join(dirJs, f));
+  }
+  for (const p of candidatos) if (leer(p).indexOf(aguja) !== -1) return p;
+  return null;
+}
+
 // Junta las piezas de JavaScript EN EL ORDEN EN QUE EL NAVEGADOR LAS EJECUTA.
 // Es el orden de las etiquetas en el documento: los <script> clasicos son bloqueantes y
 // secuenciales, asi que ese orden es el contrato real.
