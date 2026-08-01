@@ -275,6 +275,12 @@ function bandaToleranciaCop(ext, minimo) {
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '5.8.0': [
+    'UN MES SOLO SE CIERRA CUANDO LO PAGAS, NO CUANDO PASA LA FECHA DE CORTE. Antes, apenas cortaba el mes la app dejaba de aceptar movimientos suyos, aunque faltaran dos semanas para pagarlo: si el 2 de agosto te acordabas de una compra del 29 de julio, no habia forma de registrarla. Ahora puedes registrarla, editarla, borrarla, ponerla a cuotas o reprogramarla mientras ese mes siga sin pagar. Los meses ya pagados siguen completamente bloqueados, igual que siempre.',
+    'Se quitaron de paso el aviso y la confirmacion que aparecian al tocar una compra de un mes ya cortado: no estabas alterando ningun cierre, asi que sobraba el susto.',
+    'LAS COMPRAS VIEJAS YA NO SE REGISTRAN CON LAS TASAS DE HOY. Al registrar una compra de dias atras, la app busca ahora la tasa de interes y el valor del dolar que regian EN LA FECHA DE LA COMPRA, no los del dia en que la escribes. La diferencia es real: el dolar del 6 de julio estaba en 3.334 pesos y el 1 de agosto en 3.144, casi un 6% de error. Para la tasa de interes usa la que el banco cobro ese mes, tomandola de tus propias compras ya conciliadas.',
+    'Si registras algo en un mes cuyo pago minimo tomaste del extracto en PDF, la app te avisa: esa cifra viene del banco y no incluye lo que acabas de registrar. Tu decides si la dejas como esta o vuelves al calculo de la app.'
+  ],
   '5.7.2': [
     'EL AVISO DEL MARGEN AL PAGAR AHORA DICE LA VERDAD DE CADA MES. Cuando ya tienes cargada la cifra del extracto del banco, la app te avisa que ese valor va tal cual y que ahi no hay margen: antes te ofrecia dos mil pesos de holgura que en ese caso no existian, y pagar de menos confiando en eso dejaba el mes sin saldar.',
     'Cuando el valor todavia es un estimado, el aviso y el boton muestran el margen real de ESE mes en vez de una cifra fija. En meses de cuota pequena el margen es menor a dos mil pesos, y antes se anunciaba siempre lo mismo.',
@@ -1280,6 +1286,10 @@ function ConfirmDialog() {
   const isInfo = state.opts.mode === 'info';
   const title = state.opts.title || 'Confirmar';
   const confirmText = state.opts.confirmText || 'Confirmar';
+  // cancelText: cuando cancelar NO es "abortar" sino la otra mitad de una decisión legítima.
+  // danger=false: no todo lo que se confirma es destructivo; pintar de rojo una elección normal miente.
+  const cancelText = state.opts.cancelText || 'Cancelar';
+  const confirmClass = state.opts.danger === false ? 'btn btn-primary' : 'btn btn-danger';
   return e('div', { className: 'modal-overlay', onClick: (ev) => { if (ev.target === ev.currentTarget && !isInfo) respond(false); } },
     e('div', { className: 'modal', style: { maxWidth: 420 } },
       e('div', { className: 'modal-title' }, title),
@@ -1288,8 +1298,8 @@ function ConfirmDialog() {
         isInfo
           ? e('button', { className: 'btn btn-primary', onClick: () => respond(true) }, 'Aceptar')
           : [
-              e('button', { key: 'c', className: 'btn', onClick: () => respond(false) }, 'Cancelar'),
-              e('button', { key: 'k', className: 'btn btn-danger', onClick: () => respond(true) }, confirmText)
+              e('button', { key: 'c', className: 'btn', onClick: () => respond(false) }, cancelText),
+              e('button', { key: 'k', className: confirmClass, onClick: () => respond(true) }, confirmText)
             ]
       )
     )
@@ -1968,9 +1978,18 @@ function CardResumen({ tarjeta, onDataChange }) {
     delete compraData._convertirCuotas; delete compraData._reprogramarCuotas; delete compraData._revertirCuotas;
     const method = editCompra ? 'PUT' : 'POST';
     const url = editCompra ? '/compras/' + editCompra.id : '/compras';
-    api(url, { method, body: compraData }).then((resp) => {
+    api(url, { method, body: compraData }).then(async (resp) => {
       // El backend bloquea (403) crear/editar en ciclos pagados; mostramos el motivo y no cerramos en falso.
-      if (resp && resp.error) { toastErr(resp.error); return; }
+      if (resp && resp.error) {
+        // ROLLBACK: si el flujo de cuotas ya creó el plan y la compra no entró, esa diferida quedaría
+        // HUÉRFANA — sin compra que la referencie, sumando a la deuda y al cupo, y sin forma de
+        // borrarla desde la app. El guard de POST /diferidas cubre el caso del mes pagado; esto cubre
+        // cualquier otro fallo del POST de la compra.
+        if (!editCompra && compraData.diferida_id) {
+          await api('/diferidas/' + compraData.diferida_id, { method: 'DELETE' }).catch(() => {});
+        }
+        toastErr(resp.error); return;
+      }
       if (editCompra && (conv || repro || rever)) {
         const accion = conv
           ? api('/compras/' + editCompra.id + '/convertir-a-diferida', { method: 'POST', body: conv })
@@ -1983,11 +2002,36 @@ function CardResumen({ tarjeta, onDataChange }) {
           toast(conv ? 'Compra convertida a ' + conv.num_cuotas + ' cuotas'
             : repro ? 'Cuotas reprogramadas a ' + repro.num_cuotas
             : 'Compra revertida a 1 cuota');
+          // Pasar una compra a cuotas (o al revés) es lo que MÁS mueve el pago mínimo del mes, así que
+          // es justo donde el aviso de cifra oficial más hace falta. `resp` es la respuesta del PUT.
+          avisarCifraOficial(resp);
         });
         return;
       }
       setShowCompraModal(false); setShowMovModal(false); refreshAll(); toast('Compra guardada');
+      avisarCifraOficial(resp);
     });
+  }
+  // v5.8.0 — Si el mes que se acaba de tocar tiene un pago mínimo tomado del PDF, esa cifra MANDA sobre
+  // el cálculo, así que NO refleja el movimiento nuevo: el mínimo se queda quieto en Pagos y en el
+  // dashboard y, al sellar el mes, la compra quedaría marcada como pagada sin haberse pagado. La app no
+  // descarta esa cifra por su cuenta (conciliarla costó y es más confiable que el estimado): avisa y
+  // deja decidir. "Usar el cálculo" borra el override vía el mismo endpoint que lo creó.
+  async function avisarCifraOficial(resp) {
+    const av = resp && resp.aviso_cifra_oficial;
+    if (!av) return;
+    const ok = await confirmDialog(
+      'El pago minimo de ' + fmtCicloLabel(av.ciclo) + ' (' + fmtCOP(av.pago_minimo_oficial) + ') viene del extracto del banco, '
+      + 'asi que no incluye este cambio.\n\nPuedes dejarlo como esta (si el extracto sigue siendo la cifra correcta) '
+      + 'o volver al calculo de la app, que si tiene en cuenta lo que acabas de registrar.',
+      { title: 'Este mes tiene el pago minimo del extracto', confirmText: 'Usar el calculo de la app',
+        cancelText: 'Dejarlo como esta', danger: false }
+    );
+    if (!ok) return;
+    const r = await api('/extractos/pago-oficial', { method: 'POST', body: { tarjeta_id: av.tarjeta_id, ciclo: av.ciclo, pago_minimo: null } });
+    if (r && r.error) { toastErr(r.error); return; }
+    refreshAll();
+    toast('El pago minimo de ' + fmtCicloLabel(av.ciclo) + ' vuelve a calcularse con tus movimientos');
   }
   async function handleMergePersonal(grupoId) {
     // Primera confirmación (no destructiva).
@@ -3656,8 +3700,6 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
   const lastUsdField = useRef(null); // tracks which field was edited last: 'usd', 'tasa', 'cop'
   // Soft lock de ciclo cerrado: confirmación con MODAL NATIVO (no window.confirm). El ref evita el
   // desfase asíncrono de setState al re-disparar submit() desde el botón "Confirmar edición".
-  const [showCerradoConfirm, setShowCerradoConfirm] = useState(false);
-  const cerradoOkRef = useRef(false);
 
   // Candado estructural de ciclo CERRADO (≠ pagado): la compra pertenece a un ciclo anterior al
   // vigente de su tarjeta — el banco YA generó ese extracto, esté pagado o no. Todos los campos
@@ -3671,9 +3713,11 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
   // (ej. las del 19-20 que pasaron al mes siguiente). Fallback al cálculo teórico local sólo si el
   // backend no envió ciclo_vigente (robustez).
   const vigenteTarjeta = tarjeta && (tarjeta.ciclo_vigente || cicloVigente(tarjeta.dia_corte));
-  // Detección: la compra pertenece a un ciclo ya CERRADO (el banco generó ese extracto). Se usa para el
-  // aviso, la confirmación al guardar (submit) y para mantener las CUOTAS bloqueadas (reprogramar sella).
-  const cicloEstaCerrado = !!item && !!tarjeta && ((item.ciclo || ciclo) < vigenteTarjeta);
+  // v5.8.0: la detección de "ciclo cerrado por tiempo" quedó DEROGADA como fuente de bloqueos. Un mes
+  // que ya cortó pero sigue impago es plenamente editable — entre el corte y la fecha límite hay ~2
+  // semanas en las que registrar lo que faltó es lo normal. El único cierre es el ciclo PAGADO, y de eso
+  // manda el backend (403), que es quien conoce el estado real del extracto: el formulario ya no
+  // pre-bloquea ni pide confirmaciones por el calendario.
   // SOFT LOCK (v4.7.5): downgrade del candado. Los campos estructurales de un ciclo cerrado YA NO se
   // deshabilitan — el usuario puede corregir errores de tipeo del pasado; al guardar se confirma (submit)
   // y el backend acepta el PUT completo (solo conserva el candado de PAGADOS). Por eso isCicloCerrado
@@ -3684,15 +3728,14 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
   // sin abonos — 1→N convierte, N→M reprograma y N→1 revierte; cada acción la ejecuta su
   // endpoint transaccional DESPUÉS del PUT, conservando SIEMPRE la fila original de la compra
   // (fecha/registro intactos: la prelación de pagos del banco depende del orden cronológico real).
-  // SOLO en el ciclo VIGENTE: un ciclo anterior ya CERRÓ (el banco generó su extracto, esté pagado
-  // o no) y su estructura queda sellada — la conciliación IA tiene su propia vía para el pasado.
-  // Grupos, abonos parciales, terceros con reembolso y ciclos cerrados quedan fuera (cada endpoint
+  // v5.8.0: ya NO se exige el ciclo vigente. Si la compra se puede registrar en un mes impago, se puede
+  // poner a cuotas ahí mismo; el endpoint rechaza solo si el extracto está PAGADO.
+  // Grupos, abonos parciales y terceros con reembolso siguen fuera (cada endpoint
   // los rechaza). USD: una compra internacional de Visa (valor_cop>0 + USD informativo) SÍ puede
   // diferirse (la amortización corre sobre el COP); solo se excluye la compra USD PURA (sin valor
   // en pesos, ej. MC/Amex dual), que no es amortizable en COP.
   const esUsdPura = !!(item && item.valor_usd > 0 && !(item.valor_cop > 0));
-  const cuotasEditables = !!item && !item._isGrupo && !esUsdPura && !((item.monto_abonado || 0) > 0)
-    && !cicloEstaCerrado;
+  const cuotasEditables = !!item && !item._isGrupo && !esUsdPura && !((item.monto_abonado || 0) > 0);
   // Cuotas con las que la compra está HOY en la BD (diferida → su total real; si no, 1).
   const cuotasOriginales = item ? ((item.estado === 'diferida' || item.diferida_id) ? (parseInt(item.cuotas_total || item.num_cuotas, 10) || 1) : 1) : 1;
 
@@ -3720,10 +3763,30 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
   // del dataset abierto del Banco República. Si no responde, usa el valor guardado en config.
   // Se usa como fallback automático cuando el usuario marca compra internacional en una
   // tarjeta dual (Mastercard/Amex Bancolombia) y deja vacío el campo Tasa USD.
+  // v5.8.0: la TRM se pide para la FECHA DE LA COMPRA, no para hoy. Al poder registrar días atrás, usar
+  // la de hoy metía un error real (6-jul-2026: $3.334,93 vs $3.144,14 el 1-ago, ~6%). Se re-consulta al
+  // cambiar la fecha. Si esa fecha no tiene dato (feriado sin publicar, sin conexión) se cae a la TRM
+  // del día, marcándolo, en vez de dejar al usuario sin referencia.
   const [trmInfo, setTrmInfo] = useState(null);
+  // /trm-actual es el ÚNICO escritor de la TRM que el dashboard usa para estimar el cupo en pesos, y
+  // este formulario era su único llamador. Al pasar a pedir la TRM por fecha, ese caché se habría
+  // quedado congelado envejeciendo en silencio: se conserva una llamada al montar solo para refrescarlo.
+  useEffect(() => { api('/trm-actual').catch(() => {}); }, []);
   useEffect(() => {
-    api('/trm-actual').then(setTrmInfo).catch(() => setTrmInfo(null));
-  }, []);
+    let vivo = true;
+    const aplicar = (r, deFecha) => { if (vivo) setTrmInfo(r && r.trm ? Object.assign({}, r, { de_fecha_compra: !!deFecha }) : null); };
+    if (fecha && /^\d{4}-\d{2}-\d{2}$/.test(fecha)) {
+      api('/trm-fecha?fecha=' + fecha)
+        .then(r => {
+          if (r && r.ok && r.trm) return aplicar(r, true);
+          return api('/trm-actual').then(r2 => aplicar(r2, false));
+        })
+        .catch(() => { if (vivo) setTrmInfo(null); });
+    } else {
+      api('/trm-actual').then(r => aplicar(r, false)).catch(() => { if (vivo) setTrmInfo(null); });
+    }
+    return () => { vivo = false; };
+  }, [fecha]);
 
   function onUsdChange(val) { lastUsdField.current = 'usd'; setValorUsd(val); }
   function onTasaChange(val) { lastUsdField.current = 'tasa'; setTasaUsd(val); }
@@ -3794,28 +3857,10 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
     // Candado de ciclo cerrado al CREAR: si la fecha cae en un ciclo anterior al vigente, el banco
     // ya facturó ese extracto (el backend rechaza el POST con 403). Validar ANTES de crear nada
     // evita dejar una diferida huérfana (en el flujo de cuotas la diferida se crea primero).
-    if (!item && tarjeta) {
-      // Ciclo destino EXACTO (igual que el motor del backend): consciente del corte adelantado. Una
-      // fecha en la ventana post-corte salta al ciclo siguiente, así una compra del 19-20 que el
-      // corte manda al vigente NO se bloquea por error (ni deja una diferida huérfana, ya que en el
-      // flujo de cuotas la diferida se crea ANTES del POST). El backend revalida con esCicloCerrado.
-      // Con "canje retrasado" el destino es el ciclo SIGUIENTE (spillover), que está abierto → pasa.
-      const vig = tarjeta.ciclo_vigente || cicloVigente(tarjeta.dia_corte);
-      const cicloDestino = cicloSpilloverBody || cicloConCorteFront(fecha, tarjeta.dia_corte, tarjeta.cortes_custom || {});
-      if (cicloDestino < vig) {
-        toastErr('No se puede registrar: la fecha cae en el ciclo ' + cicloDestino + ', que ya cerró (el banco ya generó ese extracto). Si el extracto real incluye esta compra, usa el Asistente IA de conciliación.');
-        return;
-      }
-    }
-
-    // Soft lock al EDITAR una compra de un ciclo ya cerrado (v4.7.5): los campos ya no se bloquean, pero
-    // como el cambio altera un extracto YA facturado, se pide confirmación con un MODAL NATIVO de la app
-    // (no window.confirm). Al confirmar, el modal marca cerradoOkRef y re-dispara submit(); el ref evita
-    // el desfase asíncrono de setState. Al cancelar no se ejecuta ninguna modificación.
-    if (item && cicloEstaCerrado) {
-      if (!cerradoOkRef.current) { setShowCerradoConfirm(true); return; }
-      cerradoOkRef.current = false; // ya confirmado; consumir para la próxima edición
-    }
+    // v5.8.0: se retiraron DOS fricciones que nacían del calendario y no del estado real de la deuda:
+    // la validación que impedía CREAR con una fecha de un ciclo ya cortado, y el modal de confirmación
+    // al EDITAR una compra de ese mes. Mientras el extracto no esté pagado no hay nada que proteger, y
+    // el backend sigue siendo la autoridad: si el mes está pagado responde 403 y el error se muestra.
 
     // Conversión: grupo dividido con "Dividir" DESMARCADO → fusionar en compra personal.
     // El backend hace el merge transaccional (suma valores + bolsillo, maneja diferidas).
@@ -3970,6 +4015,9 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
         estado: 'activo',
         notas: 'Creada desde compra'
       }});
+      // Si el plan no se pudo crear (p.ej. el mes ya está pagado), CORTAR aquí: seguir adelante
+      // registraría la compra sin su plan de cuotas. El backend es quien decide (v5.8.0).
+      if (!dif || dif.error || !dif.id) { toastErr((dif && dif.error) || 'No se pudo crear el plan de cuotas'); return; }
       diferida_id = dif.id;
       toast('Diferida creada a ' + numCuotas + ' cuotas' + (cobrarIntereses ? '' : ' (sin intereses)'));
     }
@@ -4054,27 +4102,9 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
   const cicloSpilloverDestino = (!item && tarjeta && fecha) ? cicloSiguiente(cicloConCorteFront(fecha, tarjeta.dia_corte, tarjeta.cortes_custom || {})) : null;
 
   return e('form', { onSubmit: submit },
-    // Confirmación de edición en ciclo cerrado (soft lock v4.7.5): MODAL NATIVO de la app (no
-    // window.confirm). Se abre solo cuando cicloEstaCerrado y el usuario intenta guardar (submit);
-    // "Confirmar edición" re-dispara submit() vía cerradoOkRef; "Cancelar" no ejecuta nada.
-    e(Modal, { show: showCerradoConfirm, onClose: () => setShowCerradoConfirm(false),
-      title: e('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 8 } },
-        e(Ico, { name: 'alert', size: 18, color: 'var(--warning)' }), 'Ciclo cerrado: ¿Confirmas la edición?') },
-      e('p', { style: { fontSize: 13.5, color: 'var(--text-secondary)', lineHeight: 1.5, margin: '4px 0 18px' } },
-        'Esta compra pertenece a un ciclo ya facturado. Editarla alterará tu historial contable. ¿Deseas continuar?'),
-      e('div', { className: 'modal-actions' },
-        e('button', { type: 'button', className: 'btn', onClick: () => setShowCerradoConfirm(false) }, 'Cancelar'),
-        e('button', { type: 'button', className: 'btn btn-primary', onClick: () => { setShowCerradoConfirm(false); cerradoOkRef.current = true; submit(); } }, 'Confirmar edición')
-      )
-    ),
-    // Aviso de ciclo cerrado: advierte que la compra ya está facturada (soft lock: editable con
-    // confirmación al guardar).
-    cicloEstaCerrado && e('div', {
-      style: { fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.45, padding: '8px 10px', background: 'rgba(251,191,36,0.08)', border: '1px dashed rgba(251,191,36,0.5)', borderRadius: 8, marginBottom: 12, display: 'flex', gap: 8, alignItems: 'flex-start' }
-    },
-      e('span', { style: { flexShrink: 0, display: 'inline-flex', marginTop: 1 } }, e(Ico, { name: 'bulb', size: 14, color: 'var(--warning)' })),
-      e('span', null, 'Esta compra pertenece al ciclo ' + (item.ciclo || ciclo) + ', que ya cerró (el banco ya generó ese extracto). Puedes corregirla para cuadrar con el extracto real, pero al guardar alterarás un movimiento ya facturado; se te pedirá confirmación. El número de cuotas sigue bloqueado.')
-    ),
+    // v5.8.0: se retiraron el modal de confirmación y el aviso ámbar de "ciclo cerrado". Ambos nacían
+    // del calendario: mientras el extracto no esté pagado no se está alterando ningún cierre real, así
+    // que advertirlo era ruido en el flujo normal de registrar lo del mes que acaba de cortar.
     e('div', { className: 'form-row' },
       e('div', { className: 'form-group' },
         e('label', { className: 'form-label' }, 'Fecha'),
@@ -4159,9 +4189,9 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
       esInternacional && aplicaIntlForm && e('div', { style: { marginTop: 8, marginLeft: 20 } },
         e('label', { className: 'form-label', style: { fontSize: 12 } }, 'Tasa de interés del extracto (% mensual)'),
         e('input', { type: 'number', step: '0.0001', className: 'form-input', value: tasaIntl, onChange: ev => setTasaIntl(ev.target.value), disabled: isCicloCerrado, style: lockStyle,
-          placeholder: tarjeta && tarjeta.tasa_mv_avances ? (tarjeta.tasa_mv_avances * 100).toFixed(4) + '  (tasa actual de la tarjeta)' : 'Ej: 2.0849' }),
+          placeholder: tarjeta && tarjeta.tasa_mv_avances ? (tarjeta.tasa_mv_avances * 100).toFixed(4) + '  (tasa actual)' : 'Ej: 2.0849' }),
         e('div', { className: 'form-hint', style: { color: 'var(--text-muted)' } },
-          'Congela la tasa que el banco aplicó a ESTA compra (la imprime el extracto, ej. 2,0849). Así su interés no cambia si la tasa de la tarjeta fluctúa después. Vacío = usa la tasa actual.')
+          'Congela la tasa que el banco aplicó a ESTA compra (la imprime el extracto, ej. 2,0849). Así su interés no cambia si la tasa de la tarjeta fluctúa después. Si lo dejas vacío, la app busca la tasa que regía en la FECHA de la compra.')
       )
     ),
     // ── Inputs de valores según moneda ──────────────────────────────
@@ -4186,11 +4216,12 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
               e('label', { className: 'form-label' }, 'Tasa USD ',
                 e('span', { style: { color: 'var(--text-muted)', fontWeight: 400 } }, '(recomendado)')
               ),
-              e(MoneyInput, { value: tasaUsd, onChange: val => onTasaChange(val), disabled: isCicloCerrado, style: lockStyle, placeholder: trmInfo && trmInfo.trm ? 'TRM día: ' + new Intl.NumberFormat('es-CO').format(Math.round(trmInfo.trm)) : 'Ej: 4.150' }),
+              e(MoneyInput, { value: tasaUsd, onChange: val => onTasaChange(val), disabled: isCicloCerrado, style: lockStyle, placeholder: trmInfo && trmInfo.trm ? (trmInfo.de_fecha_compra ? 'TRM del ' + trmInfo.fecha + ': ' : 'TRM día: ') + new Intl.NumberFormat('es-CO').format(Math.round(trmInfo.trm)) : 'Ej: 4.150' }),
               !tasaUsd && trmInfo && trmInfo.trm && e('div', { className: 'form-hint', style: { color: '#4FC3F7' } },
-                'Si lo dejas vacío, se usará la TRM del día: $' + new Intl.NumberFormat('es-CO').format(Math.round(trmInfo.trm)) +
+                'Si lo dejas vacío, se usará la TRM ' + (trmInfo.de_fecha_compra ? 'de la fecha de la compra' : 'del día') + ': $' + new Intl.NumberFormat('es-CO').format(Math.round(trmInfo.trm)) +
                 (trmInfo.fecha ? ' (' + trmInfo.fecha + ')' : '') +
-                (trmInfo.ok === false ? ' [valor de caché — sin conexión]' : '')
+                (trmInfo.ok === false ? ' [valor de caché — sin conexión]' : '') +
+                (!trmInfo.de_fecha_compra && fecha && fecha < todayISO() ? ' — no se encontró la TRM de esa fecha, revisa el valor' : '')
               )
             )
           ),

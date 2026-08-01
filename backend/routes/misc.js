@@ -73,5 +73,34 @@ module.exports = function(db, dbPath) {
     }
   });
 
+  // TRM de una FECHA concreta (v5.8.0). Al poder registrar compras de días pasados, aplicarles la TRM
+  // de hoy mete un error real: medido entre el 6-jul-2026 ($3.334,93) y el 1-ago ($3.144,14) da ~6%.
+  // El mismo dataset guarda la serie completa; cada fila cubre un rango [vigenciadesde, vigenciahasta]
+  // (un día hábil, o el fin de semana entero), así que se busca la fila que CONTIENE la fecha.
+  // A diferencia de /trm-actual, este endpoint NO escribe en `config`: ese valor es el que el dashboard
+  // usa para estimar el cupo en pesos y debe seguir siendo el vigente, no el de una compra vieja.
+  router.get('/trm-fecha', async (req, res) => {
+    const fecha = String(req.query.fecha || '').slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) {
+      return res.status(400).json({ ok: false, error: 'Fecha invalida (se espera YYYY-MM-DD).' });
+    }
+    const iso = fecha + 'T00:00:00.000';
+    const apiUrl = 'https://www.datos.gov.co/resource/32sa-8pi3.json'
+      + "?$where=vigenciadesde <= '" + iso + "' AND vigenciahasta >= '" + iso + "'&$limit=1";
+    try {
+      const response = await fetch(apiUrl, { headers: { 'Accept': 'application/json', 'User-Agent': 'ControlTC/1.0' } });
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      const data = await response.json();
+      if (!Array.isArray(data) || data.length === 0) throw new Error('Sin TRM para ' + fecha);
+      const trm = parseFloat(data[0].valor);
+      if (!trm || isNaN(trm)) throw new Error('TRM invalida en respuesta');
+      return res.json({ ok: true, trm, fecha, source: 'datos.gov.co (Banco República)' });
+    } catch (err) {
+      // Sin red o sin dato para esa fecha: se responde ok:false y el llamador decide. NO se inventa
+      // un valor ni se cae al de hoy en silencio — sería justo el error que este endpoint evita.
+      return res.json({ ok: false, error: err.message, trm: null, fecha });
+    }
+  });
+
   return router;
 };

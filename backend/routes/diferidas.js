@@ -107,6 +107,19 @@ module.exports = function(db, { logAction, tjNombre }) {
 
   router.post('/', (req, res) => {
     const { tarjeta_id, etiqueta, monto, tasa_mv, num_cuotas, fecha_compra, fecha_primer_corte, estado, notas } = req.body;
+    // GUARD DE CICLO PAGADO (v5.8.0). Este endpoint no tenía NINGÚN candado, y el flujo de "compra a
+    // cuotas" del formulario crea la diferida ANTES del POST de la compra: si ese POST luego devolvía
+    // 403 por ciclo pagado, la diferida quedaba HUÉRFANA — sin compra que la referencie, sumando a
+    // deudaDiferidas y al cupo de forma permanente, y ni siquiera borrable desde la app (el DELETE
+    // deriva su ciclo de fecha_primer_corte y también da 403). Hasta v5.7.x el formulario lo tapaba
+    // pre-validando por CALENDARIO; al derogarse ese candado hay que cerrarlo aquí, en la raíz.
+    if (tarjeta_id && fecha_primer_corte) {
+      const cicloOrigen = String(fecha_primer_corte).slice(0, 7);
+      const ext = db.prepare("SELECT estado FROM extractos WHERE tarjeta_id=? AND ciclo=?").get(tarjeta_id, cicloOrigen);
+      if (ext && ext.estado === 'pagado') {
+        return res.status(403).json({ error: 'No se puede crear el plan de cuotas: el extracto del ciclo ' + cicloOrigen + ' ya está pagado.' });
+      }
+    }
     const r = db.prepare(`INSERT INTO diferidas (tarjeta_id, etiqueta, monto, tasa_mv, num_cuotas, fecha_compra, fecha_primer_corte, estado, notas)
                           VALUES (?,?,?,?,?,?,?,?,?)`)
       .run(tarjeta_id || null, etiqueta, monto, tasa_mv, num_cuotas, fecha_compra, fecha_primer_corte, estado || 'activo', notas || null);
@@ -228,20 +241,9 @@ module.exports = function(db, { logAction, tjNombre }) {
       return res.status(403).json({ error: 'No se puede reprogramar: esta compra es de un tercero y ya tiene reembolsos registrados. Gestiona o retira esos abonos desde la pestaña Terceros antes de reprogramar.' });
     }
 
-    // Inmutabilidad estructural (edición MANUAL): la reprogramación solo aplica si la compra pertenece
-    // al ciclo VIGENTE — un ciclo anterior ya cerró (extracto generado) aunque no esté pagado. La
-    // CONCILIACIÓN IA queda exenta (desde_conciliacion=true): corrige planes que el BANCO ya reprogramó
-    // en extractos pasados; su candado de ciclos PAGADOS (abajo) sigue aplicando igual.
-    if (!(req.body && req.body.desde_conciliacion)) {
-      const tjRep = db.prepare('SELECT dia_corte FROM tarjetas WHERE id=?').get(d.tarjeta_id);
-      const diaCorteRep = (tjRep && tjRep.dia_corte) || 30;
-      const compraVincRep = db.prepare('SELECT ciclo FROM compras WHERE diferida_id=? LIMIT 1').get(req.params.id);
-      const cicloOrigenRep = (compraVincRep && compraVincRep.ciclo) || calcCicloLocal(d.fecha_compra, diaCorteRep);
-      const cicloVigRep = cicloConCorte(hoyLocal(), diaCorteRep, getCortesCustomMap(db, d.tarjeta_id));
-      if (cicloOrigenRep < cicloVigRep) {
-        return res.status(403).json({ error: 'No se puede reprogramar: la compra pertenece al ciclo ' + cicloOrigenRep + ', que ya cerró (el vigente es ' + cicloVigRep + '). El banco ya facturó ese extracto.' });
-      }
-    }
+    // v5.8.0: DEROGADO el candado por TIEMPO (exigía que la compra viviera en el ciclo VIGENTE). El
+    // candado de ciclos PAGADOS de abajo —que recorre los ciclos que la amortización realmente tocó—
+    // es el único cierre y es más preciso que el calendario.
 
     const amortPrev = calcularAmortizacionDiferida(d.monto, d.tasa_mv, d.num_cuotas, d.fecha_compra, d.fecha_primer_corte, null, nuOptsDif(db, d));
     const ciclosPagados = [...new Set(amortPrev.tabla.map(c => c.fechaCorte.slice(0, 7)))].filter(ci => {

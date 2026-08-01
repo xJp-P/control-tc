@@ -5,6 +5,8 @@ const { calcularAmortizacionDiferida } = require('../engine/amortizacion');
 const { nuOpts, nuOptsDif, aplicaIntInternacional } = require('../helpers/banco');
 const { compraTerceroConReembolso, objetivoBolsilloCop, cicloYaPagado } = require('../helpers/bolsillo');
 const { getCortesCustomMap, cicloConCorte, corteDeCiclo } = require('../helpers/cortes');
+const { tasaIntlEnFecha } = require('../helpers/tasas');
+const { pagoMinimoOficial } = require('../helpers/extractoOficial');
 
 module.exports = function(db, { logAction, tjNombre }) {
   const router = Router();
@@ -19,12 +21,32 @@ module.exports = function(db, { logAction, tjNombre }) {
     return cicloConCorte(fecha, diaCorte, getCortesCustomMap(db, tarjetaId));
   }
 
-  // ¿El ciclo ya CERRÓ para la tarjeta? (cerrado ≠ pagado: el banco ya generó ese extracto,
-  // esté pagado o no — su contenido queda sellado.) Punto único de la política de inmutabilidad
-  // estructural de ciclos cerrados: crear/editar/borrar/mover/fusionar/dividir compras de un
-  // ciclo cerrado descuadra lo facturado. La conciliación IA queda exenta caso por caso vía
-  // desde_conciliacion=true (corrige el pasado con confirmación del usuario); el guard de
-  // ciclos PAGADOS de cada endpoint es independiente y aplica siempre.
+  // ¿El extracto de ese (tarjeta, ciclo) ya está PAGADO? ÚNICO candado de inmutabilidad desde v5.8.0.
+  // Regla del Product Owner: un ciclo se sella cuando se PAGA, no cuando pasa su fecha de corte. Entre
+  // el corte y la fecha límite hay ~2 semanas en las que el extracto existe pero la deuda sigue viva:
+  // ahí registrar lo que faltó es legítimo y el banco mismo lo admite. Sin exención — ni la IA lo salta.
+  // Si el ciclo que se acaba de tocar tiene una cifra de pago mínimo tomada del PDF, esa cifra MANDA
+  // sobre el cálculo (helpers/extractoOficial) y por tanto NO refleja el movimiento nuevo: el mínimo se
+  // queda quieto en todas las vistas y, al sellar, la compra igual quedaría marcada como pagada. No se
+  // toca nada por cuenta propia (esa cifra costó conciliarla y es más confiable que el estimado): se
+  // devuelve el aviso para que el usuario decida si la descarta y vuelve al cálculo.
+  function avisoCifraOficial(tarjetaId, ciclo) {
+    const of = pagoMinimoOficial(db, tarjetaId, ciclo);
+    if (of == null) return null;
+    const row = db.prepare('SELECT fuente FROM extractos_oficiales WHERE tarjeta_id=? AND ciclo=?').get(tarjetaId, ciclo);
+    return { tarjeta_id: tarjetaId, ciclo, pago_minimo_oficial: of, fuente: (row && row.fuente) || null };
+  }
+
+  function esCicloPagado(tarjetaId, ciclo) {
+    if (!ciclo) return false;
+    const ext = db.prepare("SELECT estado FROM extractos WHERE tarjeta_id=? AND ciclo=?").get(tarjetaId, ciclo);
+    return !!(ext && ext.estado === 'pagado');
+  }
+
+  // ¿El ciclo ya CERRÓ por TIEMPO? (cerrado ≠ pagado: el banco generó el extracto, esté pagado o no.)
+  // DEROGADO en v5.8.0 como candado del ciclo de vida de la compra — bloqueaba el registro manual
+  // durante toda la ventana corte→pago. Sobrevive en UN solo sitio: `merge-personal`, que BORRA
+  // físicamente las partes de terceros y no tiene deshacer (decisión explícita del Product Owner).
   function esCicloCerrado(tarjetaId, ciclo) {
     if (!ciclo) return false;
     const tj = db.prepare('SELECT dia_corte FROM tarjetas WHERE id=?').get(tarjetaId);
@@ -182,21 +204,32 @@ module.exports = function(db, { logAction, tjNombre }) {
     if (extCiclo && extCiclo.estado === 'pagado') {
       return res.status(403).json({ error: 'No se puede agregar la compra: el extracto del ciclo ' + ciclo + ' ya está pagado. Los ciclos cerrados no admiten nuevos movimientos.' });
     }
-    // Inmutabilidad estructural (cerrado ≠ pagado): tampoco se crean compras en un ciclo anterior
-    // al vigente — ese extracto el banco ya lo generó. La conciliación IA (crear_compra de una
-    // compra que el extracto trae y la app no tiene) queda exenta vía desde_conciliacion.
-    if (!(req.body && req.body.desde_conciliacion) && esCicloCerrado(tarjeta_id, ciclo)) {
-      return res.status(403).json({ error: 'No se puede agregar la compra: el ciclo ' + ciclo + ' ya cerró (el banco ya generó ese extracto). Si el extracto real la incluye, usa el Asistente IA de conciliación.' });
-    }
+    // v5.8.0: DEROGADO el candado por TIEMPO (ciclo anterior al vigente). Mientras el extracto no esté
+    // pagado la deuda sigue viva y registrar lo que faltó es legítimo — el guard de PAGADO de arriba es
+    // el único cierre. Ver esCicloPagado.
     // "Snapshot al nacer": si no se especifica tasa_intl y la tarjeta cobra interés sobre compras
     // internacionales (Bancolombia Visa), congela la tasa ACTUAL de la tarjeta en la compra → nace
     // inmune a cambios futuros de la tasa global. El fallback (?? tasa_global) queda SOLO para las
     // compras históricas que ya quedaron en NULL antes de esta función.
+    // v5.8.0 — la tasa se resuelve por la FECHA DE LA COMPRA, no por el día en que se digita. Al poder
+    // registrar en un ciclo pasado impago, "la tasa actual de la tarjeta" es el dato equivocado: la
+    // usura cambia el 1° de cada mes. Cascada (helpers/tasas.js): tasa explícita del usuario → tasa ya
+    // congelada en otras compras del MISMO ciclo (la puso el extracto si se concilió) → tasa publicada
+    // en esa fecha (serie del scraper en `historial`) → tasa vigente de la tarjeta (comportamiento
+    // previo, para que esto nunca resuelva peor que antes).
     let tasaIntlFinal = (tasa_intl != null && tasa_intl !== '') ? Number(tasa_intl) : null;
+    let tasaIntlFuente = tasaIntlFinal != null ? 'valor indicado' : null;
     if (tasaIntlFinal == null) {
       const tjRate = db.prepare('SELECT banco, franquicia, tasa_mv_avances FROM tarjetas WHERE id=?').get(tarjeta_id);
-      if (tjRate && aplicaIntInternacional(tjRate.banco, tjRate.franquicia) && tjRate.tasa_mv_avances != null) {
-        tasaIntlFinal = tjRate.tasa_mv_avances;
+      if (tjRate && aplicaIntInternacional(tjRate.banco, tjRate.franquicia)) {
+        const hist = tasaIntlEnFecha(db, tarjeta_id, ciclo, fecha, null);
+        if (hist.tasa != null) {
+          tasaIntlFinal = hist.tasa;
+          tasaIntlFuente = hist.fuente;
+        } else if (tjRate.tasa_mv_avances != null) {
+          tasaIntlFinal = tjRate.tasa_mv_avances;
+          tasaIntlFuente = 'tasa actual de la tarjeta';
+        }
       }
     }
     // updated_at = ahora al crear: una compra nueva es lo más reciente de su día en la tabla (display).
@@ -205,7 +238,8 @@ module.exports = function(db, { logAction, tjNombre }) {
       .run(tarjeta_id || null, fecha, descripcion, valor_cop, valor_usd || null, tasa_usd || null, persona_id || null, estado || 'pendiente', ciclo, notas || null, nota_personal || null, diferida_id || null, grupo_id || null, es_internacional ? 1 : 0, cicloManual, tasaIntlFinal);
     const fmt = new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',maximumFractionDigits:0}).format(valor_cop);
     logAction('crear', tjNombre(tarjeta_id) + 'Compra registrada: ' + descripcion + ' por ' + fmt);
-    res.json({ id: r.lastInsertRowid });
+    res.json({ id: r.lastInsertRowid, tasa_intl_aplicada: tasaIntlFinal, tasa_intl_fuente: tasaIntlFuente,
+               aviso_cifra_oficial: avisoCifraOficial(tarjeta_id, ciclo) });
   });
 
   router.put('/:id', (req, res) => {
@@ -231,10 +265,14 @@ module.exports = function(db, { logAction, tjNombre }) {
     // (desde_conciliacion). El frontend pide confirmación explícita antes de guardar en ciclo cerrado.
     // OJO tasa_intl: el UPDATE de abajo conserva el snapshot histórico (finalTasaIntl ← body || current),
     // nunca lo recalcula con la tasa global vigente.
-    if (current && !(req.body && req.body.desde_conciliacion)) {
-      if (!esCicloCerrado(current.tarjeta_id, current.ciclo) && esCicloCerrado(tarjeta_id, ciclo)) {
-        return res.status(403).json({ error: 'No se puede mover la compra al ciclo ' + ciclo + ': ese ciclo ya cerró (el banco ya generó ese extracto). Si el extracto real la incluye, usa el Asistente IA de conciliación.' });
-      }
+    // GUARD DE DESTINO PAGADO (v5.8.0, sin exención — ni la IA lo salta). Hasta v5.7.x este endpoint
+    // solo validaba "pagado" contra el ciclo ORIGEN (`current.ciclo`); mover una compra a un ciclo
+    // PAGADO lo impedía de rebote el candado por TIEMPO, que aquí se deroga. Sin este guard quedaba
+    // abierta una fuga que EVAPORA DEUDA EN SILENCIO: al cambiarle la fecha a una compra para mandarla
+    // a un ciclo ya pagado, `syncData` paso 6 (config/db.js) la marca `estado='pagado'` con
+    // `monto_abonado=valor_cop` en el siguiente arranque, sin que ninguna vista lo muestre.
+    if (current && (tarjeta_id != current.tarjeta_id || ciclo !== current.ciclo) && esCicloPagado(tarjeta_id, ciclo)) {
+      return res.status(403).json({ error: 'No se puede mover la compra al ciclo ' + ciclo + ': el extracto de ese ciclo ya está pagado.' });
     }
     let finalEstado = estado || (current ? current.estado : 'pendiente');
     let finalBolsillo = monto_bolsillo !== undefined ? (monto_bolsillo || 0) : (current ? current.monto_bolsillo : 0);
@@ -286,7 +324,11 @@ module.exports = function(db, { logAction, tjNombre }) {
     }
 
     logAction('editar', tjNombre(tarjeta_id) + 'Compra editada: ' + descripcion);
-    res.json({ ok: true });
+    // El aviso va del ciclo DESTINO; si la compra cambió de ciclo, el origen también quedó alterado.
+    const avisoDestino = avisoCifraOficial(tarjeta_id, ciclo);
+    const avisoOrigen = (current && (tarjeta_id != current.tarjeta_id || ciclo !== current.ciclo))
+      ? avisoCifraOficial(current.tarjeta_id, current.ciclo) : null;
+    res.json({ ok: true, aviso_cifra_oficial: avisoDestino || avisoOrigen });
   });
 
   // Calcula el target máximo del bolsillo de una compra (lo que realmente costará):
@@ -551,15 +593,8 @@ module.exports = function(db, { logAction, tjNombre }) {
         return res.status(403).json({ error: 'No se puede dividir: el extracto del ciclo ' + ci + ' ya está pagado.' });
       }
     }
-    // Inmutabilidad estructural (cerrado ≠ pagado): ni el ciclo actual ni los destinos pueden ser
-    // ciclos ya cerrados. La conciliación IA (ruta C de reprogramar_cuotas: el banco reprogramó en
-    // extractos pasados) queda exenta vía desde_conciliacion; el guard de pagados (arriba) le aplica.
-    if (!(req.body && req.body.desde_conciliacion)) {
-      const cicloCerr = ciclosCheck.find(ci => esCicloCerrado(c.tarjeta_id, ci));
-      if (cicloCerr) {
-        return res.status(403).json({ error: 'No se puede dividir: el ciclo ' + cicloCerr + ' ya cerró (el banco ya generó ese extracto). Las reprogramaciones del pasado se corrigen con el Asistente IA de conciliación.' });
-      }
-    }
+    // v5.8.0: DEROGADO el candado por TIEMPO sobre el ciclo actual y los destinos. El guard de
+    // PAGADOS de arriba (que cubre TODOS los ciclos involucrados) es el único cierre.
 
     const n = cuotas.length;
     const ids = db.transaction(() => {
@@ -602,13 +637,7 @@ module.exports = function(db, { logAction, tjNombre }) {
       if (ext && ext.estado === 'pagado') {
         return res.status(403).json({ error: 'No se puede eliminar: el extracto del ciclo ' + c.ciclo + ' ya está pagado.' });
       }
-      // Inmutabilidad estructural (cerrado ≠ pagado): borrar una compra de un ciclo que ya cerró
-      // descuadra el extracto que el banco ya facturó. Exención desde_conciliacion para la acción
-      // `eliminar_compra` de la conciliación IA (v5.6.3): borra una compra que el banco NO facturó, y
-      // el extracto llega justo cuando el ciclo ya cerró. El candado de PAGADOS de arriba no se exime.
-      if (!desdeIa && esCicloCerrado(c.tarjeta_id, c.ciclo)) {
-        return res.status(403).json({ error: 'No se puede eliminar: la compra pertenece al ciclo ' + c.ciclo + ', que ya cerró (el banco ya generó ese extracto).' });
-      }
+      // v5.8.0: DEROGADO el candado por TIEMPO. El guard de PAGADOS de arriba es el único cierre.
       // Guards de CONTENIDO, solo para la vía de la IA: el borrado manual lo hace el usuario viendo la
       // fila y sus badges, pero la IA propone a ciegas sobre un id. Sin esto, un falso positivo podía
       // evaporar el reembolso de un tercero o dejar un crédito de saldo a favor inalcanzable (la
@@ -633,7 +662,7 @@ module.exports = function(db, { logAction, tjNombre }) {
       }
     }
     logAction('eliminar', tjNombre(c ? c.tarjeta_id : null) + 'Compra eliminada: ' + (c ? c.descripcion : 'ID ' + req.params.id));
-    res.json({ ok: true });
+    res.json({ ok: true, aviso_cifra_oficial: avisoCifraOficial(c.tarjeta_id, c.ciclo) });
   });
 
   // ── Convertir compra de 1 cuota → diferida a N cuotas (in-place) ──────────
@@ -664,17 +693,9 @@ module.exports = function(db, { logAction, tjNombre }) {
     }
     const tj = db.prepare('SELECT dia_corte, tasa_mv_diferidas FROM tarjetas WHERE id=?').get(c.tarjeta_id);
     const diaCorte = (tj && tj.dia_corte) || 30;
-    // Inmutabilidad estructural: la compra debe pertenecer al ciclo VIGENTE (el que corre). Un ciclo
-    // anterior ya CERRÓ (el banco generó ese extracto) aunque no esté pagado: su estructura de cuotas
-    // queda sellada. Las ediciones estéticas (PUT regular) no pasan por aquí y siguen permitidas.
-    const cicloVig = cicloConCorte(hoyLocal(), diaCorte, getCortesCustomMap(db, c.tarjeta_id));
-    // La conciliación IA (desde_conciliacion) queda EXENTA del candado de ciclo cerrado: el banco
-    // difirió esta compra en un extracto YA facturado y la IA lo corrige con confirmación del usuario
-    // (espejo de reprogramar/dividir/PUT). El candado de ciclos PAGADOS (abajo) es independiente y SIEMPRE aplica.
-    if (!(req.body && req.body.desde_conciliacion) && c.ciclo < cicloVig) {
-      return res.status(403).json({ error: 'No se puede convertir: la compra pertenece al ciclo ' + c.ciclo + ', que ya cerró (el vigente es ' + cicloVig + '). El banco ya facturó ese extracto.' });
-    }
-    // Y dentro del vigente, tampoco si su extracto ya se pagó (pago anticipado).
+    // v5.8.0: DEROGADO el candado por TIEMPO (exigía que la compra viviera en el ciclo VIGENTE). Si se
+    // puede registrar una compra en un ciclo impago, se puede ponerla a cuotas ahí mismo. El candado de
+    // ciclo PAGADO (abajo) es el único cierre.
     const extConv = db.prepare("SELECT estado FROM extractos WHERE tarjeta_id=? AND ciclo=?").get(c.tarjeta_id, c.ciclo);
     if (extConv && extConv.estado === 'pagado') {
       return res.status(403).json({ error: 'No se puede convertir: el extracto del ciclo ' + c.ciclo + ' ya está pagado.' });
@@ -749,13 +770,9 @@ module.exports = function(db, { logAction, tjNombre }) {
     if (!d) return res.status(404).json({ error: 'No se encontró el plan de cuotas vinculado.' });
     const abonosDif = db.prepare('SELECT COUNT(*) n FROM abonos_diferida WHERE diferida_id=?').get(d.id);
     if (abonosDif && abonosDif.n > 0) return res.status(400).json({ error: 'El plan de cuotas tiene abonos registrados; no se puede revertir.' });
-    // Inmutabilidad estructural: solo se revierte en el ciclo VIGENTE — un ciclo anterior ya cerró
-    // (extracto generado) aunque no esté pagado.
-    const tjRev = db.prepare('SELECT dia_corte FROM tarjetas WHERE id=?').get(c.tarjeta_id);
-    const cicloVigRev = cicloConCorte(hoyLocal(), (tjRev && tjRev.dia_corte) || 30, getCortesCustomMap(db, c.tarjeta_id));
-    if (c.ciclo < cicloVigRev) {
-      return res.status(403).json({ error: 'No se puede revertir: la compra pertenece al ciclo ' + c.ciclo + ', que ya cerró (el vigente es ' + cicloVigRev + '). El banco ya facturó ese extracto.' });
-    }
+    // v5.8.0: DEROGADO el candado por TIEMPO (solo se revertía en el ciclo VIGENTE). El guard de abajo
+    // —ninguna cuota puede haber caído en un ciclo PAGADO— es el que protege de verdad, y es más
+    // preciso: mira los ciclos que la amortización realmente tocó, no el calendario.
     // Inmutabilidad: ninguna cuota puede haber caído ya en un ciclo con extracto pagado (revertir
     // reescribiría un cierre real) — mismo criterio que la reprogramación. Incluye el ciclo de la compra.
     const amortRev = calcularAmortizacionDiferida(d.monto, d.tasa_mv, d.num_cuotas, d.fecha_compra, d.fecha_primer_corte, null, nuOptsDif(db, d));
