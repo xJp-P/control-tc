@@ -62,3 +62,32 @@ function fmtDate(d) {
 function fmtUsd(n) {
   return 'USD $' + new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n || 0);
 }
+
+
+// Celda "Tasa" para las tablas de Compras/Terceros: muestra la tasa efectiva de interés intl de la
+// compra. Congelada (tasa_intl) → texto normal; fallback a la tasa global viva → itálica/gris (señal
+// de "actualízala desde el extracto"). En blanco si la compra no es internacional.
+function tasaIntlTd(c, tarjeta) {
+  // Celda vacía → guion gris, igual que la columna "Valor USD" (consistencia visual).
+  const dash = e('td', { className: 'text-right text-mono', style: { fontSize: 12 } }, e('span', { style: { color: 'var(--text-muted)' } }, '—'));
+  const esIntl = !!(c.es_internacional || (c.valor_usd && c.valor_usd > 0));
+  if (!esIntl) return dash;
+  const frozen = (c.tasa_intl != null);
+  const tasa = frozen ? c.tasa_intl : (tarjeta && tarjeta.tasa_mv_avances ? tarjeta.tasa_mv_avances : 0);
+  if (!tasa) return dash;
+  return e('td', {
+    className: 'text-right text-mono',
+    style: Object.assign({ fontSize: 12 }, frozen ? {} : { fontStyle: 'italic', color: 'var(--text-muted)' }),
+    title: frozen ? 'Tasa congelada de esta compra (la del extracto)' : 'Usando la tasa ACTUAL de la tarjeta (no congelada). Edita la compra y fija la del extracto.'
+  }, (Number(tasa) * 100).toFixed(4) + '%');
+}
+
+// Color del estado real de una compra (para bordes/acentos). Mismas correspondencias que .badge-*.
+function estadoColor(estado) {
+  return estado === 'bolsillo' ? 'var(--success)'
+    : estado === 'bolsillo_parcial' ? 'var(--purple)'
+    : estado === 'pagado' ? 'var(--success)'
+    : estado === 'pendiente' ? 'var(--warning)'
+    : estado === 'vencido' ? 'var(--danger)'
+    : 'var(--border)';
+}
