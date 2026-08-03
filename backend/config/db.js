@@ -7,9 +7,6 @@
 
 const path = require('path');
 const fs = require('fs');
-// esNuBank y nuOpts ya no los usa nadie; se conservan tal cual estaban (limpiarlos seria un
-// cambio que este reparto no exige).
-const { esNuBank, nuOpts } = require('../helpers/banco');
 const { crearEsquema } = require('./db/schema');
 const { aplicarMigraciones } = require('./db/migraciones');
 const { syncData } = require('./db/syncData');

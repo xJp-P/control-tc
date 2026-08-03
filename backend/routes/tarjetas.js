@@ -2,8 +2,8 @@
 const { Router } = require('express');
 const { calcularAmortizacionAvance } = require('../engine/amortizacion');
 const { calcularAmortizacionDiferida } = require('../engine/amortizacion');
-const { hoyLocal, calcCicloLocal } = require('../helpers/dates');
-const { nuOpts, nuOptsDif, avanceOpts, clearBancoCache } = require('../helpers/banco');
+const { hoyLocal } = require('../helpers/dates');
+const { nuOptsDif, avanceOpts, clearBancoCache } = require('../helpers/banco');
 const { scrapeTasas } = require('../helpers/scraper');
 const { getCortesCustomMap, cicloConCorte } = require('../helpers/cortes');
 

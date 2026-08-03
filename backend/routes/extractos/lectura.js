@@ -4,16 +4,13 @@
 // Rutas movidas VERBATIM desde extractos.js. Se registran sobre el MISMO router que crea el
 // archivo padre, no sobre un sub-router montado: asi el stack de Express conserva su
 // forma y su ORDEN exactos, y el contrato que se ve desde fuera no cambia ni un apice.
-const { Router } = require('express');
-const { minimoEfectivo, pagoMinimoOficial } = require('../../helpers/extractoOficial');
 // Margen que el pago de un extracto puede desviarse del mínimo estimado y aun así darse por completo.
 // Existe porque el estimado NO puede ser exacto por diseño (el banco cobra interés sobre la cuota ya
 // facturada hasta el día del pago). Calibrado con 10 extractos reales: los desfases medidos van de
 // −$1.628 a +$1.060. Un abono parcial de verdad es de otro orden de magnitud y queda fuera.
 const TOLERANCIA_PAGO_COP = 2000;
-const { hoyLocal } = require('../../helpers/dates');
 const { calcularAmortizacionAvance, calcularAmortizacionDiferida } = require('../../engine/amortizacion');
-const { nuOpts, nuOptsDif, avanceOpts } = require('../../helpers/banco');
+const { nuOptsDif, avanceOpts } = require('../../helpers/banco');
 const { calcExtracto } = require('../../engine/extracto');
 
 module.exports = function(router, ctx) {

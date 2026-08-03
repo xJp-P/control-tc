@@ -2,7 +2,7 @@
 const { Router } = require('express');
 const { hoyLocal } = require('../helpers/dates');
 const { calcularAmortizacionDiferida } = require('../engine/amortizacion');
-const { nuOpts, nuOptsDif } = require('../helpers/banco');
+const { nuOptsDif } = require('../helpers/banco');
 
 module.exports = function(db, { logAction, tjNombre }) {
   const router = Router();

@@ -4,7 +4,7 @@ const path = require('path');
 const express = require('express');
 const cors = require('cors');
 
-const { getDbPath, initDb } = require('./config/db');
+const { initDb } = require('./config/db');
 const { createLogHelpers } = require('./helpers/log');
 
 module.exports = function createApp(dbPathOverride, deps = {}) {
@@ -59,8 +59,8 @@ module.exports = function createApp(dbPathOverride, deps = {}) {
   // token <" que no nombra el archivo que falta. En el instalador ese mismo síntoma puede venir de
   // un archivo no empaquetado (files de electron-builder) o de un desajuste de mayúsculas (el
   // índice del asar resuelve por clave exacta, a diferencia de NTFS), y sin 404 son
-  // indistinguibles. Hoy index.html sólo referencia los dos CDN de React, así que este camino aún
-  // no se puede disparar; se blinda ANTES de que el frontend estrene subrecursos locales.
+  // indistinguibles. Se blindó ANTES de que el frontend estrenara subrecursos locales; desde la
+  // modularización, index.html carga 19 módulos de public/js, así que este camino ya está en uso.
   const RE_ASSET = /\.(js|mjs|css|map|json|png|jpe?g|gif|svg|ico|webp|woff2?|ttf|otf|eot|pdf|txt|wasm)$/i;
   app.get('*', (req, res) => {
     if (RE_ASSET.test(req.path)) {

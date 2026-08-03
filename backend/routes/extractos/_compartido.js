@@ -7,7 +7,6 @@
 // pagarExtracto (extractos) SI los llama, y pasarle solo `db` lo dejaba con logAction
 // indefinido -> HTTP 500 al registrar un pago. Lo caza R6, que es el unico detector que
 // ejercita rutas de ESCRITURA; ninguno de los otros catorce lo habria visto.
-const { Router } = require('express');
 const { minimoEfectivo, pagoMinimoOficial } = require('../../helpers/extractoOficial');
 // Margen que el pago de un extracto puede desviarse del mínimo estimado y aun así darse por completo.
 // Existe porque el estimado NO puede ser exacto por diseño (el banco cobra interés sobre la cuota ya
@@ -15,8 +14,6 @@ const { minimoEfectivo, pagoMinimoOficial } = require('../../helpers/extractoOfi
 // −$1.628 a +$1.060. Un abono parcial de verdad es de otro orden de magnitud y queda fuera.
 const TOLERANCIA_PAGO_COP = 2000;
 const { hoyLocal } = require('../../helpers/dates');
-const { calcularAmortizacionAvance, calcularAmortizacionDiferida } = require('../../engine/amortizacion');
-const { nuOpts, nuOptsDif, avanceOpts } = require('../../helpers/banco');
 const { calcExtracto } = require('../../engine/extracto');
 
 module.exports = function(db, logAction, tjNombre) {

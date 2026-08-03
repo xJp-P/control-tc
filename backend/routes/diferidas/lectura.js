@@ -4,11 +4,9 @@
 // Rutas movidas VERBATIM desde diferidas.js. Se registran sobre el MISMO router que crea el
 // archivo padre, no sobre un sub-router montado: asi el stack de Express conserva su
 // forma y su ORDEN exactos, y el contrato que se ve desde fuera no cambia ni un apice.
-const { Router } = require('express');
-const { hoyLocal, calcCicloLocal } = require('../../helpers/dates');
-const { cicloConCorte, getCortesCustomMap, corteDeCiclo } = require('../../helpers/cortes');
+const { hoyLocal } = require('../../helpers/dates');
 const { calcularAmortizacionDiferida } = require('../../engine/amortizacion');
-const { nuOpts, nuOptsDif } = require('../../helpers/banco');
+const { nuOptsDif } = require('../../helpers/banco');
 const { compraTerceroConReembolso } = require('../../helpers/bolsillo');
 
 module.exports = function(router, ctx) {

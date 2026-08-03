@@ -3,7 +3,7 @@ const { Router } = require('express');
 const { hoyLocal, addMonths } = require('../helpers/dates');
 const { calcularAmortizacionAvance } = require('../engine/amortizacion');
 const { calcularAmortizacionDiferida } = require('../engine/amortizacion');
-const { nuOpts, nuOptsDif, avanceOpts } = require('../helpers/banco');
+const { nuOptsDif, avanceOpts } = require('../helpers/banco');
 
 module.exports = function(db) {
   const router = Router();

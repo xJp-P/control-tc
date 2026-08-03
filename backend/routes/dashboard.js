@@ -5,7 +5,7 @@ const { calcularAmortizacionAvance } = require('../engine/amortizacion');
 const { calcularAmortizacionDiferida } = require('../engine/amortizacion');
 const { calcExtracto } = require('../engine/extracto');
 const { minimoEfectivo } = require('../helpers/extractoOficial');
-const { nuOpts, nuOptsDif, avanceOpts, isDualExtracto, aplicaIntInternacional } = require('../helpers/banco');
+const { nuOptsDif, avanceOpts, isDualExtracto, aplicaIntInternacional } = require('../helpers/banco');
 
 module.exports = function(db) {
   const router = Router();

@@ -4,14 +4,7 @@
 // Rutas movidas VERBATIM desde compras.js. Se registran sobre el MISMO router que crea el
 // archivo padre, no sobre un sub-router montado: asi el stack de Express conserva su
 // forma y su ORDEN exactos, y el contrato que se ve desde fuera no cambia ni un apice.
-const { Router } = require('express');
-const { hoyLocal, daysBetween, primerCorteAvance } = require('../../helpers/dates');
-const { calcularAmortizacionDiferida } = require('../../engine/amortizacion');
-const { nuOpts, nuOptsDif, aplicaIntInternacional } = require('../../helpers/banco');
-const { compraTerceroConReembolso, objetivoBolsilloCop, cicloYaPagado } = require('../../helpers/bolsillo');
-const { getCortesCustomMap, cicloConCorte, corteDeCiclo } = require('../../helpers/cortes');
-const { tasaIntlEnFecha } = require('../../helpers/tasas');
-const { pagoMinimoOficial } = require('../../helpers/extractoOficial');
+const { compraTerceroConReembolso } = require('../../helpers/bolsillo');
 
 module.exports = function(router, ctx) {
   const { db, logAction, tjNombre, calcCiclo, avisoCifraOficial, esCicloPagado, esCicloCerrado, targetBolsillo } = ctx;

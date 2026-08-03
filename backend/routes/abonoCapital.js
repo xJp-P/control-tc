@@ -3,7 +3,7 @@ const { Router } = require('express');
 const { hoyLocal } = require('../helpers/dates');
 const { calcularAmortizacionAvance } = require('../engine/amortizacion');
 const { calcularAmortizacionDiferida } = require('../engine/amortizacion');
-const { nuOpts, nuOptsDif, avanceOpts } = require('../helpers/banco');
+const { nuOptsDif, avanceOpts } = require('../helpers/banco');
 const { liberarBolsilloDiferida, liberarBolsilloAvance } = require('../helpers/bolsillo');
 
 module.exports = function(db, { logAction, tjNombre }) {

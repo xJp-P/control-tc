@@ -7,12 +7,7 @@
 // pagarExtracto (extractos) SI los llama, y pasarle solo `db` lo dejaba con logAction
 // indefinido -> HTTP 500 al registrar un pago. Lo caza R6, que es el unico detector que
 // ejercita rutas de ESCRITURA; ninguno de los otros catorce lo habria visto.
-const { Router } = require('express');
-const { hoyLocal, calcCicloLocal } = require('../../helpers/dates');
-const { cicloConCorte, getCortesCustomMap, corteDeCiclo } = require('../../helpers/cortes');
-const { calcularAmortizacionDiferida } = require('../../engine/amortizacion');
-const { nuOpts, nuOptsDif } = require('../../helpers/banco');
-const { compraTerceroConReembolso } = require('../../helpers/bolsillo');
+const { calcCicloLocal } = require('../../helpers/dates');
 
 module.exports = function(db, logAction, tjNombre) {
 

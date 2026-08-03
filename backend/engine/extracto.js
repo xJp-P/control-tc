@@ -5,7 +5,7 @@
 // Conciliación (services/movimientos.js). Recibe `db` explícitamente.
 const { daysBetween, addDays } = require('../helpers/dates');
 const { calcularAmortizacionAvance, calcularAmortizacionDiferida } = require('./amortizacion');
-const { esNuBank, nuOpts, nuOptsDif, avanceOpts, isDualExtracto, aplicaIntInternacional } = require('../helpers/banco');
+const { esNuBank, nuOptsDif, avanceOpts, isDualExtracto, aplicaIntInternacional } = require('../helpers/banco');
 
 function calcExtracto(db, tarjetaId, cicloStr, incluirPagadas) {
   const tj = db.prepare('SELECT * FROM tarjetas WHERE id=?').get(tarjetaId);
