@@ -384,7 +384,7 @@
     {
       "nombre": "Configuracion",
       "tipo": "function",
-      "lineas": 261,
+      "lineas": 280,
       "pieza": "js/configuracion.js"
     },
     {

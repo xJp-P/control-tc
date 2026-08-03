@@ -338,7 +338,26 @@ function Configuracion({ iaConfig, onIaConfigChange }) {
           ),
           e('div', { className: 'form-group', style: { marginBottom: 12 } },
             e('label', { className: 'form-label' }, 'Modelo Predeterminado'),
-            e('input', { type: 'text', className: 'form-input', value: iaModel, onChange: ev => setIaModel(ev.target.value), placeholder: iaProviderDefaultModel(iaProvider), spellCheck: false }),
+            // Desplegable, no texto libre: escribir el ID a mano era la via mas facil de acabar
+            // llamando a un modelo retirado o con una errata, y el fallo solo aparecia al conciliar.
+            // Se puebla de la MISMA lista auditada que usa el Asistente (IA_PROVIDERS), asi que
+            // ambos sitios no pueden desincronizarse; y el select de Proveedor de arriba ya
+            // reajusta el modelo al default de ese proveedor cuando se cambia.
+            e('select', {
+              className: 'form-input', value: iaModel || iaProviderDefaultModel(iaProvider),
+              onChange: ev => setIaModel(ev.target.value)
+            },
+              (function () {
+                const ms = iaProviderModels(iaProvider);
+                const opts = ms.slice();
+                // Un modelo ya guardado que no este en la lista se conserva como opcion en vez de
+                // sustituirse en silencio: puede ser uno nuevo, o uno de acceso restringido que
+                // este usuario si tiene. Se rotula con su id para que se note que es de fuera.
+                const actual = iaModel || iaProviderDefaultModel(iaProvider);
+                if (actual && !opts.some(m => m.id === actual)) opts.unshift({ id: actual, label: actual + ' (no listado)' });
+                return opts.map(m => e('option', { key: m.id, value: m.id }, m.label));
+              })()
+            ),
             e('div', { className: 'form-hint', style: { color: 'var(--text-muted)' } }, 'Es el modelo que el Asistente toma por defecto; allí puedes cambiarlo para cada análisis.')
           ),
           e('div', { style: { fontSize: 11.5, color: 'var(--warning)', background: 'rgba(251,191,36,0.10)', border: '1px solid rgba(251,191,36,0.25)', borderRadius: 8, padding: '8px 10px', marginBottom: 12, lineHeight: 1.45 } },
