@@ -12,6 +12,15 @@
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '5.9.0': [
+    'LA APP LEE EL PAGO MINIMO DIRECTO DE TU EXTRACTO. Al conciliar el PDF, ahora reconoce la cifra que imprime el banco y te ofrece fijarla con un clic. Desde ese momento la app te muestra ESE valor como pago minimo, no su estimacion. Antes tenias que abrir el PDF, buscar el numero y escribirlo a mano porque el calculo propio nunca puede ser exacto: el banco cobra intereses que dependen del dia en que pagas. Ahora pagas lo que ves en pantalla y coincide con el banco. El estimado de la app se sigue guardando aparte, para comparar.',
+    'YA PUEDES MOVER DE MES UNA COMPRA DIVIDIDA. El campo "Ciclo (avanzado)" solo aparecia en compras de una sola persona, asi que una compra repartida entre varios que el banco facturo en el mes siguiente no habia forma de moverla. Ahora se mueve completa, con todas sus partes, sin perder el reparto ni el dinero que tengas apartado.',
+    'EL MODELO DE INTELIGENCIA ARTIFICIAL SE ELIGE DE UNA LISTA. En Configuracion, el modelo predeterminado era un campo de texto donde habia que escribir su nombre exacto; una letra de mas y el analisis fallaba sin explicacion. Ahora se elige de un menu con nombres cortos y claros, que cambia segun el proveedor.',
+    'Se revisaron uno a uno los modelos que ofrecia la app y se quitaron SEIS que sus proveedores ya habian retirado. Dos de ellos eran los que se usaban por defecto, asi que quien no eligiera modelo estaba llamando a uno que ya no existe.',
+    'EL ASISTENTE DE EXTRACTOS FALLA MUCHO MENOS Y AVISA MEJOR. Se corrigieron varios problemas que dejaban el analisis a medias: se quedaba esperando demasiado poco y se rendia antes de tiempo, se quedaba sin espacio para responder, y a veces descartaba una respuesta que en realidad era correcta. Ademas, cuando algo falla, ahora lo dice con detalle en vez de quedarse callado.',
+    'LA APP SE REORGANIZO POR DENTRO DE ARRIBA A ABAJO. Lo que antes eran cuatro archivos enormes ahora son piezas pequenas y ordenadas por su funcion. No cambia nada de lo que ves ni de lo que calcula: se comprobo, cuenta por cuenta, que ni una sola cifra se movio. El objetivo es que los cambios futuros sean mas rapidos y mas seguros.',
+    'Y con la reorganizacion viaja tambien una bateria de comprobaciones automaticas que revisa la app entera antes de cada cambio. Durante este trabajo ya evito que dos fallos serios llegaran hasta ti.'
+  ],
   '5.8.1': [
     'SI ALGO NO CARGA, LA APP AHORA LO DICE EN VEZ DE QUEDARSE PENSANDO. Cuando la pantalla le pedia al programa algo que no existia, se quedaba esperando una respuesta que nunca llegaba: el boton giraba para siempre, sin aviso ni mensaje de error. Ahora responde de inmediato diciendo que no lo encontro, asi que un fallo se nota apenas ocurre en vez de parecer que la app se colgo.'
   ],
