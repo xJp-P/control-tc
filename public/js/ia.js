@@ -9,7 +9,12 @@
 const IA_PROVIDERS = [
   { id: 'mock',      label: 'Demo (sin conexion)',  defaultModel: '',                          models: [] },
   { id: 'openai',    label: 'OpenAI',               defaultModel: 'gpt-4o',                     models: ['gpt-4o', 'gpt-4o-mini', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4-turbo'] },
-  { id: 'anthropic', label: 'Anthropic (Claude)',   defaultModel: 'claude-sonnet-4-6',          models: ['claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-opus-4-5-20251101', 'claude-sonnet-4-5-20250929', 'claude-opus-4-1-20250805'] },
+  // Anthropic: se quitaron claude-opus-4-8, claude-opus-4-7 y claude-opus-4-6 porque la API los
+  // rechaza con "model not found" (comprobado en vivo con opus-4-8). Eran alias cortos que nunca
+  // existieron. Se conservan los IDs con fecha explicita, que son estables, y claude-sonnet-4-6,
+  // que si responde. Si un modelo nuevo no aparece aqui, basta escribirlo en Configuracion: el
+  // selector admite cualquier ID guardado aunque no este en esta lista.
+  { id: 'anthropic', label: 'Anthropic (Claude)',   defaultModel: 'claude-sonnet-4-6',          models: ['claude-opus-5', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001', 'claude-opus-4-5-20251101', 'claude-sonnet-4-5-20250929', 'claude-opus-4-1-20250805'] },
   { id: 'gemini',    label: 'Google Gemini',        defaultModel: 'gemini-1.5-pro',             models: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'] },
   { id: 'deepseek',  label: 'DeepSeek',             defaultModel: 'deepseek-chat',              models: ['deepseek-chat', 'deepseek-reasoner', 'deepseek-v4-flash', 'deepseek-v4-pro'] },
 ];

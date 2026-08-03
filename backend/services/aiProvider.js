@@ -25,12 +25,62 @@ function errorProveedor(status, body) {
 }
 
 // Extrae el primer objeto JSON de la respuesta del modelo (tolera ```json ... ``` o texto extra).
+// Recorre el texto contando llaves y devuelve el primer objeto BALANCEADO que ademas parsea.
+// Cuenta solo las llaves que estan fuera de una cadena, y respeta los escapes: un modelo que
+// escriba {"descripcion": "compra {raro}"} tiene llaves dentro de un string y no deben contar.
+function objetosBalanceados(s, maximo) {
+  const out = [];
+  const tope = maximo || 20;
+  let ini = s.indexOf('{');
+  while (ini !== -1 && out.length < tope) {
+    let prof = 0, enCadena = false, escape = false, cierre = -1;
+    for (let k = ini; k < s.length; k++) {
+      const ch = s[k];
+      if (escape) { escape = false; continue; }
+      if (ch === '\\') { escape = true; continue; }
+      if (ch === '"') { enCadena = !enCadena; continue; }
+      if (enCadena) continue;
+      if (ch === '{') prof++;
+      else if (ch === '}') {
+        prof--;
+        if (prof === 0) { cierre = k; break; }
+      }
+    }
+    if (cierre === -1) break;                      // no cierra: no hay mas candidatos completos
+    out.push(s.slice(ini, cierre + 1));
+    // NO se corta en el primero: un preambulo como "revise el bloque {pago minimo}" produce un
+    // objeto balanceado que no es JSON, y quedarse con el descartaba la respuesta buena que venia
+    // detras. Se siguen recolectando los hermanos de nivel superior y los prueba quien llama.
+    ini = s.indexOf('{', cierre + 1);
+  }
+  return out;
+}
+
+// Extrae el JSON de la respuesta del modelo tolerando lo que los modelos hacen de verdad:
+// vallas ```json, un preambulo conversacional ("Claro, aqui tienes el analisis:"), y texto DESPUES
+// del objeto. La version anterior usaba indexOf('{') + lastIndexOf('}'), que se rompe en cuanto el
+// preambulo o el epilogo traen una llave suelta: el recorte incluia texto que no es JSON y el
+// usuario recibia "La IA respondio en un formato inesperado" con una respuesta que era correcta.
 function extraerJson(texto) {
   if (!texto) return null;
   let s = String(texto).trim();
+  // 1. Valla de codigo: si la hay, el contenido de la PRIMERA es el candidato preferente.
   const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fence) s = fence[1].trim();
+  if (fence && fence[1]) {
+    const dentro = fence[1].trim();
+    try { return JSON.parse(dentro); } catch (_) { /* sigue: puede traer preambulo dentro */ }
+    for (const cand of objetosBalanceados(dentro)) {
+      try { return JSON.parse(cand); } catch (_) { /* sigue */ }
+    }
+  }
+  // 2. El texto entero ya es JSON.
   try { return JSON.parse(s); } catch (_) { /* sigue */ }
+  // 3. Primer objeto balanceado dentro del texto (salta preambulo y epilogo).
+  for (const cand of objetosBalanceados(s)) {
+    try { return JSON.parse(cand); } catch (_) { /* sigue */ }
+  }
+  // 4. Ultimo recurso: el recorte amplio de siempre, por si el objeto quedo desbalanceado por un
+  //    detalle menor pero JSON.parse aun puede con el.
   const i = s.indexOf('{'), j = s.lastIndexOf('}');
   if (i >= 0 && j > i) { try { return JSON.parse(s.slice(i, j + 1)); } catch (_) { /* sigue */ } }
   return null;
@@ -150,7 +200,10 @@ async function analizar(args) {
         headers: { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
         body: JSON.stringify({
           model: model || 'claude-sonnet-4-6',
-          max_tokens: 2048,
+          // 2048 se quedaba corto: la conciliacion de un ciclo con 25 compras, 7 cuotas y varias
+          // discrepancias produce un JSON mas largo, y al truncarse dejaba de parsear. El sintoma
+          // era "La IA respondio en un formato inesperado" sobre una respuesta que iba bien.
+          max_tokens: 8192,
           system: system + '\nResponde UNICAMENTE con el objeto JSON pedido, sin texto adicional ni explicaciones fuera del JSON.',
           messages: [{ role: 'user', content: user }]
         })
@@ -159,6 +212,13 @@ async function analizar(args) {
       data = await res.json();
       txt = data && data.content && data.content[0] && data.content[0].text;
       modelo = (data && data.model) || model;
+      // Si la respuesta se corto por longitud, el JSON llega incompleto y ningun parser puede con
+      // el. Se dice por su nombre en vez de dejar el generico "formato inesperado", que manda a
+      // buscar el problema donde no esta.
+      if (data && data.stop_reason === 'max_tokens') {
+        const e = new Error('La respuesta de la IA se corto por longitud (max_tokens). Prueba con un ciclo con menos movimientos o sube max_tokens.');
+        e.tipo = 'truncado'; throw e;
+      }
     } else if (provider === 'gemini') {
       const mdl = model || 'gemini-1.5-pro';
       const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(mdl) + ':generateContent?key=' + encodeURIComponent(key);

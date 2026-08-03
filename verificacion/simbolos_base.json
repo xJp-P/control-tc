@@ -336,7 +336,7 @@
     {
       "nombre": "IA_PROVIDERS",
       "tipo": "const",
-      "lineas": 7,
+      "lineas": 12,
       "pieza": "js/ia.js"
     },
     {
