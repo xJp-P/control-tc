@@ -266,7 +266,11 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
         tasa_usd: tasaNum,
         es_internacional: esInternacional ? 1 : 0,
         splits: splits.filter(sp => sp.persona_id && sp.persona_id !== 'personal' && parseFloat(sp.monto) > 0),
-        remainder
+        remainder,
+        // Ciclo del grupo. Si el usuario fijó uno a mano en "Ciclo (avanzado)", viaja y se aplica a
+        // TODAS las partes; si lo dejó vacío, va null y handleEditGrupo conserva el que ya tenían.
+        ciclo: cicloManualVal || null,
+        ciclo_manual: cicloManualVal ? 1 : 0
       });
       return;
     }
@@ -704,9 +708,12 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
         e('div', { className: 'form-hint', style: { color: 'var(--text-muted)' } }, 'Campo automático del sistema (ej. marca de diferida). Para tus descripciones usa "Nota personal" arriba.')
       )
     ),
-    // Ciclo manual (avanzado): solo al editar una compra individual de 1 cuota. En ciclo cerrado va
-    // bloqueado: mover la compra de ciclo descuadraría el extracto que el banco ya facturó.
-    item && !item._isGrupo && numCuotas <= 1 && e('div', { className: 'form-group', style: { marginTop: 4 } },
+    // Ciclo manual (avanzado): al editar una compra de 1 cuota, sea individual o DIVIDIDA. Antes se
+    // excluían los grupos (!item._isGrupo) y no había forma de mover una compra dividida de ciclo:
+    // el caso real es una compra partida entre personas hecha el día del corte, que el banco factura
+    // en el ciclo siguiente. Crear ya lo soportaba (el checkbox de spillover cubre divididas desde
+    // v5.0.0); editar no, y esa asimetría dejaba el caso sin salida por la interfaz.
+    item && numCuotas <= 1 && e('div', { className: 'form-group', style: { marginTop: 4 } },
       e('label', { className: 'form-label' }, 'Ciclo (avanzado)'),
       e('input', { type: 'month', className: 'form-input', value: cicloManualVal, onChange: ev => setCicloManualVal(ev.target.value), disabled: isCicloCerrado, style: lockStyle }),
       e('div', { className: 'form-hint', style: { color: cicloManualVal ? 'var(--warning)' : 'var(--text-muted)' } },

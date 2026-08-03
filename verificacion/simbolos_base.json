@@ -264,13 +264,13 @@
     {
       "nombre": "CardResumen",
       "tipo": "function",
-      "lineas": 1792,
+      "lineas": 1801,
       "pieza": "js/resumen.js"
     },
     {
       "nombre": "CompraForm",
       "tipo": "function",
-      "lineas": 721,
+      "lineas": 728,
       "pieza": "js/formularios.js"
     },
     {

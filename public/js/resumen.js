@@ -205,7 +205,7 @@ function CardResumen({ tarjeta, onDataChange }) {
       toastErr((resp && resp.error) || 'No se pudo convertir la compra');
     }
   }
-  async function handleEditGrupo({ _grupoId, _partesOriginales, fecha, descripcion, valor_usd, tasa_usd, es_internacional, splits, remainder }) {
+  async function handleEditGrupo({ _grupoId, _partesOriginales, fecha, descripcion, valor_usd, tasa_usd, es_internacional, splits, remainder, ciclo: cicloForm, ciclo_manual: cicloManualForm }) {
     // Construir lista completa de nuevas partes: personas asignadas + parte personal
     const nuevasPartes = [
       ...splits.map(sp => ({ persona_id: parseInt(sp.persona_id), valor_cop: Math.round(parseFloat(sp.monto) || 0) })),
@@ -219,8 +219,12 @@ function CardResumen({ tarjeta, onDataChange }) {
     // al editar para no perder un ciclo fijado a mano (ej. spillover / canje retrasado): sin esto el
     // backend recalcularia el ciclo desde la nueva fecha y, si ese ciclo natural ya cerro, cada PUT
     // fallaria con 403 y la edicion no se aplicaria. Para partes NUEVAS se usa el ciclo del grupo.
-    const grupoCiclo = _partesOriginales[0] ? _partesOriginales[0].ciclo : undefined;
-    const grupoCicloManual = _partesOriginales[0] ? (_partesOriginales[0].ciclo_manual || 0) : 0;
+    // Si el form trae un ciclo fijado a mano, MANDA sobre el original y se aplica a todas las
+    // partes (una compra dividida vive entera en un solo ciclo). Sin él, se conserva el que ya
+    // tenían, que es lo que evita el 403 al reeditar una compra de un mes ya cerrado.
+    const grupoCiclo = cicloForm || (_partesOriginales[0] ? _partesOriginales[0].ciclo : undefined);
+    const grupoCicloManual = cicloForm ? (cicloManualForm ? 1 : 0)
+      : (_partesOriginales[0] ? (_partesOriginales[0].ciclo_manual || 0) : 0);
     const ops = [];
     const idsVisitados = new Set();
     for (const np of nuevasPartes) {
@@ -234,7 +238,7 @@ function CardResumen({ tarjeta, onDataChange }) {
           valor_usd: valor_usd || null, tasa_usd: tasa_usd || null,
           persona_id: orig.persona_id, estado: orig.estado, notas: orig.notas,
           es_internacional: intlFlag,
-          ciclo: orig.ciclo, ciclo_manual: orig.ciclo_manual || 0
+          ciclo: grupoCiclo, ciclo_manual: grupoCicloManual
         }}));
       } else {
         // Nueva persona agregada al grupo
@@ -269,6 +273,11 @@ function CardResumen({ tarjeta, onDataChange }) {
       valor_cop: grupoItem.partes.reduce((s, p) => s + p.valor_cop, 0),
       esDiferida: grupoItem.esDiferida,
       es_internacional: esInternacionalGrupo ? 1 : 0,
+      // Las partes de un grupo comparten ciclo (se crearon juntas). Se expone el de la primera
+      // para que el campo "Ciclo (avanzado)" pueda mostrarlo y editarlo, igual que en una compra
+      // simple: una compra dividida hecha el dia del corte tambien se va al ciclo siguiente.
+      ciclo: grupoItem.partes.length ? grupoItem.partes[0].ciclo : undefined,
+      ciclo_manual: grupoItem.partes.length ? (grupoItem.partes[0].ciclo_manual || 0) : 0,
     });
     setShowCompraModal(true);
   }
