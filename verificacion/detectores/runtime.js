@@ -188,12 +188,31 @@ const R3 = {
   },
   defecto: 'se elimina el CREATE TABLE de bolsillo_cuotas del esquema (la BD vacia sale incompleta y la degradada no se recupera)',
   mutar(raiz) {
-    const p = path.join(raiz, 'backend', 'config', 'db.js');
-    const src = leer(p);
-    const i = src.indexOf('CREATE TABLE IF NOT EXISTS bolsillo_cuotas');
-    if (i === -1) return;
-    const j = src.indexOf(');', i) + 2;
-    fs.writeFileSync(p, src.slice(0, i) + 'SELECT 1;' + src.slice(j), 'utf8');
+    // El CREATE se busca POR CONTENIDO en backend/config, no anclado a db.js: el reparto del
+    // esquema en su propio archivo dejaria una mutacion anclada al nombre viejo aplicandose a la
+    // nada. Y si no aparece, LANZA. El `return` silencioso que habia aqui era peor que inutil:
+    // dejaba el arbol intacto y el control negativo pasaba a no comprobar nada, que es justo la
+    // forma de fallo que esta suite existe para impedir. (Hoy el runner lo cazaria igual por la
+    // huella del arbol, pero diciendo "la mutacion no cambio nada" en vez de nombrar la causa.)
+    const base = path.join(raiz, 'backend', 'config');
+    const pendientes = [base];
+    while (pendientes.length) {
+      const d = pendientes.pop();
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        const p = path.join(d, e.name);
+        if (e.isDirectory()) { pendientes.push(p); continue; }
+        if (!e.name.endsWith('.js')) continue;
+        const src = leer(p);
+        // indexOf encuentra 'bolsillo_cuotas' antes que 'bolsillo_cuotas_avance', que es el
+        // comportamiento que este control negativo ha tenido siempre.
+        const i = src.indexOf('CREATE TABLE IF NOT EXISTS bolsillo_cuotas');
+        if (i === -1) continue;
+        const j = src.indexOf(');', i) + 2;
+        fs.writeFileSync(p, src.slice(0, i) + 'SELECT 1;' + src.slice(j), 'utf8');
+        return;
+      }
+    }
+    throw new Error('no se encontro el CREATE TABLE de bolsillo_cuotas en ningun archivo de backend/config');
   },
 };
 
