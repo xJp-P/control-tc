@@ -79,6 +79,14 @@ module.exports = function(router, ctx) {
       } catch (err) {
         const tipo = err && err.tipo;
         const code = (tipo === 'sin_key') ? 400 : (tipo === 'timeout') ? 504 : ((err && err.status) || 502);
+        // Este era el UNICO catch del handler que no dejaba rastro en la consola, y justo el que
+        // falla cuando la llamada es real (red, API key, modelo inexistente): el backend respondia
+        // con su error al frontend pero el log se quedaba en "Iniciando analisis" y parecia que el
+        // proceso habia muerto. `err.body` trae el mensaje LITERAL del proveedor (lo guarda
+        // errorProveedor en aiProvider.js), que es lo que de verdad dice que esta pasando.
+        console.log('[IA] FALLO del proveedor ' + prov + ' con el modelo ' + (model || '(default)') +
+          ' -> HTTP ' + code + ' (' + (tipo || 'error') + '): ' + ((err && err.message) || 'sin mensaje') +
+          ((err && err.body) ? ' | respuesta del proveedor: ' + err.body : ''));
         return res.status(code).json({ error: (err && err.message) ? err.message : 'Error al consultar la IA.' });
       }
 
