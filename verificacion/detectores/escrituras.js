@@ -35,6 +35,22 @@ const R6 = {
       return lista.find(e => e.ciclo === ciclo) || null;
     }
 
+    // La banda de tolerancia depende de si el extracto tiene la cifra OFICIAL del banco: con ella
+    // vale $1, y sin ella min(2000, 2% del minimo). Por eso los asertos 2 y 4 necesitan cada uno un
+    // extracto con la precondicion CONTRARIA, y fijarlos a un (tarjeta, ciclo) escrito a mano los
+    // rompe en cuanto el usuario concilia ese mes: fue justo lo que paso al fijar la cifra oficial
+    // de la Visa de julio-2026, que era el extracto del aserto 2. Se eligen de la BD.
+    async function buscarExtracto(port, db, conOficial) {
+      const tarjetas = db.prepare('SELECT id FROM tarjetas ORDER BY id').all();
+      for (const t of tarjetas) {
+        const r = await pedir(port, 'GET', '/api/extractos?tarjeta_id=' + t.id);
+        const lista = Array.isArray(r.j) ? r.j : (r.j && r.j.extractos) || [];
+        const cand = lista.find(e => e.estado !== 'pagado' && Number(e.pago_minimo) > 50000 && !!e.tiene_oficial === conOficial);
+        if (cand) return { ext: cand, tarjeta: t.id };
+      }
+      return null;
+    }
+
     // ── 1. Pagar el minimo EXACTO tiene que SELLAR el mes ────────────────────
     // Es el aserto que mata el mutante `>=` -> `>`: con `>`, pagar exactamente el minimo dejaria
     // el extracto sin sellar. La decision de diseno del proyecto es que el pago minimo es
@@ -62,22 +78,25 @@ const R6 = {
     // hasta el dia del pago. Por eso se acepta un faltante de hasta min(2000, 2% del minimo)
     // cuando la referencia es el ESTIMADO.
     try {
-      await conApp(raiz, '2', async (port) => {
-        const ext = await extractoDe(port, 4, '2026-07');
-        if (!ext) { chk('tolerancia', false, 'sin extracto'); return; }
-        const r = await pedir(port, 'PUT', '/api/extractos/' + ext.id + '/pagar',
-          { monto_pagado: Number(ext.pago_minimo) - 1500, fecha_pagado: '2026-08-01' });
-        chk('faltante de 1.500 (dentro de banda) SELLA', !!(r.j && r.j.pagadoCompleto),
-          'pagadoCompleto=' + (r.j && r.j.pagadoCompleto));
+      await conApp(raiz, '2', async (port, db) => {
+        const c = await buscarExtracto(port, db, false);   // SIN cifra oficial -> banda amplia
+        if (!c) { chk('tolerancia', false, 'no hay ningun extracto pendiente SIN cifra oficial para probar la banda amplia'); return; }
+        const banda = Math.min(2000, Math.round(Number(c.ext.pago_minimo) * 0.02));
+        const falta = Math.max(1, banda - 1);              // dentro de banda por construccion
+        const r = await pedir(port, 'PUT', '/api/extractos/' + c.ext.id + '/pagar',
+          { monto_pagado: Number(c.ext.pago_minimo) - falta, fecha_pagado: '2026-08-01' });
+        chk('faltante de ' + falta + ' (dentro de banda) SELLA en (' + c.tarjeta + ', ' + c.ext.ciclo + ')',
+          !!(r.j && r.j.pagadoCompleto), 'pagadoCompleto=' + (r.j && r.j.pagadoCompleto));
       });
     } catch (e) { chk('tolerancia', false, 'excepcion: ' + e.message); }
 
     // ── 3. Faltante FUERA de la banda: NO debe sellar ────────────────────────
     // La contraparte del aserto anterior. Sin el, una tolerancia infinita pasaria igual de verde.
     try {
-      await conApp(raiz, '3', async (port) => {
-        const ext = await extractoDe(port, 4, '2026-07');
-        if (!ext) { chk('fuera de banda', false, 'sin extracto'); return; }
+      await conApp(raiz, '3', async (port, db) => {
+        const c = await buscarExtracto(port, db, false);
+        if (!c) { chk('fuera de banda', false, 'no hay extracto pendiente sin cifra oficial'); return; }
+        const ext = c.ext;
         const r = await pedir(port, 'PUT', '/api/extractos/' + ext.id + '/pagar',
           { monto_pagado: Number(ext.pago_minimo) - 25000, fecha_pagado: '2026-08-01' });
         chk('faltante de 25.000 NO sella', !(r.j && r.j.pagadoCompleto),
@@ -89,10 +108,11 @@ const R6 = {
     // Ahi un faltante no es imprecision del modelo: es plata que falta. Unico caso real en la BD:
     // RappiCard 2026-07 con pago_minimo oficial 320.582,14.
     try {
-      await conApp(raiz, '4', async (port) => {
-        const ext = await extractoDe(port, 5, '2026-07');
-        if (!ext) { chk('cifra oficial', false, 'sin extracto (5, 2026-07)'); return; }
-        chk('el extracto declara que trae cifra oficial', !!ext.tiene_oficial, 'tiene_oficial=' + ext.tiene_oficial);
+      await conApp(raiz, '4', async (port, db) => {
+        const c = await buscarExtracto(port, db, true);    // CON cifra oficial -> banda de $1
+        if (!c) { chk('cifra oficial', false, 'no hay ningun extracto pendiente CON cifra oficial fijada'); return; }
+        const ext = c.ext;
+        chk('el extracto declara que trae cifra oficial (' + c.tarjeta + ', ' + ext.ciclo + ')', !!ext.tiene_oficial, 'tiene_oficial=' + ext.tiene_oficial);
         const r = await pedir(port, 'PUT', '/api/extractos/' + ext.id + '/pagar',
           { monto_pagado: Number(ext.pago_minimo) - 500, fecha_pagado: '2026-08-01' });
         chk('con cifra oficial, faltar 500 NO sella', !(r.j && r.j.pagadoCompleto),
