@@ -86,17 +86,50 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
   const [accionSel, setAccionSel] = useState(null);   // { d, idx }
   const [aplicando, setAplicando] = useState(false);
   const [aplicadas, setAplicadas] = useState({});
+  // Discrepancias que el usuario marca como revisadas SIN aplicarlas (falso positivo de la IA, o algo
+  // que ya resolvio a mano). Es la salida del bloqueo de "fijar la cifra oficial": sin ella, un
+  // hallazgo estructural erroneo dejaria el sellado del mes bloqueado para siempre. Estado LOCAL: no
+  // se persiste, se pierde al re-analizar (que es lo correcto: el analisis nuevo trae otra lista).
+  const [descartadas, setDescartadas] = useState({});
   const [errAplicar, setErrAplicar] = useState('');
   const [contextoUser, setContextoUser] = useState('');
-  // Compras de la tarjeta: se cargan para detectar si una discrepancia apunta a una compra DIVIDIDA
-  // (grupo). Una acción por compra_id no puede operar sobre un grupo (causaba PUT /api/compras/null).
+  // Las marcas de estado (aplicada / descartada) se guardan por INDICE de la lista de discrepancias, y
+  // el re-analisis devuelve una lista distinta sin remontar este componente (no lleva key). Sin este
+  // reset, el indice 0 del analisis nuevo heredaba la marca del indice 0 del anterior: cosmetico en
+  // "Aplicada", pero en "Descartada" DESBLOQUEA en silencio el candado de la cifra oficial, que es
+  // justo lo que ese candado debe impedir. Se limpian ambas cuando llega un resultado nuevo.
+  useEffect(() => { setAplicadas({}); setDescartadas({}); }, [resultado]);
+  // Contexto VIVO de la tarjeta, leido de la BD: las compras (para detectar si una discrepancia apunta
+  // a una compra DIVIDIDA; una accion por compra_id no puede operar sobre un grupo — causaba
+  // PUT /api/compras/null) y el pago minimo que CALCULA la app para el ciclo.
+  // Se recarga TRAS CADA ACCION APLICADA: el analisis de la IA es una FOTO, y sus cifras dejan de
+  // describir la BD en cuanto se aplica la primera correccion. Sin esto, el modal de "fijar la cifra
+  // oficial" mostraba como "Estimado de la app" el valor de ANTES de mover las compras — y como la
+  // jerarquia obliga a mover primero y fijar despues, esa cifra estaba obsoleta practicamente siempre.
   const [comprasTj, setComprasTj] = useState([]);
-  useEffect(() => {
-    if (!tarjetaId) { setComprasTj([]); return; }
+  const [minimoAppVivo, setMinimoAppVivo] = useState(null);
+  function recargarContexto() {
+    if (!tarjetaId) { setComprasTj([]); setMinimoAppVivo(null); return; }
     api('/compras?tarjeta_id=' + Number(tarjetaId)).then(l => setComprasTj(Array.isArray(l) ? l : [])).catch(() => setComprasTj([]));
-  }, [tarjetaId]);
+    api('/extractos?tarjeta_id=' + Number(tarjetaId)).then(rows => {
+      const ex = Array.isArray(rows) ? rows.find(x => x.ciclo === ciclo) : null;
+      // Con una cifra oficial ya fijada, `pago_minimo` ES la del banco y el calculo propio queda en
+      // `pago_minimo_calculado`; sin ella, `pago_minimo` ya es el calculo propio.
+      setMinimoAppVivo(ex ? (ex.pago_minimo_calculado != null ? ex.pago_minimo_calculado : ex.pago_minimo) : null);
+    }).catch(() => setMinimoAppVivo(null));
+  }
+  useEffect(() => { recargarContexto(); }, [tarjetaId, ciclo]);
   // Operaciones que la app puede aplicar automaticamente (mapean a endpoints existentes).
   const AUTO = { crear_compra: 1, eliminar_compra: 1, fijar_pago_minimo_oficial: 1, editar_valor: 1, mover_ciclo: 1, reprogramar_cuotas: 1, convertir_a_diferida: 1, crear_diferida_omitida: 1, actualizar_tasa_intl: 1, actualizar_fecha_pago: 1, reversar_compra: 1, registrar_pago: 1 };
+  // Operaciones ESTRUCTURALES: cambian QUE compras forman el ciclo y por cuanto. Fijar la cifra oficial
+  // del extracto tiene que ir DESPUES de estas, porque es lo que convierte un pago parcial inofensivo en
+  // un SELLADO del mes: sin cifra oficial, pagar menos que el estimado del motor queda como abono y no
+  // cierra el ciclo; con ella, ese mismo pago sella, y sellar marca `estado='pagado'` +
+  // `monto_abonado=valor_cop` en TODAS las compras del ciclo (syncData paso 6) — incluidas las que
+  // todavia habria que mover a otro mes, que quedan tras el 403 de ciclos pagados y sin reversa.
+  // NO estructurales a proposito: actualizar_fecha_pago (solo cambia lo que se ve) y registrar_pago
+  // (opera sobre el ciclo ANTERIOR, no sobre la composicion de este).
+  const ESTRUCTURAL = { crear_compra: 1, eliminar_compra: 1, editar_valor: 1, mover_ciclo: 1, reprogramar_cuotas: 1, convertir_a_diferida: 1, crear_diferida_omitida: 1, actualizar_tasa_intl: 1, reversar_compra: 1, fecha_corte_movida: 1 };
 
   // Formatea una tasa mensual decimal a porcentaje colombiano (0.020849 -> "2,0849%").
   const fmtPct = (x) => (x == null || x === '') ? '—' : (Number(x) * 100).toFixed(4).replace('.', ',') + '%';
@@ -131,22 +164,41 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
     return s.charAt(0).toUpperCase() + s.slice(1);
   };
   function paramsDe(d) { return (d.accion_sugerida && d.accion_sugerida.parametros) || {}; }
-  // ¿La discrepancia apunta a una compra DIVIDIDA (grupo)? Las acciones por compra_id (editar_valor,
-  // mover_ciclo, reprogramar, convertir) no pueden operar sobre un grupo: cada parte es una compra
-  // distinta y no hay un id único (la IA a veces devuelve compra_id null → PUT /api/compras/null).
-  // Detección: (a) la compra objetivo tiene grupo_id, o (b) su descripción cruza con compras agrupadas.
+  // Compra objetivo de una discrepancia, resuelta contra la tabla real por compra_id (de los
+  // parametros o del nivel raiz). null si la IA no dio id o el id no existe en esta tarjeta.
+  function compraDe(d) {
+    const p = paramsDe(d);
+    const cid = p.compra_id != null ? p.compra_id : d.compra_id;
+    if (cid == null || String(cid) === 'null') return null;
+    return comprasTj.find(x => String(x.id) === String(cid)) || null;
+  }
+  // Partes de la compra dividida a la que pertenece `compra` (ella incluida), buscadas en `lista`.
+  // Devuelve [compra] si no es un grupo, para que quien la use no tenga que bifurcar.
+  function partesDeGrupo(lista, compra) {
+    if (!compra) return [];
+    if (!compra.grupo_id) return [compra];
+    return lista.filter(x => x.grupo_id && String(x.grupo_id) === String(compra.grupo_id));
+  }
+  // ¿La discrepancia apunta a una compra DIVIDIDA (grupo) de forma que NO se pueda aplicar? Las
+  // acciones por compra_id (editar_valor, reprogramar, convertir, eliminar, reversar) no pueden operar
+  // sobre un grupo: cada parte es una compra distinta, con su propio valor y responsable, y el backend
+  // ademas responde 403 por grupo_id en varias de ellas.
+  // EXCEPCION mover_ciclo (v5.9.1): es la unica operacion semanticamente GRUPAL — "una compra dividida
+  // vive entera en un solo ciclo" (mismo criterio que handleEditGrupo, el camino manual). Si el objetivo
+  // esta identificado por id, ejecutarAccion mueve TODAS las partes y no hay razon para bloquearlo.
+  // Sin id resoluble se sigue bloqueando: ahi no se puede saber de que grupo se habla, que es
+  // precisamente el caso que origino este guard (la IA devolvia compra_id null → PUT /api/compras/null).
+  // Deteccion: (a) la compra objetivo tiene grupo_id, o (b) su descripcion cruza con compras agrupadas.
   function afectaGrupo(d) {
     // Las acciones que CREAN un recurso nuevo (no operan sobre una compra existente por id) nunca
     // afectan un grupo: crear_diferida_omitida (diferida standalone) y crear_compra (compra nueva). Sin
     // este corte, la rama por descripción bloquearía de más si el nombre coincide con un grupo de otro ciclo.
     const opAG = d.accion_sugerida ? d.accion_sugerida.operacion : '';
     if (opAG === 'crear_diferida_omitida' || opAG === 'crear_compra' || opAG === 'registrar_pago' || opAG === 'fijar_pago_minimo_oficial') return false;
+    const t = compraDe(d);
+    if (opAG === 'mover_ciclo' && t) return false;
+    if (t && t.grupo_id) return true;
     const p = paramsDe(d);
-    const cid = p.compra_id != null ? p.compra_id : d.compra_id;
-    if (cid != null && String(cid) !== 'null') {
-      const t = comprasTj.find(x => String(x.id) === String(cid));
-      if (t && t.grupo_id) return true;
-    }
     const desc = String((p.descripcion != null ? p.descripcion : d.descripcion) || '').toLowerCase().trim();
     if (desc.length >= 3 && comprasTj.some(x => x.grupo_id && String(x.descripcion || '').toLowerCase().trim() === desc)) return true;
     return false;
@@ -179,7 +231,31 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
       return { titulo: 'Eliminar la compra de la app', endpoint: 'DELETE /api/compras/' + cid, filas };
     }
     if (op === 'editar_valor') return { titulo: 'Editar valor de la compra', endpoint: 'PUT /api/compras/' + cid, filas: [['Compra', '#' + cid], ['Valor actual (app)', fmtCOP(d.valor_app)], ['Nuevo valor (extracto)', fmtCOP(p.valor_cop != null ? p.valor_cop : d.valor_extracto)]] };
-    if (op === 'mover_ciclo') return { titulo: 'Reasignar al ciclo (manual)', endpoint: 'PUT /api/compras/' + cid, filas: [['Compra', '#' + cid], ['Nuevo ciclo', p.ciclo || ciclo], ['Conserva su fecha real', 'si']] };
+    if (op === 'mover_ciclo') {
+      // El resumen se arma con los datos REALES de la tabla, no con los que reporta la IA. En una compra
+      // DIVIDIDA se listan todas las partes: el usuario tiene que ver que se mueven juntas y por cuanto.
+      const t = compraDe(d);
+      const destino = p.ciclo || ciclo;
+      const partes = partesDeGrupo(comprasTj, t);
+      if (partes.length > 1) {
+        return { titulo: 'Reasignar al ciclo (compra dividida)', endpoint: 'PUT /api/compras/:id  (x' + partes.length + ')', filas: [
+          ['Compra', (t.descripcion || '') + '  ·  ' + partes.length + ' partes'],
+          ['Partes', partes.map(x => '#' + x.id + ' ' + fmtCOP(x.valor_cop)).join('   |   ')],
+          ['Total', fmtCOP(partes.reduce((s, x) => s + (Number(x.valor_cop) || 0), 0))],
+          ['Ciclo actual', t.ciclo],
+          ['Nuevo ciclo', destino],
+          ['Alcance', 'se mueven TODAS las partes juntas (una compra dividida vive entera en un solo ciclo)'],
+          ['Dinero apartado', 'se conserva en cada parte'],
+          ['Conserva su fecha real', 'si']
+        ] };
+      }
+      return { titulo: 'Reasignar al ciclo (manual)', endpoint: 'PUT /api/compras/' + cid, filas: [
+        ['Compra', '#' + cid + (t ? '  ' + (t.descripcion || '') : '')],
+        ['Ciclo actual', t ? t.ciclo : '(no se pudo leer)'],
+        ['Nuevo ciclo', destino],
+        ['Conserva su fecha real', 'si']
+      ] };
+    }
     if (op === 'reprogramar_cuotas') {
       const esDividir = Array.isArray(p.cuotas) && p.cuotas.length > 0;
       if (esDividir) return { titulo: 'Reprogramar dividiendo en cuotas', endpoint: 'POST /api/compras/' + cid + '/dividir-cuotas', filas: [['Compra', '#' + cid], ['Cuotas (irregulares)', String(p.cuotas.length)], ['Detalle', p.cuotas.map(q => q.ciclo + ': ' + fmtCOP(q.monto)).join('   |   ')]] };
@@ -227,13 +303,25 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
       ] };
     }
     if (op === 'fijar_pago_minimo_oficial') {
-      return { titulo: 'Usar el pago minimo que exige el extracto', endpoint: 'POST /api/extractos/pago-oficial', filas: [
+      // El estimado se lee VIVO de la BD (minimoAppVivo), no del analisis: si el usuario acaba de mover
+      // compras de ciclo —que es lo que la jerarquia le obliga a hacer ANTES de llegar aqui—, la cifra
+      // del analisis ya no describe nada. Se cae a la del analisis solo si la lectura viva fallo, y en
+      // ese caso se rotula como tal en vez de presentarla como el estado actual.
+      const pmExtracto = (p.pago_minimo != null ? p.pago_minimo : d.valor_extracto);
+      const estimadoVivo = (minimoAppVivo != null ? minimoAppVivo : d.valor_app);
+      const filasPmo = [
         ['Ciclo', p.ciclo || ciclo],
-        ['Pago minimo del extracto', fmtCOP(p.pago_minimo != null ? p.pago_minimo : d.valor_extracto)],
-        ['Estimado de la app', fmtCOP(d.valor_app)],
+        ['Pago minimo del extracto', fmtCOP(pmExtracto)],
+        ['Estimado de la app', fmtCOP(estimadoVivo) + (minimoAppVivo != null ? '' : '  (del analisis, no se pudo leer el actual)')]
+      ];
+      if (Number.isFinite(Number(pmExtracto)) && Number.isFinite(Number(estimadoVivo))) {
+        filasPmo.push(['Diferencia', fmtCOP(Number(pmExtracto) - Number(estimadoVivo))]);
+      }
+      filasPmo.push(
         ['Efecto', 'al pagar, la app propondra el valor exacto del banco (no hay que copiarlo a mano)'],
         ['No cambia', 'la deuda, el cupo ni las proyecciones siguen saliendo del calculo de la app']
-      ] };
+      );
+      return { titulo: 'Usar el pago minimo que exige el extracto', endpoint: 'POST /api/extractos/pago-oficial', filas: filasPmo };
     }
     if (op === 'registrar_pago') {
       const pg = d.pago || {};
@@ -288,13 +376,60 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
         const lista = await api('/compras?tarjeta_id=' + Number(tarjetaId));
         const a = Array.isArray(lista) ? lista.find(x => String(x.id) === String(cid)) : null;
         if (!a) throw new Error('No se encontro la compra #' + cid + ' en la tarjeta.');
+        // Cuerpo POR FILA: el PUT reemplaza TODOS los campos, asi que cada compra viaja con los suyos.
+        // Incluye monto_bolsillo explicito (el endpoint tambien lo conserva si va ausente, pero mandarlo
+        // hace evidente que mover de ciclo no toca el dinero apartado).
         // desde_conciliacion: exime del candado de "ciclo cerrado" del PUT (la IA corrige valores y
         // ciclos de extractos YA facturados); el candado de ciclos PAGADOS sigue aplicando.
-        const body = { tarjeta_id: a.tarjeta_id, fecha: a.fecha, descripcion: a.descripcion, valor_cop: a.valor_cop, valor_usd: a.valor_usd, tasa_usd: a.tasa_usd, persona_id: a.persona_id, estado: a.estado, notas: a.notas, monto_bolsillo: a.monto_bolsillo, es_internacional: a.es_internacional, ciclo: a.ciclo, ciclo_manual: a.ciclo_manual, desde_conciliacion: true };
-        if (op === 'editar_valor') body.valor_cop = Number(p.valor_cop != null ? p.valor_cop : d.valor_extracto) || a.valor_cop;
-        else { body.ciclo = p.ciclo || ciclo; body.ciclo_manual = 1; }
-        const r = await api('/compras/' + cid, { method: 'PUT', body });
-        if (r && r.error) throw new Error(r.error);
+        const cuerpoDe = (x) => ({ tarjeta_id: x.tarjeta_id, fecha: x.fecha, descripcion: x.descripcion, valor_cop: x.valor_cop, valor_usd: x.valor_usd, tasa_usd: x.tasa_usd, persona_id: x.persona_id, estado: x.estado, notas: x.notas, monto_bolsillo: x.monto_bolsillo, es_internacional: x.es_internacional, ciclo: x.ciclo, ciclo_manual: x.ciclo_manual, desde_conciliacion: true });
+        if (op === 'editar_valor') {
+          const body = cuerpoDe(a);
+          body.valor_cop = Number(p.valor_cop != null ? p.valor_cop : d.valor_extracto) || a.valor_cop;
+          const r = await api('/compras/' + cid, { method: 'PUT', body });
+          if (r && r.error) throw new Error(r.error);
+        } else {
+          // GUARD DEL NO-OP (v5.9.1): el fallback `|| ciclo` (el ciclo que se esta conciliando) es
+          // LEGITIMO para la cascada INVERSA (v4.3.2: el banco facturo en ESTE ciclo una compra que la
+          // app puso en el siguiente), asi que no se puede exigir que el destino sea distinto del ciclo
+          // conciliado. Lo que si es siempre un error es que el destino coincida con el ciclo ACTUAL de
+          // la compra: el PUT la reescribia con su mismo ciclo, no movia nada, y la UI reportaba
+          // "Accion aplicada correctamente". Un no-op vendido como exito es peor que un fallo.
+          const destino = p.ciclo || ciclo;
+          if (!/^\d{4}-\d{2}$/.test(String(destino))) throw new Error('El ciclo destino no es valido: "' + destino + '".');
+          if (String(destino) === String(a.ciclo)) throw new Error('La compra #' + cid + ' ya esta en el ciclo ' + destino + ': no hay nada que mover. Si el extracto la factura en otro mes, re-analiza indicando el ciclo destino.');
+          // Compra DIVIDIDA: una compra partida entre personas vive ENTERA en un solo ciclo (mismo
+          // criterio que handleEditGrupo). Se mueven TODAS sus partes, no solo la que reporto la IA:
+          // dejar el grupo repartido entre dos meses es peor que no moverlo. Secuencial y no en paralelo
+          // para poder decir exactamente cuales quedaron movidas si una falla.
+          const partes = a.grupo_id ? lista.filter(x => x.grupo_id && String(x.grupo_id) === String(a.grupo_id)) : [a];
+          const movidas = [];
+          for (const parte of partes) {
+            const body = cuerpoDe(parte);
+            body.ciclo = destino; body.ciclo_manual = 1;
+            const r = await api('/compras/' + parte.id, { method: 'PUT', body });
+            if (r && r.error) {
+              throw new Error(partes.length > 1
+                ? ('Se movieron ' + movidas.length + ' de ' + partes.length + ' partes' + (movidas.length ? ' (#' + movidas.join(', #') + ')' : '') + '. La parte #' + parte.id + ' fallo: ' + r.error + '. Revisa la tabla: el grupo puede haber quedado repartido entre dos ciclos.')
+                : r.error);
+            }
+            movidas.push(parte.id);
+          }
+          // Discrepancias HERMANAS: las otras partes del mismo grupo ya quedaron resueltas por este
+          // movimiento. Se marcan aplicadas para no pedir un clic que no hace nada (y que ademas
+          // chocaria con el guard del no-op de arriba, porque ya estarian en el ciclo destino).
+          if (partes.length > 1) {
+            const ids = new Set(partes.map(x => String(x.id)));
+            const hermanas = {};
+            disc.forEach((dd, j) => {
+              if (j === idx) return;
+              const opj = dd.accion_sugerida ? dd.accion_sugerida.operacion : '';
+              const pj = paramsDe(dd);
+              const cj = pj.compra_id != null ? pj.compra_id : dd.compra_id;
+              if (opj === 'mover_ciclo' && cj != null && ids.has(String(cj))) hermanas[j] = true;
+            });
+            if (Object.keys(hermanas).length) setAplicadas(prev => Object.assign({}, prev, hermanas));
+          }
+        }
       } else if (op === 'reprogramar_cuotas') {
         const cid = p.compra_id != null ? p.compra_id : d.compra_id;
         if (!cid) throw new Error('No se identifico la compra a reprogramar.');
@@ -382,12 +517,34 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
       setAplicadas(prev => Object.assign({}, prev, { [idx]: true }));
       setAccionSel(null);
       toast('Accion aplicada correctamente.');
+      // Releer compras y pago minimo: lo que este panel muestre a partir de ahora debe describir la BD
+      // DESPUES de esta accion, no la foto del analisis.
+      recargarContexto();
       if (onAplicada) onAplicada();
     } catch (err) {
       setErrAplicar((err && err.message) || 'No se pudo aplicar la accion.');
     }
     setAplicando(false);
   }
+
+  // Cambios de ESTRUCTURA todavia sin resolver (ni aplicados ni descartados). Mientras haya alguno,
+  // "fijar la cifra oficial del extracto" queda bloqueado: ver el comentario de ESTRUCTURAL. Se excluyen
+  // los que ya vienen marcados como ruido (posible_falso_positivo) o ya hechos (ya_aplicado), porque
+  // esos no muestran boton y bloquearian sin que el usuario pueda hacer nada al respecto.
+  const pendientesEstructurales = disc.reduce((n, dd, j) => {
+    const opj = dd.accion_sugerida ? dd.accion_sugerida.operacion : '';
+    if (!ESTRUCTURAL[opj] || dd.posible_falso_positivo || dd.ya_aplicado) return n;
+    return (aplicadas[j] || descartadas[j]) ? n : n + 1;
+  }, 0);
+  const btnDescartar = (i) => e('button', {
+    className: 'btn btn-sm', style: { fontSize: 11 },
+    title: 'Marcar como revisada sin aplicarla (deja de bloquear la cifra del extracto)',
+    onClick: () => setDescartadas(prev => Object.assign({}, prev, { [i]: true }))
+  }, 'Descartar');
+  const btnDeshacerDescarte = (i) => e('button', {
+    className: 'btn btn-sm', style: { fontSize: 10, padding: '1px 6px' },
+    onClick: () => setDescartadas(prev => { const n = Object.assign({}, prev); delete n[i]; return n; })
+  }, 'Deshacer');
 
   return e('div', { style: { marginTop: 16, borderTop: '1px solid var(--border)', paddingTop: 14 } },
     isMock && e('div', { style: { fontSize: 11, color: 'var(--warning)', marginBottom: 8 } }, 'Resultado de ejemplo (modo Demo).'),
@@ -419,6 +576,7 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
       : disc.map((d, i) => {
           const op = d.accion_sugerida ? d.accion_sugerida.operacion : 'ninguna';
           const aplicada = !!aplicadas[i];
+          const descartada = !aplicada && !!descartadas[i];
           // Aviso INFORMATIVO (no accionable, operacion 'ninguna'): el banco corto en una fecha
           // distinta a la calculada. Estilo de "aviso" (borde punteado + fondo azul tenue) que
           // contrasta con las tarjetas accionables. Las compras que cayeron fuera se listan abajo
@@ -450,8 +608,14 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
               // las compras de la ventana y las futuras se auto-asignan. El inverso no es accionable.
               op === 'fecha_corte_movida' && (aplicada
                 ? e('div', { key: 'ap', style: { marginTop: 8, fontSize: 11.5, color: 'var(--success)', fontWeight: 600 } }, 'Corte aplicado: las compras de la ventana se reubicaron en su ciclo correcto.')
-                : e('div', { key: 'btn', style: { marginTop: 8 } },
-                    e('button', { className: 'btn btn-sm btn-primary', onClick: () => { setErrAplicar(''); setAccionSel({ d: d, idx: i }); } }, 'Aplicar corte adelantado')))
+                : descartada
+                  // Tambien lleva "Descartar": es una operacion ESTRUCTURAL y sin salida propia dejaria
+                  // bloqueada la cifra oficial cuando el usuario decide no aplicar el corte.
+                  ? e('div', { key: 'ds', style: { marginTop: 8, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 11.5, color: 'var(--text-muted)' } },
+                      'Descartada: ya no bloquea la cifra del extracto.', btnDeshacerDescarte(i))
+                  : e('div', { key: 'btn', style: { marginTop: 8, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
+                      e('button', { className: 'btn btn-sm btn-primary', onClick: () => { setErrAplicar(''); setAccionSel({ d: d, idx: i }); } }, 'Aplicar corte adelantado'),
+                      btnDescartar(i)))
             );
           }
           return e('div', { key: i, style: { border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px', marginBottom: 8, background: 'var(--bg-input)' } },
@@ -459,7 +623,12 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
               e('span', { style: { fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: sevColor(d.severidad) } }, d.severidad || ''),
               e('span', { style: { fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)' } }, fmtTipoDiscrepancia(d.tipo)),
               d.motivo === 'corte_desfasado' && e('span', { style: { fontSize: 10, fontWeight: 600, color: 'var(--accent)', background: 'rgba(79,140,255,0.12)', borderRadius: 4, padding: '1px 6px' } }, 'por desfase de corte'),
-              aplicada && e('span', { style: { marginLeft: 'auto', fontSize: 11, fontWeight: 600, color: 'var(--success)' } }, 'Aplicada')
+              aplicada
+                ? e('span', { style: { marginLeft: 'auto', fontSize: 11, fontWeight: 600, color: 'var(--success)' } }, 'Aplicada')
+                : descartada
+                  ? e('span', { style: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 } },
+                      e('span', { style: { fontSize: 11, fontWeight: 600, color: 'var(--text-muted)' } }, 'Descartada'), btnDeshacerDescarte(i))
+                  : null
             ),
             e('div', { style: { fontSize: 12.5, color: 'var(--text-secondary)', marginBottom: 4, lineHeight: 1.45 } }, d.descripcion || ''),
             d.tipo === 'tasa_intl_incorrecta'
@@ -486,13 +655,42 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
             ),
             // Reverso ya aplicado (idempotencia): la compra ya está reversada en la BD -> sin botón.
             d.ya_aplicado && e('div', { style: { marginTop: 6, fontSize: 11.5, color: 'var(--text-muted)', fontStyle: 'italic' } }, 'Ya aplicado: esta compra ya está reversada en la app.'),
-            !aplicada && AUTO[op] && !d.posible_falso_positivo && (afectaGrupo(d)
-              ? e('div', { style: { marginTop: 6 } },
-                  e('button', { className: 'btn btn-sm btn-primary', disabled: true, style: { opacity: 0.5, cursor: 'not-allowed' } }, 'Aplicar'),
-                  e('div', { style: { fontSize: 11, color: 'var(--text-muted)', marginTop: 3 } }, 'Compra dividida: edítala manualmente en la tabla'))
-              : e('div', { style: { marginTop: 6, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
-                  e('span', { style: { fontSize: 11.5, color: 'var(--text-muted)' } }, 'Accion sugerida: ', e('strong', { style: { color: 'var(--accent)' } }, fmtOperacion(op))),
-                  e('button', { className: 'btn btn-sm btn-primary', onClick: () => { setErrAplicar(''); setAccionSel({ d: d, idx: i }); } }, 'Aplicar')))
+            // Bloque de acciones. Se arma en UN solo sitio, con los dos motivos de bloqueo como
+            // banderas, en vez de tres ramas paralelas. Razon: con ramas separadas, la de "compra
+            // dividida" no renderizaba "Descartar", asi que una discrepancia estructural bloqueada por
+            // grupo contaba para el candado del pago minimo y NO se podia resolver desde el Asistente:
+            // el candado se volvia una trampa sin salida. Aqui el boton "Descartar" depende solo de que
+            // la operacion sea ESTRUCTURAL, que es exactamente el mismo predicado que la cuenta —
+            // asi el invariante "todo lo que bloquea se puede resolver" no se puede romper por descuido.
+            (!aplicada && !descartada && !d.posible_falso_positivo && (AUTO[op] || ESTRUCTURAL[op])) && (function () {
+              const bloqGrupo = !!(AUTO[op] && afectaGrupo(d));
+              // JERARQUIA: la cifra del extracto se fija DE ULTIMO. Es lo que habilita el sellado del
+              // mes, y sellar da por pagadas todas las compras del ciclo; si todavia falta mover o
+              // corregir alguna, ese sellado la congela en el mes equivocado y no tiene reversa.
+              const bloqJerarquia = (op === 'fijar_pago_minimo_oficial' && pendientesEstructurales > 0);
+              const bloqueado = bloqGrupo || bloqJerarquia;
+              const nota = bloqGrupo
+                ? 'Compra dividida: edítala manualmente en la tabla.'
+                : bloqJerarquia
+                  ? ('Resuelve primero ' + pendientesEstructurales + (pendientesEstructurales === 1 ? ' cambio' : ' cambios') +
+                     ' de estructura de esta lista. Fijar la cifra del extracto es lo que permite cerrar el mes, y al cerrarlo ' +
+                     'se dan por pagadas TODAS las compras del ciclo: hazlo cuando la lista de compras ya sea la correcta. ' +
+                     'Si alguno es un error de la IA, usa "Descartar".')
+                  : null;
+              return e('div', { style: { marginTop: 6 } },
+                e('div', { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
+                  (!bloqueado && AUTO[op]) ? e('span', { style: { fontSize: 11.5, color: 'var(--text-muted)' } },
+                    'Accion sugerida: ', e('strong', { style: { color: 'var(--accent)' } }, fmtOperacion(op))) : null,
+                  AUTO[op] ? e('button', {
+                    className: 'btn btn-sm btn-primary', disabled: bloqueado,
+                    style: bloqueado ? { opacity: 0.5, cursor: 'not-allowed' } : null,
+                    onClick: bloqueado ? undefined : () => { setErrAplicar(''); setAccionSel({ d: d, idx: i }); }
+                  }, 'Aplicar') : null,
+                  (ESTRUCTURAL[op] && !d.ya_aplicado) ? btnDescartar(i) : null
+                ),
+                nota ? e('div', { style: { fontSize: 11.5, color: bloqJerarquia ? 'var(--warning)' : 'var(--text-muted)', marginTop: 4, lineHeight: 1.45, maxWidth: 620 } }, nota) : null
+              );
+            })()
           );
         }),
     // Re-análisis iterativo: el usuario aclara/corrige y la IA vuelve a analizar (mismo PDF y
