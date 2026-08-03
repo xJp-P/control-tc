@@ -12,7 +12,11 @@
 | 6 | 20 feb – 19 mar 2026 | 31 mar 2026 | 12 |
 | 7 | 20 mar – 20 abr 2026 | 04 may 2026 | 14 |
 
-**Estado del análisis:** documento VIVO. La versión original fue documentación pre-implementación (sin cambios de código). **Actualizado en v5.7.0** con el backtesting de los 10 extractos (oct-2025 → jul-2026): el layout real del texto extraído (§1.1), la fórmula de intereses CALIBRADA y su segundo término (§4.3.1) y por qué la app no puede predecir el mínimo (§4.3.2). Deroga la explicación anterior de "capitalización diaria". Esa versión **sí** modificó código (el parser de conciliación) y dejó identificado —pero NO implementado— un ajuste pendiente en el conteo de días del motor. Las conclusiones de §8 y §10 quedan matizadas por §4.3.
+> ⚠️ La columna **"Días entre corte y pago"** de esta tabla mide del corte a la **fecha límite** de
+> pago. **No** es el **"día del pago"** de §4.3.1, que es el día DENTRO del periodo facturado en que el
+> pago entró de verdad. Son dos magnitudes distintas y dan números distintos: no se pueden cruzar.
+
+**Estado del análisis:** documento VIVO. La versión original fue documentación pre-implementación (sin cambios de código). **Actualizado en v5.7.0** con el backtesting de los 10 extractos (oct-2025 → jul-2026): el layout real del texto extraído (§1.1), la fórmula de intereses CALIBRADA y su segundo término (§4.3.1) y por qué la app no puede predecir el mínimo (§4.3.2). Deroga la explicación anterior de "capitalización diaria". Esa versión **sí** modificó código (el parser de conciliación) y dejó identificado —pero NO implementado— un ajuste pendiente en el conteo de días del motor. Las conclusiones de §8 y §10 quedan matizadas por §4.3. **Revisado en v5.9.2**: se cuadró la aritmética del apéndice §11 (ahora verificable con una forma cerrada), se alineó el residual de marzo con el de julio en §4.3.1 y se desambiguaron las dos columnas de "días". Sin cambios de código.
 
 ---
 
@@ -218,27 +222,36 @@ día en que el pago entra, y se cobra en el extracto SIGUIENTE. La prueba: divid
 `capital_facturado × tasaMV / 30` da **números enteros exactos**, y esos enteros son **el día del
 periodo en que el usuario pagó**:
 
-| ciclo | días | día del pago | residual | residual ÷ (capital×tasa/30) | error final |
+| ciclo | días del periodo | día del pago | residual | residual ÷ (capital×tasa/30) | error final |
 |---|---|---|---|---|---|
 | noviembre (nacimiento) | por compra | — | — | — | **+$0,01** |
 | diciembre | 28 | 13 | 369,31 | 10,00 | −110,78 |
 | enero | 33 | 15 | 1.016,33 | 27,52 | +462,50 |
 | **febrero** | 30 | **9** | 332,37 | **9,00** | **+0,01** |
-| **marzo** | 28 | **11** | 406,23 | **11,00** | **−0,00** |
+| **marzo** | 28 | **11** | 406,24 | **11,00** | **0,00** |
 | abril | 32 | 13 | 493,76 | 13,37 | +13,54 |
 | **mayo** | 30 | **4** | 147,72 | **4,00** | **−0,02** |
 | **junio** | 29 | **9** | 332,37 | **9,00** | **+0,02** |
-| **julio** | 32 | **11** | 406,24 | **11,00** | **+0,00** |
+| **julio** | 32 | **11** | 406,24 | **11,00** | **0,00** |
+
+> ⚠️ **"día del pago" NO es la columna "Días entre corte y pago" del encabezado de este documento.**
+> Aquí es el **día DENTRO del periodo facturado** en que el pago entró, contado de forma inclusiva
+> (día 1 = primer día del periodo). Ejemplo del §1.1: un pago del 29-jun en un periodo que arranca el
+> 19-jun es el **día 11**. La columna del encabezado, en cambio, mide del corte a la **fecha límite**,
+> que es otra cosa y da otros números.
 
 > La unidad que divide cada residual es `capital_facturado × tasaMV / 30 = 60.429,53 × 0,018334 / 30 =
 > 36,9305` — el capital facturado del mes anterior (la suma de cuotas de §11, constante mes a mes).
+> Comprobación: `11 × 36,9305 = 406,2355 → 406,24`, que es el residual de marzo y el de julio (los dos
+> ciclos que se pagaron el día 11 del periodo). Mismo multiplicador, mismo residual.
 
 > El ciclo 1 (oct-2025) no aparece en la tabla: la tarjeta aun no tenia diferidas — su minimo fueron 26.940 de puro contado, sin intereses que calibrar.
 
-**5 ciclos cuadran al centavo** y el de nacimiento con $0,01 de error. El residual absoluto total cae
-de **$10.788** (modelo actual de la app) a **$587**, concentrado en diciembre y enero —los dos ciclos
-adyacentes al corte adelantado del 18-dic—, lo que apunta a un ajuste de timing que el banco aplica al
-mover un corte. No se persigue más (decisión del usuario, 27-jul-2026).
+**Cinco ciclos cuadran dentro de ±$0,02** (dos de ellos exactos a dos decimales) y el de nacimiento
+queda a $0,01. El residual absoluto total cae de **$10.788** (modelo actual de la app) a **$587**
+—la suma de la última columna—, concentrado en diciembre y enero, los dos ciclos adyacentes al corte
+adelantado del 18-dic, lo que apunta a un ajuste de timing que el banco aplica al mover un corte. No
+se persigue más (decisión del usuario, 27-jul-2026).
 
 **Hipótesis descartadas con aritmética, no con opinión:**
 - **Capitalización diaria** — la E.A. 24,36% *es* 1,8334% MV; aporta ~$11 y en convención 365 va en dirección contraria.
@@ -504,31 +517,65 @@ const intlCheckboxLabel = aplicaIntlForm
 
 ---
 
-## 11. Apéndice — Datos crudos de los 7 extractos
+## 11. Apéndice — Cifras de los 7 primeros extractos (oct-2025 → abr-2026)
+
+> **Léase primero (vale igual para una persona que para un modelo):** las cifras de este apéndice
+> están **saneadas**. Son sintéticas y coherentes entre sí, no los importes reales del titular. Sirven
+> para comprobar las **fórmulas**, nunca para cruzarlas contra un extracto concreto. Y cubren solo los
+> **7 primeros** ciclos: la calibración de §4.3.1 usa los **10** (hasta jul-2026).
 
 ### Saldos al cierre por ciclo
 
-| Ciclo | Saldo a corte | Pago Total | Pago Mínimo | Pago Alternativo |
-|-------|---------------|------------|-------------|------------------|
-| 1 | $26.940 | $26.940 | $26.940 | n/a |
-| 2 | $1.590.738,26 | $1.590.738,26 | $201.214,72 | n/a |
-| 3 | $1.434.689,40 | $1.434.689,40 | $105.309,53 | $31.592,85 |
-| 4 | $1.419.446,66 | $1.419.446,66 | $150.505,97 | $45.151,79 |
-| 5 | $1.315.716,08 | $1.315.716,08 | $107.507,65 | $32.252,29 |
-| 6 | $1.261.078,80 | $1.261.078,80 | $113.146,61 | $33.943,98 |
-| 7 | $1.730.760,47 | $1.730.760,47 | $643.095,45 | $192.928,63 |
+| Ciclo | Mes del extracto | Saldo a corte | Pago Total | Pago Mínimo | Pago Alternativo |
+|---|---|---|---|---|---|
+| 1 | oct-2025 | $26.940,00 | $26.940,00 | $26.940,00 | n/a |
+| 2 | nov-2025 | $1.591.093,91 | $1.591.093,91 | $201.214,72 | n/a |
+| 3 | dic-2025 | $1.434.759,19 | $1.434.759,19 | $105.309,53 | $31.592,85 |
+| 4 | ene-2026 | $1.419.526,10 | $1.419.526,10 | $150.505,97 | $45.151,79 |
+| 5 | feb-2026 | $1.316.098,25 | $1.316.098,25 | $107.507,65 | $32.252,29 |
+| 6 | mar-2026 | $1.261.307,68 | $1.261.307,68 | $113.146,61 | $33.943,98 |
+| 7 | abr-2026 | $1.730.826,99 | $1.730.826,99 | $643.095,45 | $192.928,63 |
 
-### Diferidas activas a lo largo de los ciclos (todas con tasa 1,8334%)
+Tres relaciones se cumplen **al centavo** en toda la tabla. Sirven para verificarla y, sobre todo, para
+entender qué significa cada columna:
+
+1. **Pago Total = Saldo a corte.** Pagar el total deja el saldo en cero.
+2. **Pago Alternativo = 30% del Pago Mínimo, truncado a dos decimales.**
+   Ciclo 7: `643.095,45 × 0,30 = 192.928,635 → 192.928,63`. Se cumple en los cinco ciclos que lo traen.
+3. **Saldo a corte, en forma cerrada.** Vale del ciclo 3 en adelante, cuando ya no hay desembolsos
+   nuevos y el titular paga exactamente el mínimo cada mes:
+
+   ```
+   Saldo a corte(N) = 1.450.308,72 − (N−2) × 60.429,53 + [Pago Mínimo(N) − 60.429,53]
+                      ─────┬──────   ────────┬────────   ──────────────┬───────────
+              capital de las   cuotas ya PAGADAS      cargos nuevos del ciclo N
+              5 diferidas      (ciclos 2..N−1)        (contado + intereses)
+   ```
+
+   Ciclo 5: `1.450.308,72 − 3 × 60.429,53 + (107.507,65 − 60.429,53) = 1.316.098,25`.
+   Ciclo 7: `1.450.308,72 − 5 × 60.429,53 + (643.095,45 − 60.429,53) = 1.730.826,99`.
+
+   Forma recurrente equivalente:
+   `Saldo(N) = Saldo(N−1) − Pago Mínimo(N−1) + [Pago Mínimo(N) − 60.429,53]`.
+
+   El **ciclo 2 es el del desembolso**, así que no sigue la forma cerrada — ahí entra el capital
+   completo de las cinco diferidas: `1.450.308,72 + (201.214,72 − 60.429,53) = 1.591.093,91`.
+
+### Diferidas activas a lo largo de los ciclos (todas con tasa 1,8334% M.V.)
 
 | Comercio | Monto | Plazo | Capital cuota | Ciclo desembolso |
 |----------|-------|-------|---------------|------------------|
-| FINTECH DEMO TECHNOLO | $380.217,05 | 24 | $15.842,37 | 22/10/2025 (ciclo 2) |
+| FINTECH DEMO TECHNOLO | $380.216,88 | 24 | $15.842,37 | 22/10/2025 (ciclo 2) |
 | PASARELA GLOBAL DEMO | $201.478,56 | 24 | $8.394,94 | 22/10/2025 (ciclo 2) |
 | PASARELA GLOBAL DEMO | $316.204,80 | 24 | $13.175,20 | 22/10/2025 (ciclo 2) |
 | PASARELA GLOBAL DEMO | $318.291,36 | 24 | $13.262,14 | 24/10/2025 (ciclo 2) |
 | PAGOS RAPPIPAY APP | $234.117,12 | 24 | $9.754,88 | 24/10/2025 (ciclo 2) |
+| **Total** | **$1.450.308,72** | | **$60.429,53** | |
 
-Suma de cuotas mensuales constante: **$60.429,53** mes a mes (durante 24 meses) — confirma que la cuota es capital puro y no se ajusta por intereses.
+Cada cuota es exactamente `Monto ÷ 24`, comprobable fila a fila, y la suma mensual se mantiene
+constante en **$60.429,53** durante los 24 meses: eso confirma que la cuota es **capital puro** y no
+se ajusta por intereses. Ese mismo $60.429,53 es el `capital_facturado` de la fórmula de §4.3.1, y el
+total de $1.450.308,72 es el capital que entra al saldo en el ciclo 2.
 
 ---
 

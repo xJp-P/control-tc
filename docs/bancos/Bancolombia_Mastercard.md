@@ -77,12 +77,19 @@ Avance C10001 (`AVANCE SUCURSAL VIRTUAL` $869.000 a 24 cuotas, desembolsado 03/1
 
 Otro caso — diferida `R10001 TIENDA ONLINE DEMO $2.545.990 a 4 cuotas`:
 
-| Ciclo | Cuota | Valor cuota | Saldo |
-|-------|-------|-------------|-------|
+| Ciclo | Cuota | Valor cuota | Saldo pendiente al cierre |
+|-------|-------|-------------|---------------------------|
 | Extracto 2 | 1/4 | $636.497,50 | $1.909.492,50 (implícito) |
-| Extracto 3 | 2/4 | $636.497,50 | $1.076.669,42 |
+| Extracto 3 | 2/4 | $636.497,50 | $1.272.995,00 |
+| Extracto 4 | 3/4 | $636.497,50 | $636.497,50 |
+| Extracto 5 | 4/4 | $636.497,50 | $0,00 |
 
 `$2.545.990 ÷ 4 = $636.497,50` ✓ — capital puro.
+
+En los dos casos el saldo baja **exactamente** el valor de la cuota, sin residuo, porque no lleva
+intereses dentro: `2.545.990 − 636.497,50 = 1.909.492,50 − 636.497,50 = 1.272.995,00`, y así hasta
+cero en la cuarta. Es la comprobación más rápida de que la cuota mostrada es capital: si al restarla
+del saldo anterior no da el saldo siguiente al centavo, esa cuota traía intereses dentro.
 
 ### 4.2 Los intereses van como cargo separado
 

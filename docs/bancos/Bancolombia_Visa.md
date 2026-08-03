@@ -372,7 +372,7 @@ Donde:
 | **Cuota 1 de diferidas/avances** | Capital puro si `difiere_intereses_cuota1 = 1` (estándar) | Capital puro siempre — los intereses van al cargo agregado |
 | **Modelo de intereses de avances** | "Saldo facturado" desde cuota 2 — validado al peso vs extracto Platinum abr 2026 | Mismo principio observado, pero la fórmula exacta requiere un quinto ciclo de validación |
 | **Tasas MV** | Iguales: cambian mes a mes (1,8895% – 1,9915%) | Iguales: cambian mes a mes (1,8311% – 1,8895%) |
-| **Comisión de avance** | $6.840 observado (fija) | Variable: $6.500 – $6.840 según operación |
+| **Comisión de avance** | $6.840 observado (fija) | Variable: $6.580 – $6.920 según el avance |
 
 ---
 
@@ -388,7 +388,7 @@ Donde:
    - Visa: en una línea agregada "INTERESES CORRIENTES" que en el motor exponemos como `interesesComprasIntl` (intl) + `cuotasInteres` (avances/diferidas) por separado.
    - Mastercard: en una sola línea agrupada "INTERESES CORRIENTES" que en el motor exponemos junta bajo `cuotas_interes`.
 
-5. **Avances en Visa Platinum: comisión fija $6.840.** En Mastercard observamos comisiones desde $6.500 hasta $6.840 según la operación. La diferencia puede ser por categoría de tarjeta (Platinum vs Gold) o por el monto del avance. Es información a tener en cuenta si se diseña una calculadora de avances futura.
+5. **Avances en Visa Platinum: comisión fija $6.840.** En Mastercard observamos comisiones desde $6.580 hasta $6.920 según el avance (ver la tabla de §5 de `Bancolombia_Mastercard.md`), y en Amex $6.500 constante. La diferencia puede ser por categoría de tarjeta (Platinum vs Gold) o por el monto del avance. Es información a tener en cuenta si se diseña una calculadora de avances futura.
 
 6. **El "corte de transacciones" es anterior a la fecha de fin de período impresa.** El período nominal del extracto (la leyenda "del día A al día B") **no** garantiza que todas las transacciones hasta el último día entren en ese ciclo. El banco cierra la captura de movimientos algunos días **antes** de la fecha de fin impresa; las compras de los últimos días del período pueden quedar facturadas en el extracto del ciclo **siguiente**.
    - **Implicación para la conciliación:** una compra registrada en la app en los últimos días del ciclo (según el `dia_corte` configurado) puede aparecer todavía "del mes" en la app, pero el banco la difiere al siguiente extracto. El pago mínimo de la app quedará por encima del extracto por el valor de esa compra, y la diferencia **se resuelve sola** cuando llega el extracto del ciclo siguiente.

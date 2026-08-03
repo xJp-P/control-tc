@@ -110,7 +110,7 @@ Verificado con el avance `100001 - 06/10 AVANCE SUCURSAL VIRTUAL $3.360.000 a 24
 | `100002` | 04/11/2025 | $1.184.640 | 24 cuotas | $6.500 |
 
 - Plazo estándar: **24 cuotas**.
-- Comisión: **$6.500** (consistente entre los avances vistos en Amex; en Mastercard se vio entre $6.500 y $6.840 según monto).
+- Comisión: **$6.500** (consistente entre los avances vistos en Amex; en Mastercard se vio entre $6.580 y $6.920 según el avance).
 - La comisión se factura como movimiento independiente el mismo día del avance (`COMISION AVANCE SUCURSA`).
 - La cuota 1 del avance es capital puro (`monto / 24`); los intereses van al cargo agregado.
 
@@ -241,7 +241,7 @@ Diferencia de $0,65 → redondeo aceptable. ✓
 | **Cuota 1 de diferidas COP** | Capital puro si `difiere_intereses_cuota1 = 1` | Capital puro siempre (intereses al cargo agregado) | **Capital puro siempre (mismo patrón)** |
 | **Modelo de avances** | "Saldo facturado" desde cuota 2 (validado al peso) | Capital puro, intereses al cargo agregado | **Capital puro, intereses al cargo agregado** |
 | **Avances: plazo estándar** | 24 cuotas | 24 cuotas | **24 cuotas** |
-| **Comisión de avance observada** | $6.840 (Visa Platinum) | $6.500 – $6.840 (variable) | **$6.500 (consistente)** |
+| **Comisión de avance observada** | $6.840 (Visa Platinum) | $6.580 – $6.920 (variable) | **$6.500 (consistente)** |
 | **Tasa MV única para COP y USD** | N/A (extracto único) | ✅ Sí | ✅ **Sí** |
 | **Helper `isDualExtracto(franquicia)`** | `false` | `true` | **`true`** ✓ |
 | **Helper `aplicaIntInternacional`** | `true` | `false` | **`false`** ✓ |
@@ -281,7 +281,7 @@ Diferencia de $0,65 → redondeo aceptable. ✓
 
 ## 10. Curiosidades detectadas en el contraste con Mastercard
 
-1. **Comisión de avance estable en Amex** ($6.500 en los dos avances vistos), mientras que en Mastercard observamos variabilidad ($6.500–$6.840). Posible explicación: la categoría de tarjeta (Amex vs Mastercard Platinum) puede tener tarifas distintas, y dentro de la misma categoría puede variar por monto del avance. Es un dato a tener en cuenta para una calculadora de avances futura.
+1. **Comisión de avance estable en Amex** ($6.500 en los dos avances vistos), mientras que en Mastercard observamos variabilidad ($6.580–$6.920). Posible explicación: la categoría de tarjeta (Amex vs Mastercard Platinum) puede tener tarifas distintas, y dentro de la misma categoría puede variar por monto del avance. Es un dato a tener en cuenta para una calculadora de avances futura.
 
 2. **Cuota fraccionada con redondeo conservador**: en Amex `SUSCRIPCION DIGITAL $12,11 / 36 = 0,3364` se redondea a `$0,33` (favor banco), mientras que el saldo restante `12,11 - 0,33 = 11,78` cuadra con el saldo pendiente mostrado. Este redondeo "hacia abajo" en la cuota es consistente con lo visto en Mastercard.
 

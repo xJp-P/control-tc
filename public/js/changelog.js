@@ -12,6 +12,10 @@
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '5.9.2': [
+    'EL ASISTENTE DE EXTRACTOS TRAE UN MANUAL CORREGIDO. Dentro de la app viajan las reglas de cada banco que el asistente lee antes de analizar tu extracto, y varias de sus cuentas de ejemplo estaban mal: saldos que no cuadraban al restar una cuota, una cuota que no correspondia al monto de su compra, y la comision de avance de una tarjeta citada con los valores de otra. Un ejemplo mal hecho ahi puede llevar al asistente a conclusiones equivocadas sobre tu extracto. Ahora toda esa aritmetica cuadra al peso, y quedo escrita de forma que se puede comprobar paso a paso.',
+    'Tambien se aclararon dos datos que se llamaban casi igual y significaban cosas distintas (los dias que van del corte a la fecha limite, y el dia del mes en que entro tu pago). Confundirlos hacia que el asistente calculara intereses que no eran.'
+  ],
   '5.9.1': [
     'EL ASISTENTE YA MUEVE DE MES UNA COMPRA DIVIDIDA, SIN SACARTE DE LA PANTALLA. Cuando el asistente detectaba que el banco facturo en otro mes una compra repartida entre varias personas, te lo decia pero dejaba el boton apagado con un "editala a mano en la tabla". Ahora el boton funciona: mueve la compra COMPLETA, con todas sus partes juntas, conservando el reparto entre personas, las fechas reales y el dinero que tengas apartado. Si la lista traia una fila por cada parte, al mover una se marcan todas como resueltas.',
     'LA CIFRA DEL EXTRACTO YA NO SE PUEDE FIJAR ANTES DE ARREGLAR LAS COMPRAS. Era el riesgo mas serio de la pantalla: los cambios de compras podian quedar bloqueados y el unico boton disponible era el de fijar el pago minimo del banco. Y esa cifra es justo la que permite dar el mes por pagado; si la fijabas antes de mover una compra que era del mes siguiente, al pagar quedaba marcada como pagada en el mes equivocado y eso no tiene vuelta atras. Ahora ese boton espera a que resuelvas los cambios de compras pendientes y te dice cuantos faltan.',
