@@ -22,6 +22,38 @@ function fetchConTimeout(url, opts, ms) {
 
 async function safeText(res) { try { return await res.text(); } catch (_) { return ''; } }
 
+// Junta el texto de una respuesta que viene por BLOQUES. Anthropic devuelve `content` como un
+// array y Gemini `parts` igual, y con los modelos que razonan el PRIMER bloque puede ser el
+// razonamiento, no la respuesta:
+//     content: [ { type:'thinking', thinking:'...' }, { type:'text', text:'{...}' } ]
+// Leer bloques[0].text a ciegas devolvia undefined en ese caso, y el analisis moria con "formato
+// inesperado" pese a que la IA habia respondido bien y completa. Se filtran los bloques que
+// llevan texto de verdad -descartando los de razonamiento- y se concatenan, que ademas cubre el
+// caso de una respuesta partida en varios bloques.
+function textoDeBloques(bloques) {
+  if (!Array.isArray(bloques)) return null;
+  const trozos = bloques
+    .filter(b => b && typeof b.text === 'string' && b.type !== 'thinking' && b.thought !== true)
+    .map(b => b.text);
+  return trozos.length ? trozos.join('') : null;
+}
+
+// Diagnostico cuando el texto llega pero no se puede parsear. Sin esto el fallo es mudo: el log
+// decia que la IA habia respondido y la interfaz decia "formato inesperado", sin forma de saber
+// que habia contestado en realidad.
+function avisarNoParseable(provider, modelo, txt, bloques) {
+  const s = String(txt == null ? '' : txt);
+  const forma = Array.isArray(bloques)
+    ? bloques.map(b => (b && b.type) || (b && b.thought ? 'thought' : 'sin-tipo')).join(',')
+    : '(no vino por bloques)';
+  console.log('[IA] NO SE PUDO PARSEAR la respuesta de ' + provider + ' (' + (modelo || 'default') + ').' +
+    ' Longitud: ' + s.length + ' chars. Bloques recibidos: [' + forma + '].');
+  if (!s) { console.log('[IA]   el texto llego VACIO: ningun bloque de la respuesta traia texto.'); return; }
+  console.log('[IA]   primeros 200: ' + JSON.stringify(s.slice(0, 200)));
+  console.log('[IA]   ultimos  200: ' + JSON.stringify(s.slice(-200)));
+  try { JSON.parse(s); } catch (e) { console.log('[IA]   JSON.parse dice: ' + e.message); }
+}
+
 function errorProveedor(status, body) {
   let msg = 'Error del proveedor de IA (HTTP ' + status + ').';
   if (status === 401 || status === 403) msg = 'API key invalida o sin permisos.';
@@ -168,7 +200,7 @@ async function analizar(args) {
   }
   if (!key) { const e = new Error('No hay API key configurada.'); e.tipo = 'sin_key'; throw e; }
 
-  let res, data, txt, modelo = model;
+  let res, data, txt, bloques, modelo = model;
   try {
     if (provider === 'openai') {
       res = await fetchConTimeout('https://api.openai.com/v1/chat/completions', {
@@ -220,7 +252,10 @@ async function analizar(args) {
       });
       if (!res.ok) throw errorProveedor(res.status, await safeText(res));
       data = await res.json();
-      txt = data && data.content && data.content[0] && data.content[0].text;
+      // Todos los bloques de texto, no solo el primero: con un modelo que razona, content[0] es el
+      // bloque de razonamiento y su .text no existe.
+      bloques = data && data.content;
+      txt = textoDeBloques(bloques);
       modelo = (data && data.model) || model;
       // Si la respuesta se corto por longitud, el JSON llega incompleto y ningun parser puede con
       // el. Se dice por su nombre en vez de dejar el generico "formato inesperado", que manda a
@@ -243,7 +278,10 @@ async function analizar(args) {
       });
       if (!res.ok) throw errorProveedor(res.status, await safeText(res));
       data = await res.json();
-      txt = data && data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts && data.candidates[0].content.parts[0] && data.candidates[0].content.parts[0].text;
+      // Mismo criterio que en Anthropic: Gemini marca los bloques de razonamiento con thought:true
+      // y el texto puede venir repartido en varias parts.
+      bloques = data && data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts;
+      txt = textoDeBloques(bloques);
       modelo = mdl;
     } else {
       const e = new Error('Proveedor no soportado: ' + provider); e.tipo = 'provider'; throw e;
@@ -253,7 +291,10 @@ async function analizar(args) {
     throw err;
   }
 
-  return { resultado: extraerJson(txt), raw: txt || '', modelo: modelo };
+  const resultado = extraerJson(txt);
+  // El unico punto donde se sabe a la vez que la IA respondio y que su respuesta no se entendio.
+  if (!resultado) avisarNoParseable(provider, modelo, txt, bloques);
+  return { resultado: resultado, raw: txt || '', modelo: modelo };
 }
 
 module.exports = { analizar, extraerJson };

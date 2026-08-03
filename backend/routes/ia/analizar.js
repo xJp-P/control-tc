@@ -98,6 +98,14 @@ module.exports = function(router, ctx) {
       }
 
       if (!r || !r.resultado || !r.resultado.conciliacion_pago_minimo) {
+        // Dos causas MUY distintas acaban aqui y hay que poder distinguirlas: o el texto no se
+        // pudo parsear (aiProvider ya lo detalla con un extracto de la respuesta), o el JSON era
+        // valido pero sin la forma pedida. En el segundo caso se listan las claves que SI llegaron:
+        // basta para ver si el modelo invento otra estructura o solo se dejo un campo.
+        if (r && r.resultado) {
+          console.log('[IA] La respuesta era JSON valido pero SIN "conciliacion_pago_minimo". Claves recibidas: [' +
+            Object.keys(r.resultado).join(', ') + ']');
+        }
         return res.status(502).json({ error: 'La IA respondio en un formato inesperado. Intenta de nuevo.' });
       }
       // Filtro determinista del "ruido" que la IA lista aunque se le pida ignorarlo:
