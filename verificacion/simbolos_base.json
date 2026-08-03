@@ -336,7 +336,7 @@
     {
       "nombre": "IA_PROVIDERS",
       "tipo": "const",
-      "lineas": 12,
+      "lineas": 38,
       "pieza": "js/ia.js"
     },
     {
@@ -372,7 +372,7 @@
     {
       "nombre": "IaAsistente",
       "tipo": "function",
-      "lineas": 334,
+      "lineas": 342,
       "pieza": "js/ia.js"
     },
     {

@@ -191,7 +191,7 @@ async function analizar(args) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
         body: JSON.stringify({
-          model: model || 'deepseek-chat',
+          model: model || 'deepseek-v4-flash',
           messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
           response_format: { type: 'json_object' },
           temperature: 0.1
@@ -207,10 +207,13 @@ async function analizar(args) {
         headers: { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
         body: JSON.stringify({
           model: model || 'claude-sonnet-4-6',
-          // 2048 se quedaba corto: la conciliacion de un ciclo con 25 compras, 7 cuotas y varias
-          // discrepancias produce un JSON mas largo, y al truncarse dejaba de parsear. El sintoma
-          // era "La IA respondio en un formato inesperado" sobre una respuesta que iba bien.
-          max_tokens: 8192,
+          // 2048 se quedaba corto y 8192 tambien: con un ciclo de 25 compras, claude-sonnet-5
+          // consumio los 8192 en 82 segundos y la respuesta llego cortada. El prompt ya exigia
+          // "solo JSON" por tres vias distintas, asi que ese gasto no es preambulo conversacional:
+          // los modelos que razonan consumen tokens de SALIDA al pensar, y esos cuentan contra
+          // max_tokens igual que el texto final. Por eso no basta con endurecer el prompt (hecho
+          // igualmente, reglas 0a-0e): hay que darle espacio para pensar Y para responder.
+          max_tokens: 16384,
           system: system + '\nResponde UNICAMENTE con el objeto JSON pedido, sin texto adicional ni explicaciones fuera del JSON.',
           messages: [{ role: 'user', content: user }]
         })
@@ -227,7 +230,7 @@ async function analizar(args) {
         e.tipo = 'truncado'; throw e;
       }
     } else if (provider === 'gemini') {
-      const mdl = model || 'gemini-1.5-pro';
+      const mdl = model || 'gemini-2.5-pro';
       const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(mdl) + ':generateContent?key=' + encodeURIComponent(key);
       res = await fetchConTimeout(url, {
         method: 'POST',

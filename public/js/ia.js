@@ -6,17 +6,57 @@
 
 // Proveedores de IA soportados por el Asistente de Conciliación.
 // 'mock' = Demo sin conexión (no requiere key; valida la UI sin gastar créditos).
+// Cada modelo es { id, label }: el `id` es el string EXACTO que acepta la API y el `label` es el
+// nombre corto que ve el usuario en el desplegable.
+//
+// Lista auditada el 3-ago-2026 contra la documentacion OFICIAL de cada proveedor. Se quitaron SEIS
+// modelos retirados que seguian ofreciendose y habrian devuelto 404 al conciliar:
+//   - claude-opus-4-1-20250805  se retira el 5-ago-2026 (dos dias despues de esta auditoria)
+//   - gemini-2.0-flash          apagado el 1-jun-2026
+//   - gemini-1.5-pro / -flash   ya ni figuran en la documentacion de Google
+//   - deepseek-chat / -reasoner apagados el 24-jul-2026; nunca fueron modelos, sino etiquetas de
+//                               enrutamiento al modo thinking / no-thinking del mismo modelo
+//
+// OJO con la convencion de Anthropic: desde la generacion 4.6 los IDs van SIN fecha
+// (claude-opus-5, claude-sonnet-5, claude-sonnet-4-6) y cada uno es un snapshot fijo, no un alias.
+// Anadirles un sufijo de fecha produce un ID que no existe. Los anteriores a 4.6 si la llevan.
 const IA_PROVIDERS = [
-  { id: 'mock',      label: 'Demo (sin conexion)',  defaultModel: '',                          models: [] },
-  { id: 'openai',    label: 'OpenAI',               defaultModel: 'gpt-4o',                     models: ['gpt-4o', 'gpt-4o-mini', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4-turbo'] },
-  // Anthropic: se quitaron claude-opus-4-8, claude-opus-4-7 y claude-opus-4-6 porque la API los
-  // rechaza con "model not found" (comprobado en vivo con opus-4-8). Eran alias cortos que nunca
-  // existieron. Se conservan los IDs con fecha explicita, que son estables, y claude-sonnet-4-6,
-  // que si responde. Si un modelo nuevo no aparece aqui, basta escribirlo en Configuracion: el
-  // selector admite cualquier ID guardado aunque no este en esta lista.
-  { id: 'anthropic', label: 'Anthropic (Claude)',   defaultModel: 'claude-sonnet-4-6',          models: ['claude-opus-5', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001', 'claude-opus-4-5-20251101', 'claude-sonnet-4-5-20250929', 'claude-opus-4-1-20250805'] },
-  { id: 'gemini',    label: 'Google Gemini',        defaultModel: 'gemini-1.5-pro',             models: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'] },
-  { id: 'deepseek',  label: 'DeepSeek',             defaultModel: 'deepseek-chat',              models: ['deepseek-chat', 'deepseek-reasoner', 'deepseek-v4-flash', 'deepseek-v4-pro'] },
+  { id: 'mock', label: 'Demo (sin conexion)', defaultModel: '', models: [] },
+
+  { id: 'openai', label: 'OpenAI', defaultModel: 'gpt-4o', models: [
+    { id: 'gpt-5.6-sol',   label: 'GPT-5.6 Sol' },
+    { id: 'gpt-5.6-terra', label: 'GPT-5.6 Terra' },
+    { id: 'gpt-5.4',       label: 'GPT-5.4' },
+    { id: 'gpt-5.4-mini',  label: 'GPT-5.4 Mini' },
+    { id: 'gpt-4o',        label: 'GPT-4o' },
+    { id: 'gpt-4o-mini',   label: 'GPT-4o Mini' },
+    { id: 'gpt-4.1',       label: 'GPT-4.1' },
+  ] },
+
+  // Los tres primeros estan confirmados por partida doble: la documentacion oficial Y el log de
+  // esta app (sonnet-4-6 devolvio un analisis completo; sonnet-5 respondio tras 82s; opus-5 fue
+  // aceptado sin "model not found"). El default se queda en Sonnet 4.6, el unico con una
+  // conciliacion completa observada de principio a fin.
+  { id: 'anthropic', label: 'Anthropic (Claude)', defaultModel: 'claude-sonnet-4-6', models: [
+    { id: 'claude-opus-5',              label: 'Opus 5' },
+    { id: 'claude-sonnet-5',            label: 'Sonnet 5' },
+    { id: 'claude-sonnet-4-6',          label: 'Sonnet 4.6' },
+    { id: 'claude-opus-4-5-20251101',   label: 'Opus 4.5' },
+    { id: 'claude-haiku-4-5-20251001',  label: 'Haiku 4.5' },
+  ] },
+
+  { id: 'gemini', label: 'Google Gemini', defaultModel: 'gemini-2.5-pro', models: [
+    { id: 'gemini-3.6-flash',      label: 'Gemini 3.6 Flash' },
+    { id: 'gemini-3.5-flash',      label: 'Gemini 3.5 Flash' },
+    { id: 'gemini-2.5-pro',        label: 'Gemini 2.5 Pro' },
+    { id: 'gemini-2.5-flash',      label: 'Gemini 2.5 Flash' },
+    { id: 'gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash-Lite' },
+  ] },
+
+  { id: 'deepseek', label: 'DeepSeek', defaultModel: 'deepseek-v4-flash', models: [
+    { id: 'deepseek-v4-pro',   label: 'DeepSeek V4 Pro' },
+    { id: 'deepseek-v4-flash', label: 'DeepSeek V4 Flash' },
+  ] },
 ];
 const IA_LINKS = {
   openai:    'https://platform.openai.com/api-keys',
@@ -715,10 +755,18 @@ function IaAsistente({ iaConfig, onIaConfigChange, tarjetas, onGoConfig, demoMod
             style: { background: 'var(--bg-input)', color: 'var(--text-primary)', border: '1px solid var(--border)', borderRadius: 6, padding: '3px 6px', fontSize: 12 }
           },
             (function () {
+              // Cada modelo es { id, label }: se muestra el nombre corto y se envia el id exacto.
+              // Un modelo guardado en Configuracion que no este en la lista se anade igualmente
+              // como opcion (rotulado con su id), para no bloquear a quien use uno nuevo o de
+              // acceso restringido antes de que aparezca aqui.
               const ms = iaProviderModels(cfg.provider);
-              const opts = (modeloSel && ms.indexOf(modeloSel) === -1) ? [modeloSel].concat(ms) : ms.slice();
-              if (opts.length === 0) opts.push(modeloSel || iaProviderDefaultModel(cfg.provider) || '');
-              return opts.map(m => e('option', { key: m, value: m }, m));
+              const opts = ms.slice();
+              if (modeloSel && !opts.some(m => m.id === modeloSel)) opts.unshift({ id: modeloSel, label: modeloSel });
+              if (opts.length === 0) {
+                const d = iaProviderDefaultModel(cfg.provider) || '';
+                opts.push({ id: d, label: d });
+              }
+              return opts.map(m => e('option', { key: m.id, value: m.id }, m.label));
             })()
           )
         ),
