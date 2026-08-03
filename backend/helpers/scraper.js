@@ -126,11 +126,31 @@ function extractTextFromPDF(buffer) {
 }
 
 // ─── Web scraping for interest rates ──────────────────────────────
+// Muro de bot (Imperva Incapsula, antes Distil). Devuelve HTTP **200** con una pagina de 6 kB, no un
+// 4xx, asi que sin esta deteccion el flujo lo tomaba por exito: no encontraba porcentajes y decia
+// "no se encontraron tasas en la pagina", mandando al usuario a buscar un problema de lectura cuando
+// lo que paso es que no le dejaron entrar. Se mira el CUERPO, nunca la cabecera `x-iinfo`: Imperva la
+// pone en TODAS las respuestas que proxea, tambien en las buenas, y usarla da falsos positivos
+// (medido: grupobancolombia.com responde 122 kB de pagina real con esa cabecera puesta).
+function detectarMuroBot(texto) {
+  if (!texto || texto.length > 60000) return null;
+  if (/Pardon Our Interruption/i.test(texto)) return 'imperva';
+  if (/reeseSkipExpirationCheck|_Incapsula_Resource|\/_Incapsula_/i.test(texto)) return 'imperva';
+  if (/Checking your browser before accessing|cf-browser-verification|__cf_chl_/i.test(texto)) return 'cloudflare';
+  return null;
+}
+
 async function scrapeTasas(url) {
   try {
+    // `Accept: */*` y no la cabecera de navegador que habia antes. Dos razones, y la primera basta:
+    // al pedir un PDF, anunciar "quiero HTML" es sencillamente incorrecto — asi se descargaba el
+    // tarifario mensual de tasas de Bancolombia. Ademas, medido en ago-2026, la regla de Imperva del
+    // banco se dispara justo con esa cabecera de HTML: con ella devuelve el interstitial de 6 kB y
+    // con `*/*` entrega la pagina completa de 270 kB. Es una cabecera estandar y honesta (la que
+    // manda curl por defecto), no un disfraz: no se tocan cookies, huellas ni retos de JavaScript.
     const headers = {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept': '*/*',
       'Accept-Language': 'es-CO,es;q=0.9,en;q=0.8'
     };
 
@@ -144,6 +164,14 @@ async function scrapeTasas(url) {
       text = extractTextFromPDF(buffer);
     } else {
       const html = await response.text();
+
+      // Si lo que llego es el muro, se corta AQUI y se dice. Seguir parseando solo produce el
+      // "no se encontraron tasas" que enmascara la verdadera causa.
+      const muro = detectarMuroBot(html);
+      if (muro) {
+        return { ok: true, found: false, bloqueado: true, proteccion: muro, rates: null,
+          error: 'La pagina respondio con una verificacion antibot en vez del contenido. Abrela en el navegador y copia la tasa a mano.' };
+      }
 
       const pdfRegex = /(?:href|src)=["']([^"']*\.pdf[^"']*)["']/gi;
       const pdfLinks = [];
@@ -287,4 +315,4 @@ async function scrapeTasas(url) {
   }
 }
 
-module.exports = { scrapeTasas, extractTextFromPDF };
+module.exports = { scrapeTasas, extractTextFromPDF, detectarMuroBot };

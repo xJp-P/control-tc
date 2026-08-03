@@ -1,7 +1,7 @@
 {
   "generado": "2026-08-01",
   "nota": "Inventario de simbolos de nivel superior del frontend. F4 comprueba que existen; F5, que conservan su tamano. NO regenerar sin una razon aprobada.",
-  "total": 68,
+  "total": 69,
   "simbolos": [
     {
       "nombre": "e",
@@ -220,9 +220,15 @@
       "pieza": "js/avisos.js"
     },
     {
+      "nombre": "avisoTasasBloqueadas",
+      "tipo": "async function",
+      "lineas": 9,
+      "pieza": "js/avisos.js"
+    },
+    {
       "nombre": "CHANGELOG",
       "tipo": "const",
-      "lineas": 740,
+      "lineas": 745,
       "pieza": "js/changelog.js"
     },
     {
@@ -258,7 +264,7 @@
     {
       "nombre": "TarjetaForm",
       "tipo": "function",
-      "lineas": 298,
+      "lineas": 300,
       "pieza": "js/tarjetas.js"
     },
     {
@@ -276,7 +282,7 @@
     {
       "nombre": "AvanceForm",
       "tipo": "function",
-      "lineas": 81,
+      "lineas": 83,
       "pieza": "js/formularios.js"
     },
     {
@@ -288,7 +294,7 @@
     {
       "nombre": "DiferidaForm",
       "tipo": "function",
-      "lineas": 92,
+      "lineas": 94,
       "pieza": "js/formularios.js"
     },
     {

@@ -750,6 +750,8 @@ function AvanceForm({ item, tarjeta, onSave, onCancel }) {
       if (r.ok && r.found && r.rates && r.rates.avances_mv) {
         setTasaMv(r.rates.avances_mv.toFixed(4));
         toast('Tasa actualizada: ' + r.rates.avances_mv.toFixed(4) + '%');
+      } else if (r.bloqueado) {
+        await avisoTasasBloqueadas(tarjeta.url_tasas);
       } else {
         toastErr('No se encontraron tasas en la pagina. Ingresa la tasa manualmente.');
       }
@@ -864,6 +866,8 @@ function DiferidaForm({ item, tarjeta, onSave, onCancel }) {
       if (r.ok && r.found && r.rates && r.rates.compras_mv) {
         setTasaMv(r.rates.compras_mv.toFixed(4));
         toast('Tasa actualizada: ' + r.rates.compras_mv.toFixed(4) + '%');
+      } else if (r.bloqueado) {
+        await avisoTasasBloqueadas(tarjeta.url_tasas);
       } else { toastErr('No se encontraron tasas en la pagina. Ingresa la tasa manualmente.'); }
     } catch (err) { toastErr(err.message); }
     setFetchingRate(false);

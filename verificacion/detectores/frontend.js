@@ -255,7 +255,7 @@ const F4 = {
   id: 'F4',
   // El rotulo decia "(68 exactos)" mientras la unica comparacion numerica era contra 67, y esa
   // yuxtaposicion con "vistos=67 esperados=67" hacia parecer inconsistente una salida correcta.
-  nombre: 'Manifiesto de simbolos por identificador (67 + el bootstrap, que cubre F3)',
+  nombre: 'Manifiesto de simbolos por identificador (68 + el bootstrap, que cubre F3)',
   medir(raiz) {
     const notas = [];
     // Un archivo de la suite AUSENTE es un FALLO, jamas un exito por omision.

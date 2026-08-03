@@ -64,3 +64,18 @@ function ConfirmDialog() {
 }
 async function confirmDialog(msg, opts) { return window.__showConfirm ? window.__showConfirm(msg, opts) : confirm(msg); }
 async function infoDialog(msg, title) { return confirmDialog(msg, { mode: 'info', title: title || 'Informacion' }); }
+// Respuesta comun de los tres botones "consultar tasas" cuando el sitio del banco devuelve una
+// verificacion antibot en lugar del contenido. Antes se mostraba "No se encontraron tasas en la
+// pagina", que manda a buscar un problema de lectura cuando lo que paso es que no dejaron entrar.
+// Se ofrece abrir la pagina en el navegador, que es donde la verificacion se resuelve sola y el
+// usuario puede leer la cifra. Devuelve true si se abrio (para que quien llame no muestre ademas
+// su propio error).
+async function avisoTasasBloqueadas(url) {
+  const abrir = await confirmDialog(
+    'El sitio del banco respondio con una verificacion antibot en vez de la pagina de tasas, asi que la app no pudo leerla.\n\n' +
+    'Abrela en tu navegador (alli la verificacion se resuelve sola) y escribe la tasa a mano.',
+    { title: 'El banco bloqueo la consulta automatica', confirmText: 'Abrir la pagina', cancelText: 'Ahora no', danger: false }
+  );
+  if (abrir && url && window.electronAPI && window.electronAPI.openExternal) window.electronAPI.openExternal(url);
+  return !!abrir;
+}

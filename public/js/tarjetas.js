@@ -137,6 +137,8 @@ function TarjetaForm({ item, onSave, onCancel }) {
         if (result.rates.avances_mv) setTasaMvAvances(result.rates.avances_mv.toFixed(4));
         if (result.rates.compras_mv) setTasaMvDiferidas(result.rates.compras_mv.toFixed(4));
         toast('Tasas actualizadas desde la web');
+      } else if (result.bloqueado) {
+        await avisoTasasBloqueadas(urlTasas);
       } else if (result.ok && !result.found) {
         toastErr('No se encontraron tasas en la pagina. Ingresalas manualmente.');
       } else {

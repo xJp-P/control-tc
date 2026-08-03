@@ -12,6 +12,11 @@
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '5.9.3': [
+    'VUELVE A LEER LA TASA DE BANCOLOMBIA. Desde el 21 de julio el boton de consultar tasas no traia nada y decia "no se encontraron tasas en la pagina", asi que tu Visa se quedo con la tasa de julio (2,1285%) mientras el banco ya cobraba 2,1852%. La causa no era la pagina: al pedirla, la app decia que esperaba un documento de otro tipo, y el sitio del banco respondia con una verificacion antibot en vez del contenido. Corregido: vuelve a leer la tasa, y de paso ahora tambien puede leer los documentos PDF de tasas que publica el banco cada mes.',
+    'Y SI ALGUN DIA VUELVE A PASAR, TE LO DIRA. Antes ese bloqueo se veia igual que "esta pagina no tiene tasas", que manda a buscar el problema donde no esta. Ahora la app lo reconoce, te lo explica y te ofrece abrir la pagina en tu navegador para que copies la cifra a mano.',
+    'Revisa la tasa de tus tarjetas Bancolombia y vuelve a consultarla: la que tenias guardada puede haberse quedado vieja durante estas dos semanas.'
+  ],
   '5.9.2': [
     'EL ASISTENTE DE EXTRACTOS TRAE UN MANUAL CORREGIDO. Dentro de la app viajan las reglas de cada banco que el asistente lee antes de analizar tu extracto, y varias de sus cuentas de ejemplo estaban mal: saldos que no cuadraban al restar una cuota, una cuota que no correspondia al monto de su compra, y la comision de avance de una tarjeta citada con los valores de otra. Un ejemplo mal hecho ahi puede llevar al asistente a conclusiones equivocadas sobre tu extracto. Ahora toda esa aritmetica cuadra al peso, y quedo escrita de forma que se puede comprobar paso a paso.',
     'Tambien se aclararon dos datos que se llamaban casi igual y significaban cosas distintas (los dias que van del corte a la fecha limite, y el dia del mes en que entro tu pago). Confundirlos hacia que el asistente calculara intereses que no eran.'
