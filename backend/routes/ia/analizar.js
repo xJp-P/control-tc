@@ -74,8 +74,14 @@ module.exports = function(router, ctx) {
 
       console.log('[IA] Iniciando analisis. Proveedor: ' + prov + ', Modelo: ' + (model || '(default del proveedor)'));
       let r;
+      // Se cronometra la llamada: sin este dato, calibrar el timeout es adivinar. Los modelos que
+      // razonan tardan varias veces mas que los antiguos con el mismo prompt, y la unica forma de
+      // saber si el limite se queda corto es ver cuanto tardo el intento que fallo.
+      const t0 = Date.now();
       try {
         r = await analizarIA({ provider: prov, model, key, system, user, mockContexto: { movimientos: mv } });
+        console.log('[IA] Respuesta de ' + prov + ' (' + (model || 'default') + ') en ' +
+          Math.round((Date.now() - t0) / 1000) + 's. Prompt: ' + (system.length + user.length) + ' chars.');
       } catch (err) {
         const tipo = err && err.tipo;
         const code = (tipo === 'sin_key') ? 400 : (tipo === 'timeout') ? 504 : ((err && err.status) || 502);
@@ -85,6 +91,7 @@ module.exports = function(router, ctx) {
         // proceso habia muerto. `err.body` trae el mensaje LITERAL del proveedor (lo guarda
         // errorProveedor en aiProvider.js), que es lo que de verdad dice que esta pasando.
         console.log('[IA] FALLO del proveedor ' + prov + ' con el modelo ' + (model || '(default)') +
+          ' tras ' + Math.round((Date.now() - t0) / 1000) + 's' +
           ' -> HTTP ' + code + ' (' + (tipo || 'error') + '): ' + ((err && err.message) || 'sin mensaje') +
           ((err && err.body) ? ' | respuesta del proveedor: ' + err.body : ''));
         return res.status(code).json({ error: (err && err.message) ? err.message : 'Error al consultar la IA.' });

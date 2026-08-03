@@ -5,7 +5,14 @@
 //
 // Proveedores: 'mock' (Demo, sin red), 'openai', 'anthropic', 'gemini'.
 
-const TIMEOUT_MS = 60000;
+// 60s se quedaron cortos en cuanto entraron dos cosas a la vez: max_tokens de 8192 y los modelos
+// que razonan antes de responder (familia Claude 5). Con ~11.000 tokens de entrada, una
+// conciliacion completa tarda mas de un minuto y el backend abortaba su propia peticion: el log
+// decia "HTTP 504 (timeout)" y parecia que el modelo no existia, cuando la API lo habia aceptado
+// sin problema. Conciliar no es una operacion interactiva -el usuario sube un PDF y espera-, asi
+// que el limite se sube a 5 minutos, que cubre a los modelos lentos sin dejar la peticion colgada
+// para siempre si la red se cae de verdad.
+const TIMEOUT_MS = 300000;
 
 function fetchConTimeout(url, opts, ms) {
   const ctrl = new AbortController();

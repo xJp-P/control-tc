@@ -372,7 +372,7 @@
     {
       "nombre": "IaAsistente",
       "tipo": "function",
-      "lineas": 329,
+      "lineas": 334,
       "pieza": "js/ia.js"
     },
     {

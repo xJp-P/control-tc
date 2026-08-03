@@ -817,6 +817,11 @@ function IaAsistente({ iaConfig, onIaConfigChange, tarjetas, onGoConfig, demoMod
                 e('button', { className: 'btn btn-primary', onClick: () => analizarConIA(), disabled: analizandoIA }, e(Ico, { name: 'sparkles', size: 14 }), analizandoIA ? ' Analizando...' : (isMock ? ' Analizar (Demo)' : ' Confirmar y analizar con IA')),
                 e('button', { className: 'btn', onClick: () => { setPreview(null); setResultado(null); setErrorIA(''); } }, 'Descartar')
               ),
+              // Mientras analiza se avisa de que la espera larga es normal: los modelos que razonan
+              // tardan uno o dos minutos con un ciclo completo, y sin este aviso la pantalla quieta
+              // parece un cuelgue (fue justo lo que ocurrio en el QA).
+              analizandoIA && !isMock && e('div', { style: { marginTop: 8, fontSize: 12, color: 'var(--accent)' } },
+                'Analizando el extracto. Con los modelos mas avanzados esto puede tardar uno o dos minutos: no cierres esta vista.'),
               e('div', { style: { marginTop: 8, fontSize: 11.5, color: 'var(--text-muted)' } }, 'Tip: "Copiar prompt para IA" arma un mensaje listo para pegar en ChatGPT, Claude o Gemini, sin gastar tokens de mas.'),
               errorIA && e('div', { style: { marginTop: 12, fontSize: 12.5, color: '#f87171', background: 'rgba(248,113,113,0.10)', border: '1px solid rgba(248,113,113,0.25)', borderRadius: 8, padding: '8px 10px' } }, errorIA),
               resultado && e(IaResultado, { resultado: resultado, isMock: isMock, tarjetaId: tarjetaId, ciclo: ciclo, onAplicada: recargarMovimientos, onReanalizar: analizarConIA, reanalizando: analizandoIA })

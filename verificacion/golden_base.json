@@ -2,7 +2,7 @@
   "generado": "2026-08-01",
   "nota": "Hash por respuesta de los GET inocuos, con el reloj congelado y ciclos explicitos. Si el refactor solo mueve codigo, ninguno puede cambiar. NO regenerar sin una razon aprobada.",
   "total": 76,
-  "datos": "3e52360fa4b2ab917509f477651065ecccf7ca88e46bade730e1fb3033f00311",
+  "datos": "bc605cf6551350b0d72c15f95c1fbbb86a11fe2cf251db18bc32d7ab9096734c",
   "claves": {
     "4|2026-06|/api/config": "9b204722cae690a3bf7203aecdf99227c0384de4020ff6ce6b55be5fab13c452",
     "4|2026-06|/api/tarjetas": "3d6982f9d9643b85c0bc273db650f50a7a092b3f5aab63793295cdf3bad4e548",
@@ -21,8 +21,8 @@
     "4|2026-06|/api/dashboard?tarjeta_id=4&ciclo=2026-06": "ab24a7b517f18891a810bac6568b80c8774e969d021dcccb724d724e5ec38192",
     "4|2026-06|/api/dashboard": "ca02cc08f28b1c62ba34493e25587122ecdccba905d8145c5f5ce7e79f358e8c",
     "4|2026-06|/api/proyecciones?tarjeta_id=4&meses=6": "a57af33484f9df706a003edb49c46d512ca15162a11daa8dda45f836fe20562c",
-    "4|2026-06|/api/abono-capital/preview?tarjeta_id=4&monto=100000&fecha=2026-08-01": "070e755e181d1cde71dd7153484269341a15106c0a9e105adf1904c77add1c01",
-    "4|2026-06|/api/log?limit=5": "73bd7c28f24167e7bb1da530d0ebf1faf54131e33ad25318b6e7c3b41cbdabf9",
+    "4|2026-06|/api/abono-capital/preview?tarjeta_id=4&monto=100000&fecha=2026-08-01": "da9bf371107079d836ded21f58b0b6188277d9a2ac17b6ca4ce8867783ee64eb",
+    "4|2026-06|/api/log?limit=5": "0b2cf7b94e98054b0625c2b9c55365df9d7dada0e96902de5068f0ad03443a0e",
     "4|2026-07|/api/config": "9b204722cae690a3bf7203aecdf99227c0384de4020ff6ce6b55be5fab13c452",
     "4|2026-07|/api/tarjetas": "3d6982f9d9643b85c0bc273db650f50a7a092b3f5aab63793295cdf3bad4e548",
     "4|2026-07|/api/tarjetas/pendientes-config": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
@@ -40,8 +40,8 @@
     "4|2026-07|/api/dashboard?tarjeta_id=4&ciclo=2026-07": "755d861e3b639e1d898188c16e51a5f51a093405fa408bfe7709d588b63663ad",
     "4|2026-07|/api/dashboard": "ca02cc08f28b1c62ba34493e25587122ecdccba905d8145c5f5ce7e79f358e8c",
     "4|2026-07|/api/proyecciones?tarjeta_id=4&meses=6": "a57af33484f9df706a003edb49c46d512ca15162a11daa8dda45f836fe20562c",
-    "4|2026-07|/api/abono-capital/preview?tarjeta_id=4&monto=100000&fecha=2026-08-01": "070e755e181d1cde71dd7153484269341a15106c0a9e105adf1904c77add1c01",
-    "4|2026-07|/api/log?limit=5": "73bd7c28f24167e7bb1da530d0ebf1faf54131e33ad25318b6e7c3b41cbdabf9",
+    "4|2026-07|/api/abono-capital/preview?tarjeta_id=4&monto=100000&fecha=2026-08-01": "da9bf371107079d836ded21f58b0b6188277d9a2ac17b6ca4ce8867783ee64eb",
+    "4|2026-07|/api/log?limit=5": "0b2cf7b94e98054b0625c2b9c55365df9d7dada0e96902de5068f0ad03443a0e",
     "5|2026-06|/api/config": "9b204722cae690a3bf7203aecdf99227c0384de4020ff6ce6b55be5fab13c452",
     "5|2026-06|/api/tarjetas": "3d6982f9d9643b85c0bc273db650f50a7a092b3f5aab63793295cdf3bad4e548",
     "5|2026-06|/api/tarjetas/pendientes-config": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
@@ -60,7 +60,7 @@
     "5|2026-06|/api/dashboard": "ca02cc08f28b1c62ba34493e25587122ecdccba905d8145c5f5ce7e79f358e8c",
     "5|2026-06|/api/proyecciones?tarjeta_id=5&meses=6": "d0f18bbf53a7bbe88d7304d8f58ab829187cb13da0c2ac5a44b7e1bcadfe7619",
     "5|2026-06|/api/abono-capital/preview?tarjeta_id=5&monto=100000&fecha=2026-08-01": "deb86ba95564bf33aaa498506ea7c2b1384836d4720e5237582f2b054d3cf795",
-    "5|2026-06|/api/log?limit=5": "73bd7c28f24167e7bb1da530d0ebf1faf54131e33ad25318b6e7c3b41cbdabf9",
+    "5|2026-06|/api/log?limit=5": "0b2cf7b94e98054b0625c2b9c55365df9d7dada0e96902de5068f0ad03443a0e",
     "5|2026-07|/api/config": "9b204722cae690a3bf7203aecdf99227c0384de4020ff6ce6b55be5fab13c452",
     "5|2026-07|/api/tarjetas": "3d6982f9d9643b85c0bc273db650f50a7a092b3f5aab63793295cdf3bad4e548",
     "5|2026-07|/api/tarjetas/pendientes-config": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
@@ -79,6 +79,6 @@
     "5|2026-07|/api/dashboard": "ca02cc08f28b1c62ba34493e25587122ecdccba905d8145c5f5ce7e79f358e8c",
     "5|2026-07|/api/proyecciones?tarjeta_id=5&meses=6": "d0f18bbf53a7bbe88d7304d8f58ab829187cb13da0c2ac5a44b7e1bcadfe7619",
     "5|2026-07|/api/abono-capital/preview?tarjeta_id=5&monto=100000&fecha=2026-08-01": "deb86ba95564bf33aaa498506ea7c2b1384836d4720e5237582f2b054d3cf795",
-    "5|2026-07|/api/log?limit=5": "73bd7c28f24167e7bb1da530d0ebf1faf54131e33ad25318b6e7c3b41cbdabf9"
+    "5|2026-07|/api/log?limit=5": "0b2cf7b94e98054b0625c2b9c55365df9d7dada0e96902de5068f0ad03443a0e"
   }
 }
