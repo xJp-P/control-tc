@@ -23,6 +23,7 @@
       "desktop/**/*",
       "backend/**/*",
       "public/**/*",
+      "docs/bancos/*.md",
       "node_modules/**/*",
       "package.json"
     ],
