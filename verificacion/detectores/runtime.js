@@ -358,12 +358,65 @@ const R4 = {
 const RUTA_HUELLA = path.join(__dirname, '..', 'huella_motores.json');
 const RUTA_GOLDEN = path.join(__dirname, '..', 'golden_base.json');
 
+// Tablas que los motores LEEN de verdad: es el grep de `FROM` sobre backend/engine/extracto.js
+// (amortizacion.js es puro, no toca la BD). El conjunto se anade aparte porque no es una tabla:
+// (tarjeta_id, ciclo) de `extractos` decide QUE filas existen en la huella de salida, aunque
+// calcExtracto no lea esa tabla para calcular.
+//
+// LA LISTA ES CORTA A PROPOSITO Y NO DEBE CRECER "por si acaso". Si incluyera una tabla que los
+// motores no leen (historial, pagos, config), un cambio ahi diria "caduco por datos" y podria TAPAR
+// una regresion de codigo ocurrida en el mismo commit. Mas estrecha se equivoca hacia el lado
+// seguro: dice "regresion" y obliga a mirar.
+const TABLAS_ENTRADA_MOTORES = ['tarjetas', 'compras', 'diferidas', 'avances', 'abonos_diferida', 'abonos_avance'];
+
+// Tablas que NO leen los motores pero SI lee syncData para decidir que escribe SOBRE las de arriba
+// (grep de FROM en config/db/syncData.js, mas cortes_custom, que entra por getCortesCustomMap en el
+// paso 5). Sin ellas quedaba un falso positivo comun y molesto: pagar un extracto cambia
+// `extractos.estado`, el paso 6 marca pagadas las compras de ese ciclo, la huella se mueve... y R5
+// habria acusado al codigo de una regresion que no existe.
+const TABLAS_ENTRADA_SYNCDATA = ['extractos', 'pagos', 'personas', 'cortes_custom'];
+
+// Huella de las ENTRADAS, para que R5 pueda distinguir "los datos cambiaron" de "el codigo movio las
+// cifras" en vez de gritar "CAMBIO" en los dos casos (item D2 del backlog).
+//
+// Es fila a fila y columna a columna, NO COUNT/MAX como huellaDeDatos (la que usa R4): mover una
+// compra de ciclo o reprogramar una diferida son UPDATE — no cambian ni el conteo ni el id maximo — y
+// son justo los cambios de datos que mas mueven las cifras. Reutilizar la gruesa habria hecho que R5
+// llamara "regresion de codigo" a una edicion del usuario. Medido: ver el control del smoke de D2.
+//
+// `tablas` decide QUE se mira, y de ahi salen las DOS mediciones que hace calcularHuella:
+//   PRE  (antes de initDb, tablas directas + las de syncData) = lo que el USUARIO tiene guardado.
+//   POST (despues de initDb, solo las directas)               = lo que los motores acabaron leyendo.
+// Con las dos se separan tres causas que antes se confundian en una sola: cambio de datos, cambio en
+// lo que syncData escribe, y cambio en el calculo de los motores.
+function huellaEntradas(db, tablas) {
+  const partes = [];
+  for (const t of tablas) {
+    let filas;
+    // Una tabla ausente (BD de una version vieja) se registra como tal en vez de reventar: la
+    // huella sigue siendo comparable y la diferencia queda visible.
+    try { filas = db.prepare('SELECT * FROM "' + t + '" ORDER BY id').all(); }
+    catch (e) { partes.push(t + ':AUSENTE'); continue; }
+    partes.push(t + ':' + filas.map(f => JSON.stringify(f)).join(','));
+  }
+  return hashTexto(partes.join('||'));
+}
+
+function huellaEntradasArchivo(rutaBd, tablas) {
+  const Database = require('better-sqlite3');
+  const db = new Database(rutaBd);
+  try { return huellaEntradas(db, tablas); } finally { db.close(); }
+}
+
 // Calculo de la huella, COMPARTIDO por R5 y por generar_base.js. Si cada uno llevara su copia, la
 // referencia y la comprobacion podrian derivar sin que nadie se entere: el detector compararia
 // contra un valor calculado de otra forma y el desajuste pareceria una regresion del refactor.
 function calcularHuella(raiz, rutaBd) {
     const notas = [];
     const ctx = { bd: rutaBd };
+    // PRE: los datos tal como estan guardados, ANTES de que initDb corra syncData (que ESCRIBE, y lo
+    // que escribe depende del codigo). Incluye las tablas que syncData lee para decidir.
+    const entradas = huellaEntradasArchivo(rutaBd, TABLAS_ENTRADA_MOTORES.concat(TABLAS_ENTRADA_SYNCDATA));
     const { initDb } = require(path.join(raiz, 'backend', 'config', 'db.js'));
     const { calcExtracto } = require(path.join(raiz, 'backend', 'engine', 'extracto.js'));
     const { calcularAmortizacionDiferida, calcularAmortizacionAvance } = require(path.join(raiz, 'backend', 'engine', 'amortizacion.js'));
@@ -421,14 +474,16 @@ function calcularHuella(raiz, rutaBd) {
     if (conUndefined.length) {
       notas.push('FALLO: ' + conUndefined.length + ' filas de la huella contienen undefined/null -> se esta hasheando la ausencia de un campo, no una cifra. Ejemplo: ' + conUndefined[0]);
     }
-    return { lineas, huella: hashTexto(lineas.join('\n')), okExt, okDif, okAv, notas };
+    // POST: lo que los motores leyeron de verdad, ya con syncData aplicado.
+    const entradasPost = huellaEntradas(db, TABLAS_ENTRADA_MOTORES);
+    return { lineas, huella: hashTexto(lineas.join('\n')), entradas, entradasPost, okExt, okDif, okAv, notas };
 }
 
 const R5 = {
   id: 'R5',
   nombre: 'Huella numerica de los motores (calcExtracto y amortizacion)',
   medir(raiz, ctx) {
-    const { lineas, huella, okExt, okDif, okAv, notas } = calcularHuella(raiz, ctx.bd);
+    const { lineas, huella, entradas, entradasPost, okExt, okDif, okAv, notas } = calcularHuella(raiz, ctx.bd);
     if (okExt === 0 || okDif === 0) notas.push('FALLO: no se pudo calcular nada (ext=' + okExt + ' dif=' + okDif + ')');
 
     // Comparacion contra la REFERENCIA COMMITEADA. Sin este contraste el detector solo comprobaba
@@ -439,15 +494,48 @@ const R5 = {
       return resultado(false, { filas: lineas.length, huella: huella.slice(0, 16) }, notas);
     }
     const ref = JSON.parse(leer(RUTA_HUELLA));
+    // AUTODIAGNOSTICO (item D2). Antes, cualquier cambio de la huella se reportaba igual —"la huella
+    // CAMBIO"— sin decir si lo movio el CODIGO o los DATOS, y habia que aislarlo a mano midiendo el
+    // arbol viejo y el nuevo contra la misma copia. Paso tres veces en una sola sesion.
+    //
+    // Con las DOS huellas de entradas el detector responde solo, y separa tres causas:
+    //   PRE distinta                  -> los datos guardados cambiaron: REGENERAR la referencia.
+    //   PRE igual y POST distinta     -> syncData escribio distinto sobre datos identicos: es CODIGO.
+    //   PRE y POST iguales            -> los motores calcularon distinto: es CODIGO.
+    // Los dos ultimos coinciden en la accion (no regenerar) pero no en donde mirar, y decirlo ahorra
+    // el rato de buscar la regresion en el motor cuando en realidad esta en la sincronizacion.
+    const datosMovidos = (ref.entradas != null && ref.entradas !== entradas);
     if (ref.huella !== huella) {
       // Se nombran las filas concretas que se movieron: "la huella cambio" no sirve para actuar.
       const antes = new Map(ref.lineas.map(l => [l.split('|').slice(0, 3).join('|'), l]));
       const movidas = lineas.filter(l => antes.get(l.split('|').slice(0, 3).join('|')) !== l);
-      notas.push('FALLO: la huella de los motores CAMBIO (' + movidas.length + ' filas distintas). ' +
-        'Primeras: ' + movidas.slice(0, 3).join(' || '));
+      const detalle = '(' + movidas.length + ' filas distintas). Primeras: ' + movidas.slice(0, 3).join(' || ');
+      if (ref.entradas == null || ref.entradasPost == null) {
+        // Referencia anterior a v5.9.2: sin los campos no se puede diagnosticar. Se dice, en vez de
+        // adivinar: un "caduco por datos" inventado taparia una regresion real.
+        notas.push('FALLO: la huella de los motores CAMBIO ' + detalle +
+          '  ||  La referencia no trae las huellas de ENTRADAS (se genero antes de v5.9.2), asi que no se puede ' +
+          'distinguir datos de codigo. Regenera con `generar_base.js huella` DESPUES de comprobar a mano que el ' +
+          'codigo no movio cifras (medir el arbol viejo y el nuevo contra la MISMA copia).');
+      } else if (datosMovidos) {
+        notas.push('FALLO: REFERENCIA CADUCADA — los DATOS cambiaron desde que se genero ' +
+          path.basename(RUTA_HUELLA) + ' (huella de entradas ' + String(ref.entradas).slice(0, 12) + ' -> ' + entradas.slice(0, 12) + '). ' +
+          'NO es una regresion del codigo: alguien uso la app (registro, edito, pago o reprogramo algo). Regenera la ' +
+          'referencia a proposito con `generar_base.js huella` y deja constancia de por que cambiaron los datos. ' + detalle);
+      } else if (ref.entradasPost !== entradasPost) {
+        notas.push('FALLO: REGRESION DE CODIGO EN syncData — los datos guardados son IDENTICOS, pero tras initDb ' +
+          'las tablas que leen los motores quedaron distintas (' + String(ref.entradasPost).slice(0, 12) + ' -> ' + entradasPost.slice(0, 12) + '): ' +
+          'la sincronizacion de arranque escribio otra cosa sobre la misma entrada. Mira config/db/syncData.js, no el motor. ' +
+          'NO regeneres la referencia. ' + detalle);
+      } else {
+        notas.push('FALLO: REGRESION DE CODIGO EN LOS MOTORES — la huella CAMBIO con las ENTRADAS IDENTICAS ' +
+          '(antes y despues de syncData) ' + detalle + '  ||  Los datos no se movieron: lo movio el calculo. ' +
+          'NO regeneres la referencia.');
+      }
     }
     return resultado(!notas.length && ref.huella === huella,
-      { extractos: okExt, diferidas: okDif, avances: okAv, filas: lineas.length, huella: huella.slice(0, 16), coincide: ref.huella === huella }, notas);
+      { extractos: okExt, diferidas: okDif, avances: okAv, filas: lineas.length, huella: huella.slice(0, 16),
+        coincide: ref.huella === huella, datosMovidos }, notas);
   },
   defecto: 'se invierte el signo del interes en la amortizacion de diferidas (cambia toda la huella sin romper la sintaxis)',
   mutar(raiz) {
@@ -465,5 +553,9 @@ module.exports.calcularHuella = calcularHuella;
 module.exports.RUTA_GOLDEN = RUTA_GOLDEN;
 module.exports.capturar = capturar;
 module.exports.huellaDeDatos = huellaDeDatos;
+module.exports.huellaEntradas = huellaEntradas;
+module.exports.huellaEntradasArchivo = huellaEntradasArchivo;
+module.exports.TABLAS_ENTRADA_MOTORES = TABLAS_ENTRADA_MOTORES;
+module.exports.TABLAS_ENTRADA_SYNCDATA = TABLAS_ENTRADA_SYNCDATA;
 module.exports.R5 = R5;
 module.exports.tablaDeMontaje = tablaDeMontaje;

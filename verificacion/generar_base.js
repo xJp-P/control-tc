@@ -80,6 +80,11 @@ if (hacer('huella')) {
     generado: B.FECHA_CONGELADA,
     nota: 'Cifras de calcExtracto y de las amortizaciones sobre los datos reales, con el reloj congelado. Si el refactor solo mueve codigo, esta huella NO puede cambiar. NO regenerar sin una razon aprobada.',
     huella: h.huella,
+    // Huellas de las ENTRADAS: `entradas` son los datos GUARDADOS (antes de syncData) y
+    // `entradasPost` los que los motores acabaron leyendo (despues). Con las dos, R5 responde solo si
+    // la huella cambio por DATOS (regenerar), por syncData o por el motor, en vez de decir "CAMBIO".
+    entradas: h.entradas,
+    entradasPost: h.entradasPost,
     filas: h.lineas.length,
     lineas: h.lineas,
   }, null, 2) + '\n', 'utf8');
