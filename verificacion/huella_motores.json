@@ -2,8 +2,8 @@
   "generado": "2026-08-01",
   "nota": "Cifras de calcExtracto y de las amortizaciones sobre los datos reales, con el reloj congelado. Si el refactor solo mueve codigo, esta huella NO puede cambiar. NO regenerar sin una razon aprobada.",
   "huella": "59138b414ec51f0f1b0b193dfd3de0572e0ce1764a692c9efb68628a356a19df",
-  "entradas": "5e0cc6a61e1e446f06b4cf64077c79c0ddd19c1018738fe4ca4003148630dad1",
-  "entradasPost": "ceb9ad9b9c2c2289a166e1813aa498c75b3650ecaa98db6ad84bba3d72846c4a",
+  "entradas": "c56b5480ad1991f0228d7156f307ab72b7aa2e78e4eb773ec937ae4d3f96f654",
+  "entradasPost": "006bda1a8d5b01137be5c8fe0f1e9300113205136e34ed9e297c17386f04669e",
   "filas": 138,
   "lineas": [
     "EXT|4|2026-03|1341997|30726874|1041667|286650|1341997|0|0",
