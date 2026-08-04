@@ -1,5 +1,5 @@
 'use strict';
-// verificacion/detectores/frontend.js — F1..F5
+// verificacion/detectores/frontend.js — F1..F7
 //
 // El frontend es un unico <script> inline de ~7.771 lineas sin build, sin JSX y sin modulos ES.
 // Se verifica con cuatro angulos distintos porque cada uno se queda ciego de una forma:
@@ -166,7 +166,7 @@ const F2 = {
 };
 
 // ─── Carga real con dobles (compartida por F3 y F4) ─────────────────────────
-function cargarFrontend(raiz) {
+function cargarFrontend(raiz, opts) {
   const { piezas } = piezasEnOrden(raiz);
   const fuentes = piezas.filter(p => p.fuente);
   if (!fuentes.length) throw new Error('no hay codigo que cargar');
@@ -174,7 +174,10 @@ function cargarFrontend(raiz) {
 
   const marcas = { render: 0, createRoot: 0 };
   const hook = () => [undefined, () => {}];
-  const React = {
+  // `opts.React` deja que F7 monte el MISMO sandbox con hooks que si guardan estado. Sin este
+  // parametro habria que copiar aqui abajo la lista entera de globales, y dos sandboxes que se
+  // separan sin que nadie lo note es justo lo que este archivo evita en otros sitios.
+  const React = (opts && opts.React) || {
     createElement: (t) => ({ __el: t }),
     useState: hook, useEffect: () => {}, useCallback: (f) => f, useRef: () => ({ current: null }),
     useMemo: (f) => (typeof f === 'function' ? f() : undefined), Fragment: 'Fragment',
@@ -475,7 +478,189 @@ const F6 = {
   },
 };
 
-module.exports = [F1, F2, F3, F4, F5, F6];
+// ─── Andamiaje de F7: montar el frontend con hooks que SI guardan estado ────
+// Reusa el sandbox de cargarFrontend (una sola lista de globales) y solo cambia el objeto React.
+// `semilla` permite fijar el valor inicial de un useState por su posicion; `ctx.__hooks` devuelve los
+// valores iniciales EN ORDEN DE LLAMADA, que es lo que permite localizar una ranura sin escribir su
+// indice a mano y sin quedarse callado si alguien reordena los hooks.
+function montarConEstado(raiz, semilla) {
+  const store = (semilla || []).slice();
+  const orden = [];
+  let idx = 0;
+  const React = {
+    createElement: (t, props, ...hijos) => ({ type: t, props: props || {}, hijos }),
+    useState: (init) => {
+      const i = idx++;
+      orden[i] = init;
+      if (!(i in store) || store[i] === undefined) store[i] = init;
+      return [store[i], () => {}];
+    },
+    useEffect: () => {}, useCallback: (f) => f, useRef: () => ({ current: null }),
+    useMemo: (f) => (typeof f === 'function' ? f() : undefined), Fragment: 'Fragment',
+  };
+  const { ctx } = cargarFrontend(raiz, { React });
+  ctx.__hooks = orden;
+  return ctx;
+}
+
+// Recorrido del arbol de elementos que devuelve el createElement de arriba.
+function recorrerArbol(nodo, fn) {
+  if (nodo == null || typeof nodo === 'boolean') return;
+  if (Array.isArray(nodo)) { for (const n of nodo) recorrerArbol(n, fn); return; }
+  if (typeof nodo !== 'object') return;
+  fn(nodo);
+  if (nodo.hijos) for (const h of nodo.hijos) recorrerArbol(h, fn);
+}
+function textoDe(nodo) {
+  let t = '';
+  recorrerArbol(nodo, n => { if (n.hijos) for (const h of n.hijos) if (typeof h === 'string') t += h + ' '; });
+  return t;
+}
+function buscarNodo(arbol, pred) {
+  let hallado = null;
+  recorrerArbol(arbol, n => { if (!hallado && pred(n)) hallado = n; });
+  return hallado;
+}
+function botonesDe(arbol) {
+  const out = [];
+  recorrerArbol(arbol, n => {
+    if (n.type === 'button') out.push({ texto: textoDe(n).trim(), disabled: !!n.props.disabled, onClick: typeof n.props.onClick === 'function' });
+  });
+  return out;
+}
+
+// ─── F7: RENDER real del panel de conciliacion IA ───────────────────────────
+//
+// POR QUE EXISTE: F3 ejercita el TIEMPO DE CARGA (el alias `e`, los Object.freeze, el orden entre
+// archivos) y ahi se queda. Nadie DIBUJA un componente. `IaResultado` es la superficie mas compleja
+// del frontend -es la que decide que botones se pueden pulsar sobre el dinero del usuario- y un
+// identificador mal escrito dentro de su render no revienta hasta que alguien abre el modal en la
+// app real: F1 lo ve sintacticamente correcto, F5 no nota el cambio de tamano y F4/F6 solo miran
+// declaraciones de nivel superior. Probado con mutacion cruzada: el defecto de aqui abajo deja los
+// otros 17 detectores en VERDE.
+//
+// Los dobles de F3 no sirven para esto: su `useState` devuelve [undefined, noop], asi que el primer
+// `aplicadas[i]` del render lanza TypeError sobre undefined. Aqui los hooks tienen ESTADO real,
+// indexados por orden de llamada (que es estable por las reglas de React) y con el contenido de cada
+// posicion COMPROBADO antes de usarlo: si alguien reordena los useState, el detector lo dice en vez
+// de sembrar en la ranura equivocada y medir otra cosa.
+const F7 = {
+  id: 'F7',
+  nombre: 'Render real del panel de conciliacion IA (ningun otro detector lo dibuja)',
+  medir(raiz) {
+    const notas = [];
+    const cifras = {};
+    let ctx;
+    try { ctx = montarConEstado(raiz, []); }
+    catch (e) { return resultado(false, {}, ['FALLO cargando el frontend: ' + e.message]); }
+    if (typeof ctx.IaResultado !== 'function') {
+      return resultado(false, {}, ['FALLO: IaResultado no es alcanzable en el ambito global']);
+    }
+
+    // Fixture con las tres formas que conviven en la lista: una accion normal, una sobre compra
+    // DIVIDIDA (dos partes del mismo grupo) y la cifra oficial, que es la que la jerarquia bloquea.
+    const GRUPO = 'g-test';
+    const compras = [
+      { id: 501, descripcion: 'COMERCIO A', ciclo: '2026-07', valor_cop: 400000, grupo_id: GRUPO, persona_id: 1, tarjeta_id: 4, fecha: '2026-07-30' },
+      { id: 502, descripcion: 'COMERCIO A', ciclo: '2026-07', valor_cop: 277853, grupo_id: GRUPO, persona_id: 2, tarjeta_id: 4, fecha: '2026-07-30' },
+      { id: 503, descripcion: 'COMERCIO B', ciclo: '2026-07', valor_cop: 39800, grupo_id: null, persona_id: null, tarjeta_id: 4, fecha: '2026-07-26' },
+    ];
+    const resultadoIa = {
+      conciliacion_pago_minimo: { pago_minimo_extracto: 3539098, pago_minimo_app: 4207929, diferencia: 668831, explicacion: ['linea de prueba'] },
+      pagos_detectados: [],
+      discrepancias: [
+        { tipo: 'otro', severidad: 'media', descripcion: 'parte de compra dividida', valor_extracto: 0, valor_app: 400000,
+          accion_sugerida: { operacion: 'mover_ciclo', parametros: { compra_id: 501, ciclo: '2026-08' } } },
+        { tipo: 'monto_erroneo', severidad: 'alta', descripcion: 'valor distinto', valor_extracto: 39900, valor_app: 39800,
+          accion_sugerida: { operacion: 'editar_valor', parametros: { compra_id: 503, valor_cop: 39900 } } },
+        { tipo: 'pago_minimo_oficial', severidad: 'media', descripcion: 'cifra del extracto', valor_extracto: 3539098, valor_app: 4207929,
+          accion_sugerida: { operacion: 'fijar_pago_minimo_oficial', parametros: { pago_minimo: 3539098, ciclo: '2026-07' } } },
+      ],
+    };
+    const props = { resultado: resultadoIa, isMock: false, tarjetaId: 4, ciclo: '2026-07',
+      onAplicada: () => {}, onReanalizar: () => {}, reanalizando: false };
+
+    // ── a) lista de discrepancias, con la tabla de compras ya cargada ────────
+    let arbol;
+    const semilla = [];
+    try {
+      const sonda = montarConEstado(raiz, []);
+      const orden = sonda.__hooks;                       // valores iniciales, en orden de llamada
+      sonda.IaResultado(props);
+      const iCompras = orden.findIndex(v => Array.isArray(v));
+      if (iCompras < 0) {
+        return resultado(false, {}, ['FALLO: ningun useState de IaResultado arranca con un array -> ' +
+          'la lista de compras ya no se guarda asi y este detector estaria sembrando en la ranura equivocada']);
+      }
+      semilla[iCompras] = compras;
+      cifras.ranuraCompras = iCompras;
+    } catch (e) {
+      return resultado(false, {}, ['FALLO sondeando el orden de los hooks: ' + e.message]);
+    }
+    try {
+      const c2 = montarConEstado(raiz, semilla);
+      arbol = c2.IaResultado(props);
+    } catch (e) {
+      return resultado(false, cifras, ['FALLO renderizando IaResultado: ' + e.message]);
+    }
+    if (!arbol || arbol.type !== 'div') notas.push('FALLO: el render no devolvio un elemento');
+
+    const bts = botonesDe(arbol);
+    const aplicar = bts.filter(b => b.texto === 'Aplicar');
+    cifras.botones = bts.length;
+    cifras.aplicar = aplicar.length;
+    if (aplicar.length !== 3) notas.push('FALLO: se esperaban 3 botones "Aplicar" (uno por discrepancia), hay ' + aplicar.length);
+    // La cifra oficial va de ULTIMA y tiene que estar BLOQUEADA mientras haya estructurales sin
+    // resolver: es el candado que evita sellar el mes sobre una lista de compras incompleta.
+    if (aplicar.length === 3) {
+      if (aplicar[0].disabled) notas.push('FALLO: el mover_ciclo de una compra dividida quedo deshabilitado');
+      if (!aplicar[2].disabled) notas.push('FALLO: "fijar cifra oficial" NO esta bloqueado habiendo cambios estructurales pendientes');
+      if (aplicar[2].onClick) notas.push('FALLO: el boton bloqueado conserva onClick -> se puede disparar igual');
+    }
+    const desc = bts.filter(b => b.texto === 'Descartar').length;
+    cifras.descartar = desc;
+    // Invariante del candado: todo lo que bloquea tiene que poder resolverse, o es una trampa.
+    if (desc !== 2) notas.push('FALLO: se esperaban 2 botones "Descartar" (uno por estructural pendiente), hay ' + desc);
+
+    // ── b) modal de confirmacion: es donde corre resumenAccion ──────────────
+    try {
+      const iAccion = 0;   // accionSel es el primer useState del componente
+      const s2 = semilla.slice();
+      s2[iAccion] = { d: resultadoIa.discrepancias[0], idx: 0 };
+      const c3 = montarConEstado(raiz, s2);
+      const arbol2 = c3.IaResultado(props);
+      const modal = buscarNodo(arbol2, n => n.props && n.props.title === 'Confirmar accion');
+      if (!modal) {
+        notas.push('FALLO: con accionSel puesto no se renderizo el modal de confirmacion -> resumenAccion no se ejercita');
+      } else {
+        const t = textoDe(modal);
+        cifras.modal = t.length;
+        if (t.indexOf('#501') === -1 || t.indexOf('#502') === -1) {
+          notas.push('FALLO: el modal de una compra DIVIDIDA no lista sus dos partes (#501 y #502): ' + t.slice(0, 160));
+        }
+      }
+    } catch (e) {
+      notas.push('FALLO renderizando el modal de confirmacion: ' + e.message);
+    }
+
+    return resultado(notas.length === 0, cifras, notas);
+  },
+  defecto: 'se rompe un identificador DENTRO del render de IaResultado (un typo que ningun otro detector puede ver)',
+  mutar(raiz) {
+    // Se busca por CONTENIDO y se LANZA si no aparece: una mutacion que no se aplica daria un falso
+    // "no detectado" que parece culpa del detector. Se elige una llamada que ocurre en el camino de
+    // render de la lista, no en un manejador de eventos (esos no se ejecutan al dibujar).
+    const { piezas } = piezasEnOrden(raiz);
+    const pieza = piezas.find(p => p.ruta && p.fuente && p.fuente.indexOf('function IaResultado') !== -1);
+    if (!pieza) throw new Error('no se encontro la pieza que declara IaResultado');
+    const src = leer(pieza.ruta);
+    const aguja = 'fmtOperacion(op)';
+    if (src.indexOf(aguja) === -1) throw new Error('no se encontro "' + aguja + '" dentro del render de IaResultado');
+    fs.writeFileSync(pieza.ruta, src.replace(aguja, 'fmtOperacionQueNoExiste(op)'), 'utf8');
+  },
+};
+
+module.exports = [F1, F2, F3, F4, F5, F6, F7];
 module.exports.medirSimbolos = medirSimbolos;
 module.exports.piezasEnOrden = piezasEnOrden;
 module.exports.RUTA_SIMBOLOS = RUTA_SIMBOLOS;

@@ -50,31 +50,56 @@ function tasaDeCompraDelCiclo(db, tarjetaId, ciclo, fecha, excluirCompraId) {
   return row && row.tasa_intl != null ? row.tasa_intl : null;
 }
 
-// Último scrape registrado en o antes de la fecha de la compra, para ESA tarjeta.
-// `historial.fecha` es el instante en que se CONSULTÓ la web, no la vigencia de la tasa, así que el
-// último scrape anterior a la compra puede ser del mes pasado y traer la tasa vieja. Por eso se exige
-// que el scrape sea del MISMO MES CALENDARIO que la compra: dentro del mes la tasa no cambia, y si no
-// hay ninguno se devuelve null para caer al fallback en vez de afirmar un número dudoso.
+// Tasa publicada ESE MES, tomada del último scrape del mes para ESA tarjeta.
+// `historial.fecha` es el instante en que se CONSULTÓ la web, no la vigencia de la tasa, así que un
+// scrape de otro mes traería la tasa vieja. Por eso se exige el MISMO MES CALENDARIO.
+//
+// Ya NO se exige además que el scrape sea anterior a la compra (v5.9.4). Era una restricción de más y
+// hacía daño: la premisa de todo este helper es que **dentro del mes la tasa no cambia**, así que un
+// scrape del día 3 describe igual de bien una compra del día 1. Con el filtro anterior, las compras
+// del 1 y 2 de agosto quedaban sin fuente —el primer scrape bueno del mes fue el día 3— y caían al
+// fallback obsoleto. Se toma el ÚLTIMO del mes, no el más cercano: si el banco aún no había publicado
+// la tasa nueva cuando se consultó el día 1, la lectura posterior es la que refleja el valor asentado.
 function tasaDeHistorial(db, tarjetaId, fecha) {
   if (!fecha) return null;
   const tj = db.prepare('SELECT nombre FROM tarjetas WHERE id=?').get(tarjetaId);
   if (!tj || !tj.nombre) return null;
   const row = db.prepare(
     `SELECT detalles FROM historial
-      WHERE descripcion = ? AND date(fecha) <= date(?) AND strftime('%Y-%m', fecha) = ?
+      WHERE descripcion = ? AND strftime('%Y-%m', fecha) = ?
       ORDER BY fecha DESC LIMIT 1`
-  ).get(PREFIJO_SCRAPE + tj.nombre, fecha, String(fecha).slice(0, 7));
+  ).get(PREFIJO_SCRAPE + tj.nombre, String(fecha).slice(0, 7));
   return row ? parseDetallesTasa(row.detalles) : null;
 }
 
 // Resuelve la tasa internacional que regía cuando se hizo la compra.
 // Devuelve { tasa, fuente } — `fuente` sirve para explicarle al usuario de dónde salió el número.
 // tasa === null significa "no se pudo determinar": el llamador decide el fallback.
+// ORDEN INVERTIDO en v5.9.4: manda el scrape, y las compras vecinas quedan de respaldo.
+//
+// El orden anterior (vecinas primero) partía de que su snapshot venía del extracto conciliado. Pero
+// el snapshot NO guarda de dónde salió: lo escribe igual la conciliación —dato del banco— que el
+// POST de una compra cuando resuelve por fallback. Cuando el fallback está mal, la primera compra del
+// mes siembra el error y TODAS las siguientes lo copian como si fuera un hecho. Pasó de verdad: con
+// el scraper roto (ver v5.9.3), las tres compras de agosto nacieron con la tasa de julio y se la
+// habrían pasado a todo agosto, mientras el dato correcto ya estaba guardado en `historial`.
+//
+// El scrape, en cambio, es una observación FECHADA y de origen verificable: "el día X el banco
+// publicaba Y". Por eso va primero.
+//
+// Comprobado sobre la BD real antes de invertirlo: en los meses donde existen las dos fuentes
+// (2026-05, 06 y 07) coinciden al dígito, así que el cambio NO altera ningún mes del pasado — solo
+// desempata el único donde discrepaban (2026-08: vecinas 2,1285% eco del fallo, historial 2,1852%).
+//
+// Lo que se pierde: si un extracto conciliado revelara una tasa distinta de la publicada, una compra
+// NUEVA de ese mes tomaría la publicada. Es aceptable — la conciliación reescribe los snapshots de
+// las compras afectadas directamente (acción `actualizar_tasa_intl`), así que ese dato no se pierde
+// donde importa, y el mismo análisis vuelve a detectarlo en el ciclo siguiente.
 function tasaIntlEnFecha(db, tarjetaId, ciclo, fecha, excluirCompraId) {
+  const delHist = tasaDeHistorial(db, tarjetaId, fecha);
+  if (delHist != null) return { tasa: delHist, fuente: 'tasa publicada ese mes' };
   const delCiclo = tasaDeCompraDelCiclo(db, tarjetaId, ciclo, fecha, excluirCompraId);
   if (delCiclo != null) return { tasa: delCiclo, fuente: 'otras compras del mismo mes' };
-  const delHist = tasaDeHistorial(db, tarjetaId, fecha);
-  if (delHist != null) return { tasa: delHist, fuente: 'tasa publicada en la fecha de la compra' };
   return { tasa: null, fuente: null };
 }
 

@@ -228,7 +228,7 @@
     {
       "nombre": "CHANGELOG",
       "tipo": "const",
-      "lineas": 745,
+      "lineas": 750,
       "pieza": "js/changelog.js"
     },
     {

@@ -12,6 +12,11 @@
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '5.9.4': [
+    'UNA TASA VIEJA YA NO SE CONTAGIA AL RESTO DEL MES. Al registrar una compra, la app deduce que tasa de interes regia ese dia. Miraba primero las otras compras del mismo mes y les copiaba la suya, y eso tenia una trampa: si la primera compra del mes nacio con una tasa equivocada, todas las siguientes heredaban el error como si fuera un hecho. Es lo que paso en agosto mientras la consulta de tasas estuvo rota. Ahora manda la tasa que la app leyo de la web ese mes, que es un dato con fecha y origen conocido, y las compras vecinas quedan solo de respaldo.',
+    'Se corrigieron ademas las tres compras de agosto que ya habian nacido con la tasa de julio.',
+    'Comprobado que esto no cambia nada del pasado: en todos los meses anteriores las dos fuentes decian exactamente lo mismo.'
+  ],
   '5.9.3': [
     'VUELVE A LEER LA TASA DE BANCOLOMBIA. Desde el 21 de julio el boton de consultar tasas no traia nada y decia "no se encontraron tasas en la pagina", asi que tu Visa se quedo con la tasa de julio (2,1285%) mientras el banco ya cobraba 2,1852%. La causa no era la pagina: al pedirla, la app decia que esperaba un documento de otro tipo, y el sitio del banco respondia con una verificacion antibot en vez del contenido. Corregido: vuelve a leer la tasa, y de paso ahora tambien puede leer los documentos PDF de tasas que publica el banco cada mes.',
     'Y SI ALGUN DIA VUELVE A PASAR, TE LO DIRA. Antes ese bloqueo se veia igual que "esta pagina no tiene tasas", que manda a buscar el problema donde no esta. Ahora la app lo reconoce, te lo explica y te ofrece abrir la pagina en tu navegador para que copies la cifra a mano.',
