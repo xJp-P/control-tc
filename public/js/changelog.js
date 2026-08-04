@@ -12,6 +12,11 @@
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '5.9.7': [
+    'YA LEE EL PAGO MINIMO IMPRESO EN TU EXTRACTO DE RAPPICARD. Al conciliar, la app reconoce la cifra exacta que exige el banco y te la ofrece con un clic, para que pagues ese valor sin transcribirlo a mano. En esa tarjeta no lo lograba: el encabezado del extracto mezcla las columnas y entre la etiqueta "Pago minimo" y su cifra se cuela otro rotulo, asi que la app se quedaba a medio camino y no encontraba nada. Ahora busca la linea del desglose donde el nombre y la cifra van juntos, que no deja lugar a dudas.',
+    'Se cuido especialmente no confundirla con el "Pago alternativo", que aparece dos lineas mas abajo y es unas tres veces menor: tomarlo por error te haria pagar de menos y entrar en mora. Probado contra tres extractos reales y contra los casos limite.',
+    'Y RECONOCE LAS DEVOLUCIONES DE COMPRAS EN RAPPICARD. Cuando un comercio te devuelve el dinero, el asistente ya lo identifica y te ofrece anular esa compra, igual que hacia en las demas tarjetas. Antes no veia esos movimientos por el mismo motivo de formato que afectaba a los pagos.'
+  ],
   '5.9.6': [
     'EL ASISTENTE YA RECONOCE TUS PAGOS DE LA RAPPICARD. Al conciliar un extracto, la app busca el pago con que saldaste el mes anterior para ofrecerte registrarlo de un clic. En la RappiCard nunca lo encontraba: buscaba la fecha escrita como 15/07/2026 y ese banco la imprime como 2026-07-15, asi que el pago le pasaba por delante sin verlo. Ahora cada banco le entrega los movimientos ya ordenados y con la fecha en el formato que espera. Probado sobre un extracto real de diez meses: reconoce los siete pagos.',
     'De paso se evito un error de doble conteo: el extracto imprime el total de pagos del mes unas lineas antes que el pago en si, y esa linea de resumen ya no se cuenta como un pago aparte.',

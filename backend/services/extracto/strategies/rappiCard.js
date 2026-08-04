@@ -233,9 +233,34 @@ module.exports = {
       }
       return null;
     };
+    // NIVEL 1 (el fiable): la etiqueta y su importe en la MISMA línea, como los imprime el bloque
+    // "Detalle pago mínimo / Detalle pago total": `Pago mínimo $118.034,51`.
+    //
+    // Hace falta porque el encabezado entrelaza columnas y NO se puede deducir a qué columna
+    // pertenece un importe suelto. Medido en marzo-2026: tras `Pago mínimo` viene `Cupo utilizado $`
+    // y solo después `118.034,51` — la ventana del NIVEL 2 se corta en esa etiqueta ajena (y hace
+    // bien: quitar esa guarda es lo que dejaría entrar el "Pago alternativo", que vale 3,3x menos).
+    // Con la etiqueta pegada a su cifra no hay nada que adivinar.
+    //
+    // Se exige que TODO lo que precede al importe sea EXACTAMENTE la etiqueta. Comparar la línea
+    // entera —y no un `startsWith`— es lo que descarta `Saldo pendiente de pago mínimo $0.00`, que
+    // contiene la etiqueta y un importe, y que un ancla más laxa tomaría como el pago mínimo (con el
+    // efecto de fijar $0 como cifra oficial del banco).
+    const RE_ETIQUETA_IMPORTE = /^(.+?)\s+\$\s*(-)?\s*(\d{1,3}(?:\.\d{3})*(?:,\d{1,2})?)$/;
+    const buscarEnLinea = (etiquetas) => {
+      for (const l of ls) {
+        const m = l.match(RE_ETIQUETA_IMPORTE);
+        if (!m || !etiquetas.includes(norm(m[1]))) continue;
+        const v = parseMontoCol(m[3]);
+        if (v != null) return m[2] ? -v : v;
+      }
+      return null;
+    };
+
     const out = {};
-    const pm = buscar(['pago mínimo', 'pago minimo']);
-    const pt = buscar(['pago total']);
+    // El NIVEL 2 se conserva como respaldo para el layout que sí resolvía (PDF de julio-2026).
+    const pm = buscarEnLinea(['pago mínimo', 'pago minimo']) ?? buscar(['pago mínimo', 'pago minimo']);
+    const pt = buscarEnLinea(['pago total']) ?? buscar(['pago total']);
     if (pm != null) out.pago_minimo = pm;
     if (pt != null) out.pago_total = pt;
     return out;

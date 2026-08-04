@@ -476,8 +476,21 @@ module.exports = function(router, ctx) {
       // compra. Se cruzan contra el historial por monto (abs, ±$2) + descripción difusa (el banco
       // acorta el nombre) y proponen la acción reversar_compra. Si la compra ya está reversada →
       // 'ya_aplicado' (idempotencia; el endpoint también responde 409 en ese caso).
+      // Movimientos negativos ya aplanados y con la fecha en ISO por la estrategia del banco. Los
+      // COMPARTEN los dos detectores de abajo, que se los reparten con sus propios `esPago`. Solo
+      // hace falta cuando el layout del banco no cabe en la regex del detector (RappiCard imprime la
+      // fecha en ISO y parte el movimiento en varios renglones); si la estrategia no expone el
+      // método, ambos siguen con su parseo del texto crudo. Va en su propio try para que un fallo
+      // aquí no deje sin correr a ninguno de los dos.
+      let negBanco = [];
       try {
-        const reversos = detectarReversos(db, texto_redactado, mv && mv.tarjeta && mv.tarjeta.id);
+        if (estrategia && typeof estrategia.parsearNegativos === 'function') {
+          negBanco = estrategia.parsearNegativos(texto_redactado) || [];
+        }
+      } catch (e) { console.log('[ia/analizar] parsearNegativos:', e && e.message); }
+
+      try {
+        const reversos = detectarReversos(db, texto_redactado, mv && mv.tarjeta && mv.tarjeta.id, negBanco);
         if (reversos.length) {
           if (!Array.isArray(resu.discrepancias)) resu.discrepancias = [];
           // No duplicar un reverso que la IA ya hubiera propuesto para la misma compra.
@@ -497,11 +510,6 @@ module.exports = function(router, ctx) {
       // "liquidación dirigida". El detector solo devuelve acciones (registrar_pago); si ya está reflejado
       // no devuelve nada. Se quitan de pagos_detectados los montos ya accionables (evita doble muestra).
       try {
-        // La estrategia del banco aplana los movimientos negativos y normaliza su fecha a ISO cuando su
-        // layout no cabe en la regex del detector (RappiCard). Si no expone el método, el detector sigue
-        // con su parseo del texto crudo.
-        const negBanco = (estrategia && typeof estrategia.parsearNegativos === 'function')
-          ? (estrategia.parsearNegativos(texto_redactado) || []) : [];
         const pagosOm = detectarPagosOmitidos(db, texto_redactado, mv && mv.tarjeta && mv.tarjeta.id, mv && mv.ciclo, negBanco);
         if (pagosOm.length) {
           if (!Array.isArray(resu.discrepancias)) resu.discrepancias = [];

@@ -94,11 +94,51 @@ fecha va en ISO** (`YYYY-MM-DD`), nunca en `DD/MM/YYYY`.
 > fecha normalizada a ISO, y `analizar.js` se los pasa al detector. Verificado sobre un extracto real
 > de 10 ciclos: **7 pagos** reconocidos, sin contar la línea de resumen.
 >
-> **⚠️ Queda fuera `detectarReversos`:** sigue leyendo solo el texto crudo, así que un REVERSO de
-> comercio en RappiCard todavía no tiene cruce determinista. No es una regresión (nunca lo tuvo) y
-> el reparto entre los dos detectores se mantiene intacto — el filtro `esPago` deja fuera de la vía
-> de pagos cualquier concepto de comercio. Alimentarlo con `parsearNegativos` es el paso natural,
-> pero `reversar_compra` es una acción que ESCRIBE y merece su propia validación. Ver BACKLOG.
+> **Los REVERSOS también, desde v5.9.7.** `detectarReversos` recibe las mismas líneas de
+> `parsearNegativos`, y los dos detectores se las **reparten** con sus propios `esPago` —que difieren
+> a propósito— así que cada línea la procesa uno solo: los conceptos de PAGO/ABONO van a pagos y los
+> de comercio a reversos. Verificado sobre los tres extractos disponibles: sus negativos son todos
+> `PAGOS RAPPIPAY APP`, y reversos devuelve **0** en los tres (reparto correcto, sin falsos
+> positivos); con una devolución fabricada en este layout, la cruza contra su compra y propone
+> `reversar_compra`.
+
+### 1.2 Layout del ENCABEZADO — columnas entrelazadas (calibrado en ago-2026)
+
+El bloque superior (pago mínimo, pago total, pago alternativo, cupo, fechas) se imprime en columnas
+que, al extraer el texto, quedan **intercaladas**: una etiqueta puede quedar separada de su cifra por
+el rótulo de otra columna. Medido en el extracto de marzo-2026, donde el mínimo real es `118.034,51`:
+
+```
+Pago mínimo                       <- etiqueta
+Cupo utilizado $                  <- rótulo de OTRA columna
+118.034,51                        <- la cifra del pago mínimo
+$ Fecha de pago
+1.315.882,96 Periodo facturado
+Pago alternativo*                 <- ojo: a 5 líneas del mínimo
+$
+35.410,35                         <- y vale 3,3 veces menos
+```
+
+**No se puede deducir por posición a qué columna pertenece una cifra suelta.** El ancla fiable es el
+bloque de desglose ("Detalle pago mínimo / Detalle pago total"), donde el nombre y la cifra van en la
+MISMA línea y no hay ambigüedad:
+
+```
+Pago total $1.315.882,96
+Pago mínimo $118.034,51
+```
+
+Dos trampas de esa zona, ambas verificadas:
+
+- **`Saldo pendiente de pago mínimo $0.00`** contiene la etiqueta y un importe. Solo vale una línea
+  cuyo texto ANTES del importe sea exactamente la etiqueta; comparar por "contiene" o por prefijo
+  fijaría **$0** como cifra oficial del banco.
+- **El "Pago alternativo"** es lo mínimo para no entrar en mora, no el pago mínimo. Nunca aparece con
+  su importe en la misma línea, así que el ancla de arriba lo excluye por construcción.
+
+> El encabezado tiene al menos **dos variantes** (en otras la etiqueta va sola y su importe cae en la
+> línea siguiente), así que `parsearResumen` prueba primero la línea combinada y conserva la búsqueda
+> por ventana como respaldo.
 
 ---
 

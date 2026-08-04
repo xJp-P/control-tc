@@ -15,24 +15,33 @@ const { addMonths } = require('../../helpers/dates');
 // ±$2) + descripción difusa (Dice ≥ 0.4). Devuelve discrepancias tipo 'reverso_detectado' con
 // accion_sugerida.operacion='reversar_compra' (o 'ninguna' + ya_aplicado si la compra ya está
 // reversada -> idempotencia). Alcance v1: compras de 1 cuota en COP (las que el endpoint reversa).
-function detectarReversos(db, texto, tarjetaId) {
+// `lineasBanco` (OPCIONAL): mismos movimientos negativos aplanados por la estrategia del banco que
+// consume detectarPagosOmitidos. Sin ese argumento se parsea el texto crudo, como siempre. Los dos
+// detectores REPARTEN esas líneas con sus propios `esPago` —que difieren a propósito— así que cada
+// línea la procesa uno solo: aquí se descartan las de PAGO/ABONO y allí se descartan las demás.
+function detectarReversos(db, texto, tarjetaId, lineasBanco) {
   if (!texto || !tarjetaId) return [];
   const fmt = (n) => '$' + Math.round(n).toLocaleString('es-CO');
   const esPago = (c) => /\b(ABONO|PAGO|SU PAGO|SALDO A FAVOR|A FAVOR|NU\b)/i.test(c);
   // Líneas con valor NEGATIVO en pesos: [auth] DD/MM/YYYY  CONCEPTO  $ -NNN.NNN,NN
   const reNeg = /(\d{1,2}\/\d{1,2}\/\d{2,4})\s+(.+?)\s+\$\s*-\s*([\d][\d.]*(?:,\d{1,2})?)/;
   const candidatos = [];
-  String(texto).split(/\r?\n/).forEach(raw => {
-    const linea = raw.trim();
-    const m = linea.match(reNeg);
-    if (!m) return;
-    const concepto = m[2].replace(/\s{2,}/g, ' ').trim();
-    if (!concepto || concepto.length < 3 || esPago(concepto)) return;
-    if (!/[A-Za-zÁÉÍÓÚÑ]{3,}/.test(concepto)) return; // debe tener texto de comercio, no solo números
-    const monto = parseMontoCol(m[3]);
-    if (!(monto > 0)) return;
-    candidatos.push({ concepto, monto });
-  });
+  const admitir = (concepto, monto) => {
+    const c = String(concepto || '').replace(/\s{2,}/g, ' ').trim();
+    if (!c || c.length < 3 || esPago(c)) return;
+    if (!/[A-Za-zÁÉÍÓÚÑ]{3,}/.test(c)) return;  // debe tener texto de comercio, no solo números
+    const m = Number(monto);
+    if (!(m > 0)) return;
+    candidatos.push({ concepto: c, monto: m });
+  };
+  if (Array.isArray(lineasBanco) && lineasBanco.length) {
+    lineasBanco.forEach(l => admitir(l && l.concepto, l && l.monto));
+  } else {
+    String(texto).split(/\r?\n/).forEach(raw => {
+      const m = raw.trim().match(reNeg);
+      if (m) admitir(m[2], parseMontoCol(m[3]));
+    });
+  }
   if (!candidatos.length) return [];
   // Historial de compras EJECUTABLES por el endpoint de reverso (1 cuota, COP, sin grupo/diferida).
   const compras = db.prepare(
