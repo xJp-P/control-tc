@@ -36,7 +36,8 @@ const RE_MONTO_SOLO = /^(?:\$\s*(-)?\s*\d[\d.]*(?:,\d{1,2})?|(-)?\s*\d{1,3}(?:\.
 const RE_PCT_SOLO = /^\d{1,2}[.,]?\d{0,4}\s*%$/;
 const RE_CUOTAS = /^(\d{1,3})\s*(?:de|\/)\s*(\d{1,3})$/i;
 
-function parsearVertical(texto) {
+function parsearVertical(texto, opts) {
+  const incluirNegativos = !!(opts && opts.incluirNegativos);
   const crudas = String(texto || '').split(/\r?\n/);
   const lineas = crudas.map(l => l.trim());
   const out = [];
@@ -85,9 +86,17 @@ function parsearVertical(texto) {
     let descripcion = partesDesc.reduce((acc, p, k) => acc + (k && partesDesc[k - 1].sep ? ' ' : '') + p.v, '')
       .replace(/\s{2,}/g, ' ').trim() || null;
     if (descripcion && !/[A-Za-zÁÉÍÓÚÑáéíóúñ]{3,}/.test(descripcion)) descripcion = null;
-    // Los movimientos NEGATIVOS (pagos, reversos) los detectan sus propios detectores en routes/ia.js
-    // a partir del texto crudo; aquí se descartan para no ensuciar el pool del matcher.
-    if (negativo || descripcion == null || !montos.length) continue;
+    // Los movimientos NEGATIVOS (pagos, reversos) se descartan del pool del matcher: no son compras.
+    // Con `incluirNegativos` se emiten aparte para los detectores deterministas (ver parsearNegativos).
+    // En un pago el capital facturado viene como "N/A", así que solo hay UN monto: el de la transacción.
+    if (negativo) {
+      if (incluirNegativos && descripcion != null && montos.length && montos[0] > 0) {
+        out.push({ dia, mes, fecha: mf[1] + '-' + mf[2] + '-' + mf[3], descripcion,
+          monto: montos[0], tasa, negativo: true, raw: [lineas[i]].concat(campos.map(x => x.v)).join(' | ') });
+      }
+      continue;
+    }
+    if (descripcion == null || !montos.length) continue;
     // 2º monto = capital facturado del periodo; si el bloque viene corto, cae al único disponible.
     // Si el capital es $0,00 (una compra que el extracto lista pero NO cobra en este periodo: ya venía
     // saldada) se cae al VALOR de la transacción, para que la compra igual cruce contra la de la app.
@@ -98,6 +107,47 @@ function parsearVertical(texto) {
     if (!(monto > 0)) continue;
     out.push({ dia, mes, descripcion, monto, tasa, raw: [lineas[i]].concat(campos.map(x => x.v)).join(' | ') });
   }
+  return out;
+}
+
+// --- Movimientos NEGATIVOS (pagos de factura, reversos) -------------------------------------------
+// Los detectores deterministas de la conciliacion los buscaban por su cuenta en el texto crudo, con
+// una regex que exige la fecha en formato DD/MM/YYYY. RappiCard la imprime en ISO, asi que esa regex
+// no casaba NUNCA: los pagos de esta tarjeta se quedaban sin cruce determinista y el comentario de
+// arriba delegaba en alguien que estructuralmente no podia verlos. Aqui se emiten ya aplanados y con
+// la fecha normalizada, que es lo que el detector necesita.
+//
+// Cubre los DOS layouts observados en PDF reales — cual sale depende de como el documento alinee sus
+// celdas al extraer el texto, asi que hay que soportar ambos:
+//   HORIZONTAL: "- 2025-09-26 PAGOS RAPPIPAY APP $-99.711,66 N/A N/A N/A 0% 0,00%"
+//   VERTICAL:   un campo por linea, con la fecha ISO en su propio renglon (ver doc del banco, 1.1)
+// Lo COMUN a los dos, y el ancla de este parser, es que la fecha va en ISO.
+//
+// Esa fecha es ademas lo que separa un MOVIMIENTO de la linea de RESUMEN que el extracto imprime unas
+// lineas antes ("- Pagos (incluye abonos y cancelaciones) $-99.711,66"): el resumen NO lleva fecha, y
+// contarlo sumaria el mismo pago dos veces.
+const RE_NEG_ISO = /(\d{4})-(\d{2})-(\d{2})\s+(.+?)\s+\$\s*-\s*([\d][\d.]*(?:,\d{1,2})?)/;
+
+function parsearNegativos(texto) {
+  const out = [];
+  const vistos = Object.create(null);
+  const agregar = (fecha, concepto, monto) => {
+    const c = String(concepto || '').replace(/\s{2,}/g, ' ').trim();
+    const m = Math.round(Number(monto) || 0);
+    // Debe haber texto de comercio/concepto, no solo numeros: evita tomar un renglon de cifras sueltas.
+    if (!c || !/[A-Za-zÁÉÍÓÚÑáéíóúñ]{3,}/.test(c) || !(m > 0)) return;
+    const k = fecha + '|' + m;
+    if (vistos[k]) return;                       // el mismo pago puede caer por los dos layouts
+    vistos[k] = 1;
+    out.push({ fecha: fecha || null, concepto: c, monto: m });
+  };
+  String(texto || '').split(/\r?\n/).forEach(raw => {
+    const m = raw.trim().match(RE_NEG_ISO);
+    if (m) agregar(m[1] + '-' + m[2] + '-' + m[3], m[4], parseMontoCol(m[5]));
+  });
+  parsearVertical(texto, { incluirNegativos: true }).forEach(b => {
+    if (b.negativo) agregar(b.fecha, b.descripcion, b.monto);
+  });
   return out;
 }
 
@@ -146,6 +196,11 @@ module.exports = {
     if (vertical.length) return vertical;
     return parsearTabular(limpio, { parsearFecha: parsearFechaRappi });
   },
+
+  // Movimientos NEGATIVOS ya aplanados y con la fecha en ISO, para los detectores deterministas de la
+  // conciliacion (routes/ia/_detectores.js). Metodo OPCIONAL del contrato: quien no lo implemente deja
+  // al detector con su parseo del texto crudo, que es lo que siempre hizo.
+  parsearNegativos,
 
   // Lee las cifras OFICIALES del encabezado del extracto (v5.7.0). Determinista: NO pasa por el LLM.
   // El layout vertical pone la etiqueta en una línea y el valor en la siguiente, así que se busca la

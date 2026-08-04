@@ -497,7 +497,12 @@ module.exports = function(router, ctx) {
       // "liquidación dirigida". El detector solo devuelve acciones (registrar_pago); si ya está reflejado
       // no devuelve nada. Se quitan de pagos_detectados los montos ya accionables (evita doble muestra).
       try {
-        const pagosOm = detectarPagosOmitidos(db, texto_redactado, mv && mv.tarjeta && mv.tarjeta.id, mv && mv.ciclo);
+        // La estrategia del banco aplana los movimientos negativos y normaliza su fecha a ISO cuando su
+        // layout no cabe en la regex del detector (RappiCard). Si no expone el método, el detector sigue
+        // con su parseo del texto crudo.
+        const negBanco = (estrategia && typeof estrategia.parsearNegativos === 'function')
+          ? (estrategia.parsearNegativos(texto_redactado) || []) : [];
+        const pagosOm = detectarPagosOmitidos(db, texto_redactado, mv && mv.tarjeta && mv.tarjeta.id, mv && mv.ciclo, negBanco);
         if (pagosOm.length) {
           if (!Array.isArray(resu.discrepancias)) resu.discrepancias = [];
           resu.discrepancias.push(...pagosOm);

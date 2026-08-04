@@ -12,6 +12,11 @@
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '5.9.6': [
+    'EL ASISTENTE YA RECONOCE TUS PAGOS DE LA RAPPICARD. Al conciliar un extracto, la app busca el pago con que saldaste el mes anterior para ofrecerte registrarlo de un clic. En la RappiCard nunca lo encontraba: buscaba la fecha escrita como 15/07/2026 y ese banco la imprime como 2026-07-15, asi que el pago le pasaba por delante sin verlo. Ahora cada banco le entrega los movimientos ya ordenados y con la fecha en el formato que espera. Probado sobre un extracto real de diez meses: reconoce los siete pagos.',
+    'De paso se evito un error de doble conteo: el extracto imprime el total de pagos del mes unas lineas antes que el pago en si, y esa linea de resumen ya no se cuenta como un pago aparte.',
+    'La deteccion de devoluciones de compras en esa tarjeta sigue como estaba; se revisara aparte por ser una operacion que modifica tus registros.'
+  ],
   '5.9.5': [
     'LA CONSULTA DE TASAS LEE MEJOR LOS DOCUMENTOS DEL BANCO. Cuando la pagina de tu tarjeta publica las tasas en un PDF, la app lo descarga y lo lee. Hasta ahora usaba para eso un lector propio, distinto del que ya usaba para tus extractos, y no leia igual de bien: del documento mensual de RappiCard se dejaba cuatro de las doce cifras y lo recorria desordenado, empezando por la tabla del final en vez del encabezado de tasas. Ahora los dos usan el mismo lector.',
     'Las tasas que la app extrae no cambian: se comprobo cifra por cifra que Bancolombia y RappiCard devuelven exactamente lo mismo que antes. Lo que mejora es que la lectura deja de depender de un segundo lector que se quedaba corto.'

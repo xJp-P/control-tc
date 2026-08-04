@@ -56,6 +56,23 @@ $0,00                <- capital pendiente por facturar
 
 Los pagos usan la misma estructura con `-` como canal, valor **negativo** y `N/A` en los campos de
 cuotas: `- | 2026-06-29 | PAGOS RAPPIPAY APP | $-228.540,60 | N/A | N/A | N/A | 0% | 0,00%`.
+Como el capital facturado viene en `N/A`, un pago trae **un solo monto**: el de la transacción.
+
+**Hay un segundo layout, HORIZONTAL** (medido en ago-2026 sobre otro PDF real): el mismo movimiento
+cae entero en **una sola línea**, sin bloque vertical.
+
+```
+Virtual 2025-10-08 RAPPI $28.188,00 $28.188,00 1 de 1 $0,00 0,0000% 0,00%
+- 2025-09-26 PAGOS RAPPIPAY APP $-99.711,66 N/A N/A N/A 0% 0,00%
+```
+
+Cuál de los dos sale depende de cómo el PDF alinee sus celdas al extraer el texto, así que **hay que
+soportar ambos**. Lo COMÚN a los dos —y el ancla fiable para reconocer un movimiento— es que **la
+fecha va en ISO** (`YYYY-MM-DD`), nunca en `DD/MM/YYYY`.
+
+> Esa fecha es además lo que distingue un MOVIMIENTO de la línea de RESUMEN que el extracto imprime
+> unas líneas antes en el bloque de totales (`- Pagos (incluye abonos y cancelaciones) $-99.711,66`):
+> el resumen **no lleva fecha**, y contarlo sumaría el mismo pago dos veces.
 
 > La fecha del pago (29-jun) **sí es estructural**: es el día 11 del periodo facturado que arranca el
 > 19-jun, y ese "día 11" es el que aparece en la columna *día del pago* de la calibración de §4.3.1.
@@ -68,12 +85,20 @@ cuotas: `- | 2026-06-29 | PAGOS RAPPIPAY APP | $-228.540,60 | N/A | N/A | N/A | 
 > el motor compara — las cuotas de diferida se cruzan por `campo_monto:'capital'`, y en una compra de
 > contado ambos valores coinciden. Los movimientos negativos se descartan del pool del matcher.
 >
-> **⚠️ Pendiente conocido:** esos negativos hoy **tampoco llegan** a `detectarReversos` /
-> `detectarPagosOmitidos` — ambos parsean el texto crudo con una regex que exige fecha `DD/MM/YYYY`,
-> concepto y monto **en la misma línea**, y aquí la fecha es ISO y cada campo va en su renglón. O sea:
-> en RappiCard un pago o un reverso **no tienen cruce determinista** (el arreglo de plurales
-> `PAGOS?` de v5.6.3 es necesario pero no suficiente). Fix natural: alimentar esos detectores con las
-> líneas ya reconstruidas por la estrategia del banco en vez de re-parsear el texto. Ver BACKLOG.
+> **Los PAGOS ya tienen cruce determinista (v5.9.6).** Antes no lo tenían: `detectarPagosOmitidos`
+> parseaba el texto crudo con una regex que exige fecha `DD/MM/YYYY`, concepto y monto en la MISMA
+> línea, y aquí la fecha es ISO — así que no casaba nunca, en ninguno de los dos layouts (el arreglo
+> de plurales `PAGOS?` de v5.6.3 era necesario pero no suficiente). La estrategia declaraba que "los
+> detectan sus propios detectores" y delegaba en alguien que estructuralmente no podía verlos. Ahora
+> `strategies/rappiCard.js` expone `parsearNegativos(texto)`, que los emite ya aplanados y con la
+> fecha normalizada a ISO, y `analizar.js` se los pasa al detector. Verificado sobre un extracto real
+> de 10 ciclos: **7 pagos** reconocidos, sin contar la línea de resumen.
+>
+> **⚠️ Queda fuera `detectarReversos`:** sigue leyendo solo el texto crudo, así que un REVERSO de
+> comercio en RappiCard todavía no tiene cruce determinista. No es una regresión (nunca lo tuvo) y
+> el reparto entre los dos detectores se mantiene intacto — el filtro `esPago` deja fuera de la vía
+> de pagos cualquier concepto de comercio. Alimentarlo con `parsearNegativos` es el paso natural,
+> pero `reversar_compra` es una acción que ESCRIBE y merece su propia validación. Ver BACKLOG.
 
 ---
 

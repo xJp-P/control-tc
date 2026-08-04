@@ -9,6 +9,15 @@
 //     reglasPrompt() -> string[]                   // reglas ESPECÍFICAS para el system prompt de la IA
 //   }
 //
+// Métodos OPCIONALES que algunas estrategias añaden (quien no los implemente conserva el
+// comportamiento por defecto; se invocan siempre con `typeof x === 'function'`):
+//   parsearResumen(texto)    -> { pago_minimo, pago_total }   // cifras oficiales del encabezado
+//   parsearNegativos(texto)  -> [{ fecha (ISO), concepto, monto }]
+//        Movimientos negativos (pagos, reversos) ya aplanados y con la fecha normalizada, para los
+//        detectores deterministas de la conciliación. Solo hace falta cuando el layout del banco no
+//        cabe en la regex del detector, que espera fecha DD/MM/YYYY, concepto y monto en la MISMA
+//        línea: RappiCard imprime la fecha en ISO y parte el movimiento en varios renglones.
+//
 // El motor de cruce (motorCruce.cruzar) solo necesita parsearLineas; ia.js usa además reglasPrompt.
 //
 // La estrategia BASE es el fallback final del dispatcher: aplica a cualquier banco que no tenga una

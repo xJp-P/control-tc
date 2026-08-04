@@ -86,7 +86,12 @@ function detectarReversos(db, texto, tarjetaId) {
 // observada) y aún separa limpiamente un abono-a-capital, que es un orden de magnitud menor. Los pagos
 // que NO cuadran (abonos a capital, remanentes, parciales) NO se auto-registran: quedan informativos en
 // "pagos_detectados" por la ambigüedad de "liquidación dirigida" (documentada). Alcance v1: COP.
-function detectarPagosOmitidos(db, texto, tarjetaId, ciclo) {
+// `lineasBanco` (OPCIONAL) son los movimientos negativos que la estrategia del banco ya aplanó, con la
+// fecha normalizada a ISO — hoy solo RappiCard, vía estrategia.parsearNegativos. Sin ese argumento el
+// detector parsea el texto crudo, que es lo que siempre hizo (Bancolombia y el resto, sin cambio).
+// Hacía falta porque `reNeg` exige la fecha en DD/MM/YYYY y RappiCard la imprime en ISO: ahí la regex
+// no casaba NUNCA y los pagos de esa tarjeta no tenían cruce determinista.
+function detectarPagosOmitidos(db, texto, tarjetaId, ciclo, lineasBanco) {
   if (!texto || !tarjetaId || !ciclo) return [];
   const fmt = (n) => '$' + Math.round(n).toLocaleString('es-CO');
   // Conceptos de PAGO/ABONO (subconjunto del esPago de reversos, SIN "NU"): las líneas que toma este
@@ -98,16 +103,28 @@ function detectarPagosOmitidos(db, texto, tarjetaId, ciclo) {
   const reNeg = /(\d{1,2}\/\d{1,2}\/\d{2,4})\s+(.+?)\s+\$\s*-\s*([\d][\d.]*(?:,\d{1,2})?)/;
   const aISO = (s) => { const m = String(s).match(/(\d{1,2})\/(\d{1,2})\/(\d{2,4})/); if (!m) return null; let y = m[3]; if (y.length === 2) y = '20' + y; return y + '-' + String(m[2]).padStart(2, '0') + '-' + String(m[1]).padStart(2, '0'); };
   const lineas = [];
-  String(texto).split(/\r?\n/).forEach(raw => {
-    const linea = raw.trim();
-    const m = linea.match(reNeg);
-    if (!m) return;
-    const concepto = m[2].replace(/\s{2,}/g, ' ').trim();
-    if (!concepto || !esPago(concepto)) return;
-    const monto = parseMontoCol(m[3]);
-    if (!(monto > 0)) return;
-    lineas.push({ concepto, monto: Math.round(monto), fecha: aISO(m[1]) });
-  });
+  if (Array.isArray(lineasBanco) && lineasBanco.length) {
+    // Se aplica el MISMO filtro esPago que a las líneas crudas: es lo que sostiene el reparto con
+    // detectarReversos (cada línea la procesa uno solo de los dos). Un reverso de comercio que llegue
+    // por aquí no lleva ABONO/PAGO en el concepto y queda fuera, igual que en la rama cruda.
+    lineasBanco.forEach(l => {
+      const concepto = String((l && l.concepto) || '').replace(/\s{2,}/g, ' ').trim();
+      const monto = Math.round(Number(l && l.monto) || 0);
+      if (!concepto || !esPago(concepto) || !(monto > 0)) return;
+      lineas.push({ concepto, monto, fecha: (l && l.fecha) || null });
+    });
+  } else {
+    String(texto).split(/\r?\n/).forEach(raw => {
+      const linea = raw.trim();
+      const m = linea.match(reNeg);
+      if (!m) return;
+      const concepto = m[2].replace(/\s{2,}/g, ' ').trim();
+      if (!concepto || !esPago(concepto)) return;
+      const monto = parseMontoCol(m[3]);
+      if (!(monto > 0)) return;
+      lineas.push({ concepto, monto: Math.round(monto), fecha: aISO(m[1]) });
+    });
+  }
   if (!lineas.length) return [];
 
   // Ciclo anterior: el pago del extracto se aplica al mes previo (regla 1).
