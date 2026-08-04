@@ -1,128 +1,35 @@
 // backend/helpers/scraper.js — Web scraping and PDF text extraction for interest rates
 
 // ─── PDF text extraction ───────────────────────────────────────────
+// La lectura del PDF la hace pdfjs, el MISMO motor con que la app lee los extractos bancarios.
+// Antes vivia aqui un extractor propio (~120 lineas: inflate de los streams, mapa de glifos y
+// operadores BT/ET interpretados a mano) que convivia con pdfjs sin saberlo, y NO era equivalente:
+// sobre el tarifario de Bancolombia devolvia caracteres de control y CERO porcentajes, y sobre el
+// PDF mensual de RappiCard se dejaba 4 de las 12 cifras y entregaba el documento en orden de
+// stream, empezando por la tabla de cashback del final en vez del encabezado de tasas. Ese orden
+// importa: el parser de abajo decide que porcentaje va con que etiqueta por la POSICION del texto,
+// asi que un documento desordenado no solo pierde cifras, puede emparejarlas mal. pdfjs reconstruye
+// el orden de lectura por coordenadas.
+const { extraerTextoPdf } = require('../services/pdfExtract');
 
-function codeUnitsToCodePoints(units) {
-  const pts = [];
-  for (let i = 0; i < units.length; i++) {
-    if (units[i] >= 0xD800 && units[i] <= 0xDBFF && i + 1 < units.length && units[i+1] >= 0xDC00 && units[i+1] <= 0xDFFF) {
-      pts.push(0x10000 + (units[i] - 0xD800) * 0x400 + (units[i+1] - 0xDC00)); i++;
-    } else { pts.push(units[i]); }
+// Devuelve el texto del PDF, o cadena VACIA si no se puede leer. Devolver '' y no basura es lo que
+// permite que el flujo caiga al texto del HTML (mas abajo): un texto ilegible pero no vacio pasaba
+// ese fallback de largo y se parseaba igual. El motivo se dice en consola — un PDF cifrado o
+// escaneado que falla en silencio reaparece aguas abajo como "no se encontraron tasas en la
+// pagina", que manda a depurar el parser cuando lo que fallo fue la lectura.
+async function textoDePdf(buffer, origen) {
+  try {
+    const r = await extraerTextoPdf(buffer);
+    if (r && r.texto) return r.texto;
+    const motivo = r && r.necesita_password ? 'esta protegido con contrasena'
+      : r && r.sin_texto ? 'no tiene capa de texto (escaneado, sin OCR)'
+      : 'no devolvio texto';
+    console.log('[Tasas] El PDF ' + motivo + ': ' + origen);
+    return '';
+  } catch (err) {
+    console.log('[Tasas] No se pudo leer el PDF (' + (err && err.message) + '): ' + origen);
+    return '';
   }
-  return pts;
-}
-
-function decodeHexGlyphs(hex, glyphMap) {
-  if (!glyphMap || glyphMap.size === 0) {
-    let result = '';
-    for (let i = 0; i + 3 < hex.length; i += 4) result += String.fromCharCode(parseInt(hex.substring(i, i + 4), 16));
-    return result;
-  }
-  const sampleKey = glyphMap.keys().next().value;
-  const step = sampleKey ? sampleKey.length : 4;
-  let result = '';
-  for (let i = 0; i + step - 1 < hex.length; i += step) {
-    const gid = hex.substring(i, i + step).toUpperCase();
-    result += glyphMap.get(gid) || '';
-  }
-  return result;
-}
-
-function extractTextOps(block, texts, glyphMap) {
-  const btPattern = /BT([\s\S]*?)ET/g;
-  let bm;
-  while ((bm = btPattern.exec(block)) !== null) {
-    const btBlock = bm[1];
-    const allOps = [];
-    const opPattern = /\(([^)]*)\)\s*Tj|<([0-9A-Fa-f]+)>\s*Tj|\[([^\]]*)\]\s*TJ/g;
-    let tm;
-    while ((tm = opPattern.exec(btBlock)) !== null) {
-      if (tm[1] !== undefined) {
-        allOps.push({ type: 'literal', text: tm[1] });
-      } else if (tm[2] !== undefined) {
-        allOps.push({ type: 'hex', text: decodeHexGlyphs(tm[2], glyphMap) });
-      } else if (tm[3] !== undefined) {
-        const arr = tm[3];
-        const parts = arr.match(/\(([^)]*)\)/g);
-        const hexParts = arr.match(/<([0-9A-Fa-f]+)>/g);
-        if (parts) allOps.push({ type: 'literal', text: parts.map(p => p.slice(1, -1)).join('') });
-        else if (hexParts) allOps.push({ type: 'hex', text: hexParts.map(h => decodeHexGlyphs(h.slice(1, -1), glyphMap)).join('') });
-      }
-    }
-    let btText = '';
-    for (const op of allOps) {
-      if (op.type === 'hex') {
-        btText += op.text;
-      } else {
-        if (btText) btText += ' ';
-        btText += op.text;
-      }
-    }
-    if (btText) texts.push(btText);
-  }
-}
-
-function extractTextFromPDF(buffer) {
-  const zlib = require('zlib');
-  const str = buffer.toString('binary');
-  const texts = [];
-
-  const streamRegex = /stream\r?\n([\s\S]*?)endstream/g;
-  const decodedStreams = [];
-  let m;
-  while ((m = streamRegex.exec(str)) !== null) {
-    let block = m[1];
-    if (block.endsWith('\r\n')) block = block.slice(0, -2);
-    else if (block.endsWith('\n')) block = block.slice(0, -1);
-    try {
-      const buf = Buffer.from(block, 'binary');
-      decodedStreams.push(zlib.inflateSync(buf).toString('latin1'));
-    } catch (e) {
-      decodedStreams.push(block);
-    }
-  }
-
-  const glyphMap = new Map();
-  for (const dec of decodedStreams) {
-    if (dec.includes('beginbfchar') || dec.includes('beginbfrange')) {
-      const charBlocks = dec.match(/beginbfchar[\s\S]*?endbfchar/g) || [];
-      for (const cb of charBlocks) {
-        const pairs = cb.match(/<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>/g) || [];
-        for (const p of pairs) {
-          const pm = p.match(/<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>/);
-          if (pm) {
-            const src = pm[1].toUpperCase();
-            const dstHex = pm[2];
-            const codes = [];
-            for (let i = 0; i < dstHex.length; i += 4) codes.push(parseInt(dstHex.substring(i, i + 4), 16));
-            glyphMap.set(src, String.fromCodePoint(...codeUnitsToCodePoints(codes)));
-          }
-        }
-      }
-      const rangeBlocks = dec.match(/beginbfrange[\s\S]*?endbfrange/g) || [];
-      for (const rb of rangeBlocks) {
-        const ranges = rb.match(/<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>/g) || [];
-        for (const r of ranges) {
-          const rm = r.match(/<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>/);
-          if (rm) {
-            const start = parseInt(rm[1], 16), end = parseInt(rm[2], 16);
-            let dstCode = parseInt(rm[3], 16);
-            const padLen = rm[1].length;
-            for (let code = start; code <= end; code++) {
-              glyphMap.set(code.toString(16).toUpperCase().padStart(padLen, '0'), String.fromCharCode(dstCode++));
-            }
-          }
-        }
-      }
-    }
-  }
-
-  for (const dec of decodedStreams) {
-    if (dec.includes('Tj') || dec.includes('TJ') || dec.includes('BT')) {
-      extractTextOps(dec, texts, glyphMap);
-    }
-  }
-  return texts.join(' ').replace(/\\(\d{3})/g, (_, oct) => String.fromCharCode(parseInt(oct, 8))).replace(/\s+/g, ' ');
 }
 
 // ─── Web scraping for interest rates ──────────────────────────────
@@ -161,7 +68,7 @@ async function scrapeTasas(url) {
 
     if (contentType.includes('application/pdf') || url.toLowerCase().endsWith('.pdf')) {
       const buffer = Buffer.from(await response.arrayBuffer());
-      text = extractTextFromPDF(buffer);
+      text = await textoDePdf(buffer, url);
     } else {
       const html = await response.text();
 
@@ -194,7 +101,7 @@ async function scrapeTasas(url) {
           const pdfResp = await fetch(pdfUrl, { headers });
           if (pdfResp.ok) {
             const buffer = Buffer.from(await pdfResp.arrayBuffer());
-            text = extractTextFromPDF(buffer);
+            text = await textoDePdf(buffer, pdfUrl);
           }
         } catch (e) { /* fallback to HTML */ }
       }
@@ -315,4 +222,4 @@ async function scrapeTasas(url) {
   }
 }
 
-module.exports = { scrapeTasas, extractTextFromPDF, detectarMuroBot };
+module.exports = { scrapeTasas, detectarMuroBot };

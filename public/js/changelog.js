@@ -12,6 +12,10 @@
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '5.9.5': [
+    'LA CONSULTA DE TASAS LEE MEJOR LOS DOCUMENTOS DEL BANCO. Cuando la pagina de tu tarjeta publica las tasas en un PDF, la app lo descarga y lo lee. Hasta ahora usaba para eso un lector propio, distinto del que ya usaba para tus extractos, y no leia igual de bien: del documento mensual de RappiCard se dejaba cuatro de las doce cifras y lo recorria desordenado, empezando por la tabla del final en vez del encabezado de tasas. Ahora los dos usan el mismo lector.',
+    'Las tasas que la app extrae no cambian: se comprobo cifra por cifra que Bancolombia y RappiCard devuelven exactamente lo mismo que antes. Lo que mejora es que la lectura deja de depender de un segundo lector que se quedaba corto.'
+  ],
   '5.9.4': [
     'UNA TASA VIEJA YA NO SE CONTAGIA AL RESTO DEL MES. Al registrar una compra, la app deduce que tasa de interes regia ese dia. Miraba primero las otras compras del mismo mes y les copiaba la suya, y eso tenia una trampa: si la primera compra del mes nacio con una tasa equivocada, todas las siguientes heredaban el error como si fuera un hecho. Es lo que paso en agosto mientras la consulta de tasas estuvo rota. Ahora manda la tasa que la app leyo de la web ese mes, que es un dato con fecha y origen conocido, y las compras vecinas quedan solo de respaldo.',
     'Se corrigieron ademas las tres compras de agosto que ya habian nacido con la tasa de julio.',
