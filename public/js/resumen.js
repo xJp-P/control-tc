@@ -902,7 +902,13 @@ function CardResumen({ tarjeta, onDataChange }) {
           if (!compra.es_internacional) return 0;
           const saldo = compra.valor_cop - (compra.monto_abonado || 0);
           if (saldo <= 0) return 0;
-          const tasaIntl = tarjeta.tasa_mv_avances;
+          // Snapshot histórico (v4.1.0): manda la tasa CONGELADA de la compra y solo se cae a la
+          // global si no la tiene. Este sitio se quedó sin migrar cuando se introdujo el snapshot, y
+          // el defecto era invisible mientras global == snapshot; al subir la tasa de la tarjeta,
+          // esta tabla empezó a exigir más bolsillo del que el backend permite guardar (que sí usa el
+          // snapshot vía objetivoBolsilloCop) → la compra no podía salir de "bolsillo parcial".
+          // GEMELA: calcInteresIntlTercero en terceros.js. Si tocas la fórmula, toca las dos.
+          const tasaIntl = (compra.tasa_intl != null ? compra.tasa_intl : tarjeta.tasa_mv_avances);
           if (!tasaIntl) return 0;
           const [yr, mo] = ciclo.split('-').map(Number);
           const lastDay = new Date(yr, mo, 0).getDate();

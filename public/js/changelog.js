@@ -12,6 +12,11 @@
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '5.9.8': [
+    'SE DESTRABA EL BOLSILLO DE LAS COMPRAS INTERNACIONALES. La tabla de Compras pedia unos pesos mas de los que el sistema te dejaba guardar, asi que la compra se quedaba en "bolsillo parcial" y no habia forma de completarla: al abrir la ventana para agregar lo que faltaba, no aceptaba esa cifra. Pasaba porque la tabla calculaba el recargo internacional con la tasa de HOY, mientras el resto de la app usa la tasa que regia el dia de la compra, que es la correcta y la que cobra el banco.',
+    'Solo era un problema de lo que se mostraba en pantalla: tu dinero, tus bolsillos y el pago minimo siempre se calcularon bien. Lo que cambia es que la tabla ya dice la misma cifra que la pestana Terceros y que la ventana de bolsillo.',
+    'El error estaba desde hace meses pero era invisible: solo aparece cuando el banco cambia su tasa, porque hasta entonces las dos cuentas daban lo mismo. Salio a la luz al actualizarse la tasa de tu Visa a 2,1852%.'
+  ],
   '5.9.7': [
     'YA LEE EL PAGO MINIMO IMPRESO EN TU EXTRACTO DE RAPPICARD. Al conciliar, la app reconoce la cifra exacta que exige el banco y te la ofrece con un clic, para que pagues ese valor sin transcribirlo a mano. En esa tarjeta no lo lograba: el encabezado del extracto mezcla las columnas y entre la etiqueta "Pago minimo" y su cifra se cuela otro rotulo, asi que la app se quedaba a medio camino y no encontraba nada. Ahora busca la linea del desglose donde el nombre y la cifra van juntos, que no deja lugar a dudas.',
     'Se cuido especialmente no confundirla con el "Pago alternativo", que aparece dos lineas mas abajo y es unas tres veces menor: tomarlo por error te haria pagar de menos y entrar en mora. Probado contra tres extractos reales y contra los casos limite.',
