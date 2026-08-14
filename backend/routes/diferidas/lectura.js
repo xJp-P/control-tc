@@ -82,7 +82,15 @@ module.exports = function(router, ctx) {
         result.push({
           id: 'sellada-' + s.id, _sellada: true, tarjeta_id: s.tarjeta_id,
           etiqueta: base || s.descripcion, fecha_compra: s.fecha,
-          cuotaCorte: Math.round(s.valor_cop || 0), saldoActual: 0, cuotasRestantes: 0, ciclos: [ciclo],
+          // saldoActual = lo que AUN se debe por esa cuota con el banco, no un 0 fijo. La fila nacio
+          // pensada para selladas de ciclos ya PAGADOS, donde 0 es correcto; desde que v5.8.0 permite
+          // reprogramar un ciclo cerrado pero IMPAGO, una sellada puede seguir viva y el 0 decia
+          // "no debes nada" sobre una cuota que el extracto de ese mes SI esta cobrando.
+          // La resta cubre los dos casos sin ramificar: si esta pagada, monto_abonado == valor_cop -> 0.
+          // Es deuda con el BANCO, asi que el bolsillo no la reduce (dinero apartado no es dinero pagado).
+          cuotaCorte: Math.round(s.valor_cop || 0),
+          saldoActual: Math.max(0, Math.round((s.valor_cop || 0) - (s.monto_abonado || 0))),
+          cuotasRestantes: 0, ciclos: [ciclo],
           cuota_num_sellada: mm[1] ? parseInt(mm[1], 10) : 1,
           reprog_total_sellada: mm[2] ? parseInt(mm[2], 10) : null,
           estado_sellada: s.estado,

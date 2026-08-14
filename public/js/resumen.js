@@ -590,17 +590,25 @@ function CardResumen({ tarjeta, onDataChange }) {
   // deuda supera el cupo (sobrecupo), caso que se muestra aparte en rojo.
   const cupoDisponible = (tarjeta.cupo_total || 0) - deudaParaCupo;
   const hoy = todayISO();
+  // Ciclo VISUALIZADO ya pagado. Mismo criterio que cicloPagadoC/cicloPagadoDif mas abajo; se declara
+  // aqui porque purchaseRows lo necesita para decidir si una cuota sellada es historial o deuda viva.
+  const cicloEstaPagado = !!(data.extractoCiclo && data.extractoCiclo.estado === 'pagado');
 
   // Group split compras by grupo_id, singles stay individual
   const purchaseRows = (() => {
     const grupos = {};
     const singles = [];
     compras.forEach(c => {
-      // Ocultar de la tabla de Compras las filas de reprogramacion de saldo (viven solo en Diferidas):
-      // (a) la compra RENACIDA (diferida HIJA, sin_gracia_cuota1); (b) las cuotas SELLADAS del plan viejo
-      // (notas "sellada por reprogramacion"). Ambas se ven en la pestaña Diferidas (la sellada, read-only).
+      // (a) La compra RENACIDA (diferida HIJA) nunca va aqui: no es una compra real, es el saldo vivo
+      // del plan, y se gestiona desde Diferidas.
       if (c.sin_gracia_cuota1) return;
-      if (c.notas && c.notas.indexOf('sellada por reprogramacion') !== -1) return;
+      // (b) Las cuotas SELLADAS solo se ocultan si su ciclo YA ESTA PAGADO. Ahi son historial cerrado y
+      // la fila read-only de Diferidas basta. Si el ciclo sigue abierto o impago son DEUDA VIVA: hay que
+      // poder apartarles bolsillo y verlas al cuadrar el mes, asi que se renderizan como cualquier otra
+      // compra. Ocultarlas siempre (v5.5.3) se decidio cuando toda sellada venia de un mes pagado; desde
+      // que v5.8.0 permite reprogramar un ciclo cerrado impago, esa premisa dejo de ser cierta y la
+      // cuota desaparecia de las dos pestañas a la vez.
+      if (c.notas && c.notas.indexOf('sellada por reprogramacion') !== -1 && cicloEstaPagado) return;
       if (c.grupo_id) {
         if (!grupos[c.grupo_id]) grupos[c.grupo_id] = [];
         grupos[c.grupo_id].push(c);
@@ -1548,9 +1556,12 @@ function CardResumen({ tarjeta, onDataChange }) {
                   // y su estado real (Pagado/Pendiente). Se inyecta desde GET /diferidas al ver su ciclo.
                   const renderSelladaDif = (s) => {
                     var pagada = s.estado_sellada === 'pagado';
-                    // Se ve EXACTO a una diferida normal pagada (misma fila que renderSingleDif con ciclo
-                    // pagado): sin atenuado, sin badge "sellada", con su cuota "i/M", saldo $0 y estado
-                    // Pagado. Unica diferencia: READ-ONLY (sin acciones editar/borrar) — es historia sellada.
+                    // Se ve EXACTO a una diferida normal (misma fila que renderSingleDif): sin atenuado,
+                    // sin badge "sellada", con su cuota "i/M" y su estado real.
+                    // Unica diferencia: READ-ONLY (sin acciones editar/borrar) — es historia sellada.
+                    // El saldo sale de saldoActual y NO es un 0 fijo: una sellada de un ciclo impago
+                    // sigue siendo deuda viva, y el 0 quemado afirmaba lo contrario sobre plata que el
+                    // extracto de ese mes si esta cobrando. Pagada, la resta del backend ya da 0.
                     return e('tr', { key: s.id, style: { background: pagada ? 'rgba(52,211,153,0.10)' : undefined } },
                       e('td', null, fmtDate(s.fecha_compra)),
                       e('td', null, e('div', { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
@@ -1562,7 +1573,7 @@ function CardResumen({ tarjeta, onDataChange }) {
                       e('td', { className: 'text-right text-mono', style: { fontWeight: 700, color: pagada ? 'var(--success)' : 'var(--danger)' } }, fmtCOP(s.cuotaCorte)),
                       e('td', null, (s.cuota_num_sellada || 1) + (s.reprog_total_sellada ? '/' + s.reprog_total_sellada : '')),
                       e('td', { className: 'text-mono' }, '—'),
-                      e('td', { className: 'text-right text-mono', style: { fontWeight: 700, color: 'var(--success)' } }, fmtCOP(0)),
+                      e('td', { className: 'text-right text-mono', style: { fontWeight: 700, color: (s.saldoActual || 0) > 0 ? 'var(--danger)' : 'var(--success)' } }, fmtCOP(s.saldoActual || 0)),
                       e('td', null, pagada
                         ? e('span', { className: 'badge badge-pagado', style: { display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, padding: '4px 10px' } }, e(Ico, { name: 'check', size: 12, color: 'currentColor' }), 'Pagado')
                         : e('span', { className: 'badge badge-pendiente' }, 'pendiente')),
