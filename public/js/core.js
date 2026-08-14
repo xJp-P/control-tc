@@ -29,11 +29,36 @@ function bandaToleranciaCop(ext, minimo) {
 }
 
 
+// El body lo serializa ESTA funcion: quien la llama pasa el objeto tal cual. Volver a
+// stringificarlo fuera manda una cadena escapada, body-parser responde 400 y la respuesta ya no es
+// JSON -> el fallo se vuelve mudo (paso en v6.0.0). Lo vigila el detector F9.
 async function api(path, opts) {
-  const res = await fetch(API + path, {
-    headers: { 'Content-Type': 'application/json' },
-    ...opts,
-    body: opts && opts.body ? JSON.stringify(opts.body) : undefined
-  });
-  return res.json();
+  // Una ESCRITURA que falla en silencio es un boton que no hace nada y no dice por que. Una LECTURA
+  // que falla, no: varias son opcionales a proposito (autocompletado, TRM, el fallback offline del
+  // asistente) y avisar de ellas seria ruido sobre algo que el codigo ya decidio ignorar.
+  const esEscritura = !!(opts && opts.method && String(opts.method).toUpperCase() !== 'GET');
+  try {
+    const res = await fetch(API + path, {
+      headers: { 'Content-Type': 'application/json' },
+      ...opts,
+      body: opts && opts.body ? JSON.stringify(opts.body) : undefined
+    });
+    // `await` y no `return res.json()`: sin el, el rechazo al parsear escapa de este try y el aviso
+    // de abajo no llega a ejecutarse nunca — que es justo el caso que este bloque viene a cubrir.
+    return await res.json();
+  } catch (err) {
+    // OJO: aqui NO entran los 4xx/5xx con cuerpo JSON. api() NO lanza con ellos: los devuelve como
+    // {error} y el llamador debe mirarlo (v5.7.1). Esto cubre el otro caso: red caida, backend sin
+    // responder, o una respuesta que no es JSON (un 404 en HTML).
+    if (esEscritura) {
+      // Se MARCA el error antes de avisar para que un catch propio del llamador no repita el mensaje.
+      const yaAvisado = err && err.__avisado;
+      if (err && typeof err === 'object') err.__avisado = true;
+      if (!yaAvisado && typeof toastErr === 'function') {
+        toastErr('Error de comunicacion: ' + ((err && err.message) || 'no se pudo completar la operacion'));
+      }
+    }
+    // RELANZA siempre: los .catch que ya existen siguen recibiendo su error y ejecutando su logica.
+    throw err;
+  }
 }

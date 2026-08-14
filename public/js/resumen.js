@@ -489,7 +489,9 @@ function CardResumen({ tarjeta, onDataChange }) {
       // Sin este catch el clic era MUDO: ante un 400 la respuesta no es JSON, res.json() lanza y la
       // promesa se rechaza en silencio — ni toast ni rastro. Un boton que no hace nada y tampoco
       // dice por que es peor que uno que falla en voz alta.
-      toastErr('No se pudo mover la compra: ' + (err && err.message ? err.message : 'error de conexion'));
+      // api() ya avisa de los fallos de escritura y marca el error; este mensaje es MAS concreto,
+      // asi que se muestra solo cuando el aviso generico no salio (o el error viene de otro sitio).
+      if (!err || !err.__avisado) toastErr('No se pudo mover la compra: ' + (err && err.message ? err.message : 'error de conexion'));
     });
   }
   function saveAvance(data) {

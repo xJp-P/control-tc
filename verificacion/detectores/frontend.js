@@ -946,6 +946,11 @@ const F9 = {
     }
 
     // ── 4) cuerpo no-JSON: RECHAZA (y por eso hace falta .catch) ─────────────
+    // El toast global vive en api(), asi que hay que capturarlo donde el frontend lo emite:
+    // toast() lee window.__addToast EN CADA LLAMADA, de modo que basta con ponerlo ahora.
+    const avisos = [];
+    if (ctx.window) ctx.window.__addToast = (msg, tipo) => avisos.push({ msg: String(msg), tipo });
+
     let rechazo = false;
     try {
       guion = () => ({ ok: false, status: 404, json: () => Promise.reject(new SyntaxError('Unexpected token <')) });
@@ -956,8 +961,35 @@ const F9 = {
       notas.push('FALLO: con un cuerpo que no es JSON api() NO rechaza -> el fallo se vuelve invisible ' +
         'para el usuario y para la consola (es exactamente como se comporto el bug del doble stringify)');
     }
+    // Una LECTURA que falla no debe molestar: varias son opcionales a proposito (autocompletado,
+    // TRM, el fallback offline del asistente) y su .catch las silencia deliberadamente.
+    if (avisos.length) notas.push('FALLO: una LECTURA fallida saco un toast (' + avisos[0].msg + ') -> ruido sobre algo que el codigo ya decide ignorar');
 
-    // ── 5) ningun llamador vuelve a serializar por su cuenta ─────────────────
+    // ── 5) una ESCRITURA fallida SI avisa, y ademas RELANZA ──────────────────
+    // Las dos mitades importan: sin el aviso, 56 escrituras fallan mudas; sin el relanzamiento,
+    // los .catch que ya existen dejarian de recibir su error y de ejecutar su logica.
+    avisos.length = 0;
+    let relanzo = false, errRecibido = null;
+    try {
+      guion = () => ({ ok: false, status: 500, json: () => Promise.reject(new SyntaxError('Unexpected token <')) });
+      await ctx.api('/compras/1/mover', { method: 'POST', body: { direccion: 'arriba' } });
+    } catch (e) { relanzo = true; errRecibido = e; }
+    cifras.avisoEscritura = avisos.length;
+    if (!avisos.length) {
+      notas.push('FALLO: una ESCRITURA fallida NO avisa al usuario -> vuelve el boton mudo que costo la depuracion de v6.0.0');
+    } else if (!/error/i.test(avisos[0].msg) || avisos[0].tipo !== 'error') {
+      notas.push('FALLO: el aviso de escritura no se emite como error legible: ' + JSON.stringify(avisos[0]));
+    }
+    if (!relanzo) {
+      notas.push('FALLO: api() se TRAGO el rechazo tras avisar -> los .catch existentes dejan de ejecutar su logica ' +
+        '(rollbacks, estados de carga, mensajes mas concretos)');
+    }
+    // La marca es la que evita el mensaje duplicado en los llamadores que ya tienen el suyo.
+    if (relanzo && !(errRecibido && errRecibido.__avisado)) {
+      notas.push('FALLO: el error relanzado no viene marcado como avisado -> los catch propios repetiran el toast');
+    }
+
+    // ── 6) ningun llamador vuelve a serializar por su cuenta ─────────────────
     // El aserto es de CERO, no un umbral: hoy no queda ninguno y cualquier reaparicion es el bug.
     const { piezas } = piezasEnOrden(raiz);
     const dobles = [];

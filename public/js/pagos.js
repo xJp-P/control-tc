@@ -546,7 +546,8 @@ function Pagos({ tarjeta, onDataChange }) {
                       api('/pagos/' + p.id, { method: 'DELETE' }).then(() => {
                         toast('Pago revertido exitosamente');
                         loadExtractos(); loadPagos();
-                      }).catch(err => toast('Error al revertir: ' + err.message));
+                      // Mismo criterio: api() ya avisa de la escritura fallida y marca el error.
+                      }).catch(err => { if (!err || !err.__avisado) toast('Error al revertir: ' + err.message); });
                     }
                   }, e(Ico, { name: 'undo', size: 15, color: 'var(--danger)' }))
                 )

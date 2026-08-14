@@ -12,6 +12,11 @@
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '6.1.1': [
+    'CUANDO ALGO FALLA AL GUARDAR, AHORA TE ENTERAS. Si se cae la conexion con el programa mientras registras, editas, pagas o reprogramas algo, antes el boton simplemente no hacia nada: ni un aviso, ni una pista de que habia pasado. Ahora sale un mensaje de error en pantalla.',
+    'El aviso solo aparece cuando falla algo que estabas GUARDANDO. Las consultas de fondo que el programa hace solo, como las sugerencias de nombres o la tasa del dolar, siguen fallando en silencio a proposito: si no estan, no te sirve de nada que te interrumpan.',
+    'Donde ya habia un mensaje mas concreto (por ejemplo al mover una compra o al revertir un pago), se sigue mostrando ese y no se repite el aviso general.',
+  ],
   '6.1.0': [
     'REPROGRAMAR EL SALDO DE UNA COMPRA A CUOTAS AHORA ESTA A UN CLIC. El boton vive en la fila de cada compra a cuotas, en la pestana Diferidas. Antes habia que abrir primero la tabla de amortizacion para encontrarlo.',
     'LAS DOS FORMAS DE CAMBIAR CUOTAS YA NO SE CONFUNDEN. Se llaman distinto porque hacen cosas distintas: "Cuotas (plan completo, desde el inicio)" en el formulario de la compra rehace el plan entero desde cero, y "Reprogramar saldo restante" en Diferidas respeta lo que el banco ya te cobro y solo reparte lo que queda.',

@@ -36,7 +36,7 @@
     {
       "nombre": "api",
       "tipo": "async function",
-      "lineas": 8,
+      "lineas": 30,
       "pieza": "js/core.js"
     },
     {
@@ -228,7 +228,7 @@
     {
       "nombre": "CHANGELOG",
       "tipo": "const",
-      "lineas": 790,
+      "lineas": 795,
       "pieza": "js/changelog.js"
     },
     {
@@ -270,7 +270,7 @@
     {
       "nombre": "CardResumen",
       "tipo": "function",
-      "lineas": 2058,
+      "lineas": 2060,
       "pieza": "js/resumen.js"
     },
     {
@@ -318,7 +318,7 @@
     {
       "nombre": "Pagos",
       "tipo": "function",
-      "lineas": 667,
+      "lineas": 668,
       "pieza": "js/pagos.js"
     },
     {
