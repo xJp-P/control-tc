@@ -16,6 +16,8 @@ const CHANGELOG = {
     'CUANDO ALGO FALLA AL GUARDAR, AHORA TE ENTERAS. Si se cae la conexion con el programa mientras registras, editas, pagas o reprogramas algo, antes el boton simplemente no hacia nada: ni un aviso, ni una pista de que habia pasado. Ahora sale un mensaje de error en pantalla.',
     'El aviso solo aparece cuando falla algo que estabas GUARDANDO. Las consultas de fondo que el programa hace solo, como las sugerencias de nombres o la tasa del dolar, siguen fallando en silencio a proposito: si no estan, no te sirve de nada que te interrumpan.',
     'Donde ya habia un mensaje mas concreto (por ejemplo al mover una compra o al revertir un pago), se sigue mostrando ese y no se repite el aviso general.',
+    'LA TARJETA "SALDO EN BOLSILLO" YA REFLEJA LO QUE APARTAS. Si en el mes ya abonaste al extracto mas de lo que llevabas apartado, la tarjeta se quedaba mostrando $0: apartabas dinero y no se movia nada, aunque quedara bien guardado. Ahora el numero grande es el TOTAL QUE APARTASTE en el mes.',
+    'Debajo, cuando hay abonos, aparecen las dos cifras que lo explican: cuanto has abonado y cuanto queda neto despues de esos abonos. Si no has abonado nada, no se muestra ese detalle porque no hay diferencia que aclarar.',
   ],
   '6.1.0': [
     'REPROGRAMAR EL SALDO DE UNA COMPRA A CUOTAS AHORA ESTA A UN CLIC. El boton vive en la fila de cada compra a cuotas, en la pestana Diferidas. Antes habia que abrir primero la tabla de amortizacion para encontrarlo.',

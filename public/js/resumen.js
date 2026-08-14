@@ -1006,30 +1006,38 @@ function CardResumen({ tarjeta, onDataChange }) {
       bimonCard({
         variant: 'accent',
         title: 'Saldo en Bolsillo',
-        copValue: fmtCOP(data.saldoBolsillo || 0),
-        usdValue: fmtUsd(data.saldoBolsilloUsd || 0),
+        // El valor grande es el BRUTO apartado. Antes era el neto (bruto - abonos, capado en 0), y
+        // con un abono parcial grande la card se quedaba clavada en $0: el usuario apartaba dinero
+        // y no veia moverse nada, aunque el dato se guardaba perfecto. El neto no se pierde, baja a
+        // la linea de detalle junto a los abonos, que es lo que lo explica.
+        copValue: fmtCOP(data.saldoBolsilloBruto || 0),
+        usdValue: fmtUsd(data.saldoBolsilloUsdBruto || 0),
         hasUsd: !!(data.dualExtracto && ((data.saldoBolsilloUsdBruto || 0) > 0 || (data.saldoBolsilloUsdAbonado || 0) > 0 || (data.saldoBolsilloUsd || 0) > 0)),
-        copExtra: ((data.saldoBolsilloBruto || 0) > 0 || (data.saldoBolsilloAbonado || 0) > 0)
+        // Solo cuando hay abonos: sin ellos el neto ES el bruto y repetirlo seria ruido.
+        copExtra: ((data.saldoBolsilloAbonado || 0) > 0)
           ? e('div', { style: { display: 'flex', gap: 14, marginTop: 8, flexWrap: 'wrap' } },
-              e('div', null,
-                e('div', { style: { fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 } }, 'Total Apartado'),
-                e('div', { style: { fontSize: 12, color: 'var(--text-primary)', fontWeight: 600, fontFamily: 'monospace' } }, fmtCOP(data.saldoBolsilloBruto || 0))
-              ),
               e('div', null,
                 e('div', { style: { fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 } }, 'Abonos Realizados'),
                 e('div', { style: { fontSize: 12, color: 'var(--warning)', fontWeight: 600, fontFamily: 'monospace' } }, '-' + fmtCOP(data.saldoBolsilloAbonado || 0))
+              ),
+              e('div', null,
+                e('div', { style: { fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 } }, 'Neto Restante'),
+                e('div', { style: { fontSize: 12, color: 'var(--text-primary)', fontWeight: 600, fontFamily: 'monospace' } }, fmtCOP(data.saldoBolsillo || 0))
               )
             )
           : null,
-        usdExtra: ((data.saldoBolsilloUsdBruto || 0) > 0 || (data.saldoBolsilloUsdAbonado || 0) > 0)
+        // Mismo criterio en el piso de dolares: el valor grande ya es el bruto, asi que aqui va lo
+        // que lo explica (abonos y neto). Si los dos pisos no siguieran la misma regla, la card
+        // diria una cosa arriba y otra abajo.
+        usdExtra: ((data.saldoBolsilloUsdAbonado || 0) > 0)
           ? e('div', { style: { display: 'flex', gap: 14, marginTop: 8, flexWrap: 'wrap' } },
-              e('div', null,
-                e('div', { style: { fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 } }, 'Total Apartado'),
-                e('div', { style: { fontSize: 12, color: 'var(--text-primary)', fontWeight: 600, fontFamily: 'monospace' } }, fmtUsd(data.saldoBolsilloUsdBruto || 0))
-              ),
               e('div', null,
                 e('div', { style: { fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 } }, 'Abonos Realizados'),
                 e('div', { style: { fontSize: 12, color: 'var(--warning)', fontWeight: 600, fontFamily: 'monospace' } }, '-' + fmtUsd(data.saldoBolsilloUsdAbonado || 0))
+              ),
+              e('div', null,
+                e('div', { style: { fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 } }, 'Neto Restante'),
+                e('div', { style: { fontSize: 12, color: 'var(--text-primary)', fontWeight: 600, fontFamily: 'monospace' } }, fmtUsd(data.saldoBolsilloUsd || 0))
               )
             )
           : null,

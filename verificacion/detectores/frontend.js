@@ -699,8 +699,11 @@ function fixtureDataF8(over) {
   // Cifras redondas para que los asertos de las cards sean legibles: 10M sobre un cupo de 40M
   // son 25.0% usado y 30M disponibles.
   d.deudaTotal = 10000000; d.deudaTotalEnCop = 10000000;
-  d.saldoBolsillo = 500000; d.saldoBolsilloBruto = 500000;
   d.pagoMinimo = 3000000;
+  // Caso REAL que motivo el rediseno de la card (julio de la Visa): se aparto dinero y ya se abono
+  // mas que eso al extracto, asi que el NETO esta saturado en 0. Con el neto como valor principal,
+  // la card se quedaba clavada en $0 mientras el usuario seguia apartando.
+  d.saldoBolsilloBruto = 534078; d.saldoBolsilloAbonado = 1400000; d.saldoBolsillo = 0;
   return Object.assign(d, over || {});
 }
 const TARJETA_F8 = { id: 4, nombre: 'Tarjeta F8', dia_corte: 30, banco: 'Bancolombia', franquicia: 'Visa',
@@ -790,7 +793,12 @@ const F8 = {
     if (t1.indexOf('$10.000.000') === -1) notas.push('FALLO: la card de deuda no muestra la deuda total sembrada ($10.000.000)');
     if (t1.indexOf('25.0') === -1) notas.push('FALLO: el cupo usado no sale al 25.0% (10M sobre un cupo de 40M)');
     if (t1.indexOf('$30.000.000') === -1) notas.push('FALLO: no aparece el cupo disponible ($30.000.000 = 40M - 10M)');
-    if (t1.indexOf('$500.000') === -1) notas.push('FALLO: la card "Saldo en Bolsillo" no muestra los $500.000 sembrados');
+    // La card muestra el BRUTO apartado en grande; el neto saturado baja al detalle, junto a los
+    // abonos que lo explican. Si se vuelve a poner el neto arriba, con este escenario la card
+    // marcaria $0 -que es el defecto que el usuario reporto- y estos tres asertos lo dicen.
+    if (t1.indexOf('$534.078') === -1) notas.push('FALLO: la card "Saldo en Bolsillo" no muestra el BRUTO apartado ($534.078) como valor principal');
+    if (t1.indexOf('Neto Restante') === -1) notas.push('FALLO: la card no desglosa el "Neto Restante" (el saturado) -> se pierde la lectura de cuanto queda tras los abonos');
+    if (t1.indexOf('Abonos Realizados') === -1) notas.push('FALLO: la card no muestra los abonos, que son los que explican por que el neto es menor que lo apartado');
 
     // Badges de bolsillo: los personales se pueden pulsar, el de un tercero NO (se gestiona en Terceros).
     const badges = [];
