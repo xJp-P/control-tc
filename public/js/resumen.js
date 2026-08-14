@@ -412,14 +412,20 @@ function CardResumen({ tarjeta, onDataChange }) {
     // veces y el backend recibe una cadena, con lo que req.body.direccion queda undefined -> 400.
     api('/compras/' + c.id + '/mover', { method: 'POST', body: { direccion } }).then((r) => {
       if (r && r.error) { toastErr(r.error); return; }
-      // Se marca qué filas animar ANTES de refrescar: el estado sobrevive al re-render con los datos
-      // nuevos, así que la clase ya está puesta cuando la fila aparece en su sitio nuevo.
-      setFilasMovidas({ dir: direccion, movidas: r.movida_ids || [c.id], cedieron: r.desplazada_ids || [] });
-      if (movTimer.current) clearTimeout(movTimer.current);
-      // Por encima de los 780ms que dura la animación: si el estado se limpiara antes, la clase
-      // desaparecería a media transición y la fila daría un tirón justo al final.
-      movTimer.current = setTimeout(() => setFilasMovidas(null), 1000);
-      refreshAll();
+      // Se ESPERA a tener las compras ya reordenadas antes de marcar la animación. Marcarla antes
+      // (que es lo que se hacía) la arrancaba en la posición VIEJA: para cuando llegaban los datos
+      // y la fila saltaba de sitio, la animación ya se había consumido y solo se veía el salto seco.
+      // Ambos setState caen en el mismo tick, así que React pinta UNA vez: la fila ya en su sitio
+      // nuevo y con la clase puesta.
+      return api('/compras?tarjeta_id=' + tarjeta.id + '&ciclo=' + ciclo).then((nuevas) => {
+        setCompras(nuevas);
+        setFilasMovidas({ dir: direccion, movidas: r.movida_ids || [c.id], cedieron: r.desplazada_ids || [], tick: Date.now() });
+        if (movTimer.current) clearTimeout(movTimer.current);
+        // Por encima de los 780ms que dura la animación: si el estado se limpiara antes, la clase
+        // desaparecería a media transición y la fila daría un tirón justo al final.
+        movTimer.current = setTimeout(() => setFilasMovidas(null), 1000);
+        refreshAll();   // el resto de la vista (dashboard, diferidas) puede ir después
+      });
     }).catch((err) => {
       // Sin este catch el clic era MUDO: ante un 400 la respuesta no es JSON, res.json() lanza y la
       // promesa se rechaza en silencio — ni toast ni rastro. Un boton que no hace nada y tampoco
@@ -965,6 +971,10 @@ function CardResumen({ tarjeta, onDataChange }) {
         // que calculó purchaseRows; sin él (llamadas sin fila) no se pintan.
         // Clase de animacion de una fila recien reordenada. Devuelve '' cuando no hay movimiento en
         // curso, asi que no ensucia el className del resto del tiempo.
+        // La key de una fila animada lleva el tick del movimiento: al cambiar, React DESMONTA y
+        // remonta ese <tr>, que es lo unico que hace que el navegador lance la animacion otra vez.
+        // Reordenar sin esto solo mueve el nodo, y mover un nodo no reinicia sus animaciones.
+        const keyMov = (base, clase) => (clase && filasMovidas ? base + '~' + filasMovidas.tick : base);
         const claseMov = (id) => {
           if (!filasMovidas) return '';
           if ((filasMovidas.movidas || []).indexOf(id) !== -1) return 'fila-movida-' + filasMovidas.dir;
@@ -1008,7 +1018,8 @@ function CardResumen({ tarjeta, onDataChange }) {
           const faltaBolsillo = (!esFuturoCiclo && badgeEstado === 'bolsillo_parcial') ? Math.round(bolsilloTarget - bolsillo) : 0;
           const showAsPaid = c.estado === 'pagado' || isPaidLikePast;
           const valorMostrar = isDif && c.cuotaCorte ? c.cuotaCorte : c.valor_cop;
-          return e('tr', { key: c.id, className: claseMov(c.id), style: showAsPaid ? { background: 'rgba(52,211,153,0.10)' } : tieneParcial ? { background: 'rgba(59,130,246,0.08)' } : null },
+          const claseFila = claseMov(c.id);
+          return e('tr', { key: keyMov(c.id, claseFila), className: claseFila, style: showAsPaid ? { background: 'rgba(52,211,153,0.10)' } : tieneParcial ? { background: 'rgba(59,130,246,0.08)' } : null },
             e('td', null, fmtDate(c.fecha)),
             // Descripción compacta en UNA línea: nombre + nota personal (muted) + badge de cuota +
             // abono parcial, todos inline (flex, gap). Sin <div> en bloque para la nota → no infla
@@ -1156,7 +1167,7 @@ function CardResumen({ tarjeta, onDataChange }) {
                   const grpEsIntl = item.partes.length > 0 && !!(item.partes[0].es_internacional);
                   const grpInteres = item.partes.reduce((s, p) => s + calcInteresIntl(p), 0);
                   const claseGrupo = item.partes.map(p => claseMov(p.id)).find(Boolean) || '';
-                  const parentRow = e('tr', { key: 'grp-' + item.grupo_id, className: claseGrupo, style: { background: grupoPaidPast ? 'rgba(52,211,153,0.10)' : 'var(--bg-tertiary)' } },
+                  const parentRow = e('tr', { key: keyMov('grp-' + item.grupo_id, claseGrupo), className: claseGrupo, style: { background: grupoPaidPast ? 'rgba(52,211,153,0.10)' : 'var(--bg-tertiary)' } },
                     e('td', null, fmtDate(item.fecha)),
                     // Descripción compacta inline (igual que la fila simple): nombre + nota + cuota.
                     e('td', null,
@@ -1227,7 +1238,7 @@ function CardResumen({ tarjeta, onDataChange }) {
                     }
                     var childFalta = (!esFuturoCiclo && childBadge === 'bolsillo_parcial') ? Math.round(childTarget - childBol) : 0;
                     var childValor = item.esDiferida ? (c.cuotaCorte || 0) : c.valor_cop;
-                    return e('tr', { key: c.id, className: claseGrupo, style: { background: childPaidPast ? 'rgba(52,211,153,0.08)' : 'rgba(99,102,241,0.04)' } },
+                    return e('tr', { key: keyMov(c.id, claseGrupo), className: claseGrupo, style: { background: childPaidPast ? 'rgba(52,211,153,0.08)' : 'rgba(99,102,241,0.04)' } },
                       e('td', null),
                       // Descripcion: vacía (la madre ya la muestra). Mantenemos indentación con muted "↳" para jerarquía visual.
                       e('td', { style: { paddingLeft: 24, fontSize: 12, color: 'var(--text-muted)' } },
