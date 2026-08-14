@@ -404,9 +404,16 @@ function CardResumen({ tarjeta, onDataChange }) {
   // Orden manual dentro del día (v6.0.0). El backend materializa el orden del día y hace el swap;
   // aquí solo se refresca. El 409 del borde trae su propio mensaje y se muestra tal cual.
   function moverCompra(c, direccion) {
-    api('/compras/' + c.id + '/mover', { method: 'POST', body: JSON.stringify({ direccion }) }).then((r) => {
+    // `body` va como OBJETO: api() ya hace el JSON.stringify. Pasarlo stringificado lo envuelve dos
+    // veces y el backend recibe una cadena, con lo que req.body.direccion queda undefined -> 400.
+    api('/compras/' + c.id + '/mover', { method: 'POST', body: { direccion } }).then((r) => {
       if (r && r.error) { toastErr(r.error); return; }
       refreshAll();
+    }).catch((err) => {
+      // Sin este catch el clic era MUDO: ante un 400 la respuesta no es JSON, res.json() lanza y la
+      // promesa se rechaza en silencio — ni toast ni rastro. Un boton que no hace nada y tampoco
+      // dice por que es peor que uno que falla en voz alta.
+      toastErr('No se pudo mover la compra: ' + (err && err.message ? err.message : 'error de conexion'));
     });
   }
   function saveAvance(data) {
