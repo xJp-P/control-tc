@@ -9,6 +9,8 @@
 // Existe como helper porque la resolución hace falta en TRES sitios que antes divergían (el GET de
 // extractos, el sellado del pago y el dashboard): sin punto único, la próxima card que se agregue
 // vuelve a mostrar el estimado mientras el resto muestra el oficial.
+const { creditosDeCiclo } = require('./creditoReverso');
+
 function pagoMinimoOficial(db, tarjetaId, ciclo) {
   if (!db || !tarjetaId || !ciclo) return null;
   try {
@@ -18,10 +20,17 @@ function pagoMinimoOficial(db, tarjetaId, ciclo) {
   } catch (e) { return null; }   // BD anterior a la migración: cae al calculado
 }
 
-// Devuelve la cifra oficial si existe; si no, el valor calculado que se le pase.
+// Devuelve la cifra oficial si existe; si no, el valor calculado que se le pase. Después descuenta
+// los créditos por reverso imputados a ESE ciclo (v5.9.9): el banco los aplica a la deuda más vieja
+// exigible, así que rebajan lo que hay que pagar para cerrar el mes. Va aquí, en el punto único, para
+// que el sellado, el GET de extractos y las tres cards del dashboard lo hereden a la vez — sin esto,
+// la app pediría de más y el ciclo no llegaría a sellar nunca.
 function minimoEfectivo(db, tarjetaId, ciclo, calculado) {
   const of = pagoMinimoOficial(db, tarjetaId, ciclo);
-  return of != null ? of : calculado;
+  const base = of != null ? of : calculado;
+  const credito = creditosDeCiclo(db, tarjetaId, ciclo);
+  if (!credito) return base;
+  return Math.max(0, Math.round((base || 0) - credito));
 }
 
 module.exports = { pagoMinimoOficial, minimoEfectivo };

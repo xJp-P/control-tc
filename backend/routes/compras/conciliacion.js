@@ -6,6 +6,7 @@
 // forma y su ORDEN exactos, y el contrato que se ve desde fuera no cambia ni un apice.
 const { hoyLocal } = require('../../helpers/dates');
 const { getCortesCustomMap, cicloConCorte } = require('../../helpers/cortes');
+const { elegirCicloDestino } = require('../../helpers/creditoReverso');
 
 module.exports = function(router, ctx) {
   const { db, logAction, tjNombre, calcCiclo, avisoCifraOficial, esCicloPagado, esCicloCerrado, targetBolsillo } = ctx;
@@ -132,14 +133,32 @@ module.exports = function(router, ctx) {
 
     const esTercero = c.persona_id != null;
     const reembolso = esTercero ? Math.round(c.monto_bolsillo || 0) : 0; // lo que el tercero ya te reembolsó
-    let creditoId = null;
+    let creditoId = null, creditoReversoId = null, cicloDestino = null;
     db.transaction(() => {
       if (esTercero) {
         // Conserva monto_bolsillo (registro del reembolso); tercero_pagado=1 lo saca de "Me deben".
         db.prepare("UPDATE compras SET reversada=1, estado='pagado', monto_abonado=valor_cop, tercero_pagado=1 WHERE id=?").run(c.id);
       } else {
-        // Personal: libera el bolsillo apartado (ya no hay que pagar la compra).
-        db.prepare("UPDATE compras SET reversada=1, estado='pagado', monto_abonado=valor_cop, monto_bolsillo=0, monto_bolsillo_usd=0 WHERE id=?").run(c.id);
+        // PERSONAL (v5.9.9): el cargo SIGUE VIVO en su ciclo — el banco lo factura igual — y el
+        // dinero devuelto sale como crédito hacia un ciclo anterior. Antes se ponía
+        // monto_abonado=valor_cop, que lo anulaba en SU ciclo: el total cuadraba pero el mes no.
+        // `reversada=1` se conserva y es lo que pinta el badge, así que la compra nunca vuelve a
+        // parecer una compra normal. Se libera el bolsillo: ya no hay que apartar para pagarla.
+        db.prepare("UPDATE compras SET reversada=1, monto_bolsillo=0, monto_bolsillo_usd=0 WHERE id=?").run(c.id);
+        const monto = Math.round(c.valor_cop);
+        // Imputación AUTOMÁTICA al ciclo abierto más reciente anterior al de la compra (waterfall
+        // oldest-first del banco). Sin destino disponible el crédito queda 'activo' esperando.
+        cicloDestino = elegirCicloDestino(db, c.tarjeta_id, c.ciclo);
+        const info = db.prepare(`INSERT INTO creditos_reverso
+            (tarjeta_id, origen_compra_id, monto, fecha, ciclo_origen, ciclo_destino, estado, descripcion, notas)
+            VALUES (?,?,?,?,?,?,?,?,?)`)
+          .run(c.tarjeta_id, c.id, monto, hoyLocal(), c.ciclo, cicloDestino,
+               cicloDestino ? 'aplicado' : 'activo',
+               'Reverso de ' + c.descripcion,
+               cicloDestino
+                 ? 'El banco devolvio esta compra y aplico el dinero al ciclo ' + cicloDestino + '.'
+                 : 'El banco devolvio esta compra. Sin ciclo anterior abierto al que aplicarlo.');
+        creditoReversoId = info.lastInsertRowid;
       }
       if (reembolso > 0) {
         const info = db.prepare(`INSERT INTO saldos_favor_tercero
@@ -150,7 +169,10 @@ module.exports = function(router, ctx) {
         creditoId = info.lastInsertRowid;
       }
     })();
-    logAction('editar', tjNombre(c.tarjeta_id) + 'Compra reversada: ' + c.descripcion + (creditoId ? ' → saldo a favor de ' + reembolso : ''));
-    res.json({ ok: true, credito_creado: creditoId != null, credito_id: creditoId, monto_favor: reembolso, persona_id: c.persona_id });
+    logAction('editar', tjNombre(c.tarjeta_id) + 'Compra reversada: ' + c.descripcion +
+      (creditoId ? ' → saldo a favor de ' + reembolso : '') +
+      (cicloDestino ? ' → credito de ' + Math.round(c.valor_cop) + ' aplicado al ciclo ' + cicloDestino : ''));
+    res.json({ ok: true, credito_creado: creditoId != null, credito_id: creditoId, monto_favor: reembolso, persona_id: c.persona_id,
+      credito_reverso_id: creditoReversoId, ciclo_destino: cicloDestino, monto_credito: esTercero ? 0 : Math.round(c.valor_cop) });
   });
 };

@@ -126,6 +126,26 @@ module.exports = function(router, ctx) {
         ext.pago_minimo = ext.pago_minimo_oficial;
         if (ext.pago_total_oficial != null) ext.pago_total = ext.pago_total_oficial;
       }
+      // Créditos por reverso imputados a ESTE ciclo (v5.9.9). El banco aplica el dinero devuelto a la
+      // deuda más vieja exigible, así que un reverso de un mes posterior rebaja este mínimo.
+      // OJO: este GET resuelve la cifra oficial por su cuenta (LEFT JOIN de arriba) en vez de llamar a
+      // minimoEfectivo, así que el descuento hay que aplicarlo AQUÍ también. Si no, la pestaña Pagos
+      // mostraría el mínimo sin rebajar mientras el sellado y el dashboard sí lo rebajan — justo la
+      // divergencia entre vistas que el helper existe para evitar.
+      // Se exponen con su compra de origen para que la vista explique de dónde sale el descuento: un
+      // mínimo más bajo sin razón visible es peor que no rebajarlo.
+      try {
+        ext.creditos_reverso = db.prepare(
+          "SELECT cr.id, cr.monto, cr.fecha, cr.ciclo_origen, cr.descripcion, cr.origen_compra_id, c.fecha AS compra_fecha " +
+          "FROM creditos_reverso cr LEFT JOIN compras c ON c.id = cr.origen_compra_id " +
+          "WHERE cr.tarjeta_id=? AND cr.ciclo_destino=? AND cr.estado='aplicado' ORDER BY cr.id"
+        ).all(ext.tarjeta_id, ext.ciclo);
+      } catch (e) { ext.creditos_reverso = []; }
+      ext.credito_reverso_total = (ext.creditos_reverso || []).reduce((s, x) => s + Math.round(x.monto || 0), 0);
+      if (ext.credito_reverso_total > 0) {
+        ext.pago_minimo_antes_credito = Math.round(ext.pago_minimo || 0);
+        ext.pago_minimo = Math.max(0, Math.round((ext.pago_minimo || 0) - ext.credito_reverso_total));
+      }
     });
 
     const filtered = result.filter(ext => ext.estado === 'pagado' || ext.pago_minimo > 0 || ext.pago_total > 0);

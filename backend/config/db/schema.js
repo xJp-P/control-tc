@@ -174,6 +174,26 @@ function crearEsquema(db) {
       UNIQUE(tarjeta_id, ciclo)
     );
 
+    -- Créditos por REVERSO de una compra PERSONAL (v5.9.9). Un reverso no es "tachar una compra":
+    -- es dinero que entra, y el banco lo imputa a la deuda más vieja exigible. Por eso el crédito
+    -- vive fuera del ciclo de su compra y lleva su propio destino: la compra se factura en SU ciclo
+    -- (el banco la cobra) y el crédito reduce el mínimo de un ciclo ANTERIOR.
+    -- Gemela de saldos_favor_tercero, que hace lo mismo para terceros; se separa porque aquella
+    -- tiene persona_id NOT NULL y su ledger de terceros ya está en producción.
+    CREATE TABLE IF NOT EXISTS creditos_reverso (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tarjeta_id INTEGER NOT NULL REFERENCES tarjetas(id) ON DELETE CASCADE,
+      origen_compra_id INTEGER REFERENCES compras(id) ON DELETE SET NULL,
+      monto REAL NOT NULL,
+      fecha TEXT NOT NULL,
+      ciclo_origen TEXT,
+      ciclo_destino TEXT,
+      estado TEXT NOT NULL DEFAULT 'activo',
+      descripcion TEXT,
+      notas TEXT,
+      created_at TEXT DEFAULT (datetime('now','localtime'))
+    );
+
     CREATE TABLE IF NOT EXISTS cortes_custom (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       tarjeta_id INTEGER NOT NULL REFERENCES tarjetas(id) ON DELETE CASCADE,

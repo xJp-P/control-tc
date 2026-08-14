@@ -12,6 +12,13 @@
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '6.0.0': [
+    'CUANDO TE DEVUELVEN UNA COMPRA, EL DINERO VA AL MES QUE TE LO DESCONTO EL BANCO. Al marcar una compra como devuelta, la app la anulaba dentro de su propio mes. El banco no hace eso: cobra la compra igual en su mes y aplica el dinero devuelto a la deuda mas antigua que tengas sin pagar. El total salia bien, pero el mes no: te pedia de mas en el mes viejo y de menos en el nuevo, y si pagabas lo que decia la app le girabas dinero de mas al banco.',
+    'Ahora la devolucion viaja sola al extracto anterior y rebaja lo que te falta por pagar, con una linea que explica de que compra viene. La compra sigue marcada como "Reversada" en su mes, igual que en tu extracto real, donde aparecen el cargo y su devolucion anulandose.',
+    'Tu deuda total y tu cupo no cambian ni un peso: lo que se corrige es en que mes cae cada cosa.',
+    'Si un mes ya esta pagado y cerrado, la devolucion no lo toca: se guarda y se aplica al siguiente mes que tengas abierto.',
+    'La devolucion de AMAZON de agosto ya quedo aplicada a tu extracto de julio al abrir esta version, sin que tengas que hacer nada.'
+  ],
   '5.9.8': [
     'SE DESTRABA EL BOLSILLO DE LAS COMPRAS INTERNACIONALES. La tabla de Compras pedia unos pesos mas de los que el sistema te dejaba guardar, asi que la compra se quedaba en "bolsillo parcial" y no habia forma de completarla: al abrir la ventana para agregar lo que faltaba, no aceptaba esa cifra. Pasaba porque la tabla calculaba el recargo internacional con la tasa de HOY, mientras el resto de la app usa la tasa que regia el dia de la compra, que es la correcta y la que cobra el banco.',
     'Solo era un problema de lo que se mostraba en pantalla: tu dinero, tus bolsillos y el pago minimo siempre se calcularon bien. Lo que cambia es que la tabla ya dice la misma cifra que la pestana Terceros y que la ventana de bolsillo.',

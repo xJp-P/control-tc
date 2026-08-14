@@ -5,6 +5,7 @@ const { calcularAmortizacionAvance } = require('../engine/amortizacion');
 const { calcularAmortizacionDiferida } = require('../engine/amortizacion');
 const { calcExtracto } = require('../engine/extracto');
 const { minimoEfectivo } = require('../helpers/extractoOficial');
+const { creditosDeTarjeta } = require('../helpers/creditoReverso');
 const { nuOptsDif, avanceOpts, isDualExtracto, aplicaIntInternacional } = require('../helpers/banco');
 
 module.exports = function(db) {
@@ -360,7 +361,12 @@ module.exports = function(db) {
       : (db.prepare("SELECT COALESCE(SUM(cupo_total),0) as total FROM tarjetas WHERE estado='activa'").get() || {}).total || 0;
 
     const deudaDelCorte = comprasPendientesCiclo.total + cuotasCorte;
-    const deudaTotal = todasComprasPendientes.total + deudaAvances + deudaDiferidas - montoPagadoExtractoTotal;
+    // Los créditos por reverso se restan de la deuda: el banco YA devolvió ese dinero. Hace falta
+    // porque desde v5.9.9 la compra reversada conserva su cargo (el banco la factura en su ciclo);
+    // sin esta resta, la deuda —y con ella el cupo disponible— quedaría inflada justo en el monto
+    // del reverso. Es la otra mitad del descuento que minimoEfectivo aplica sobre el mínimo del mes.
+    const creditosReverso = creditosDeTarjeta(db, tarjeta_id);
+    const deudaTotal = todasComprasPendientes.total + deudaAvances + deudaDiferidas - montoPagadoExtractoTotal - creditosReverso;
 
     // Para tarjetas duales: convertimos la deuda USD a COP equivalente con la TRM
     // configurada, sumando al cupo usado total. La TRM es una aproximación — el banco

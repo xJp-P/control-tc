@@ -6,7 +6,8 @@
 const { calcularAmortizacionAvance } = require('../../engine/amortizacion');
 const { calcularAmortizacionDiferida } = require('../../engine/amortizacion');
 const { nuOptsDif, avanceOpts } = require('../../helpers/banco');
-const { primerCorteAvance } = require('../../helpers/dates');
+const { primerCorteAvance, hoyLocal } = require('../../helpers/dates');
+const { elegirCicloDestino } = require('../../helpers/creditoReverso');
 const { liberarBolsilloDiferida, liberarBolsilloAvance } = require('../../helpers/bolsillo');
 const { getCortesCustomMap, cicloConCorte, corteDeCiclo } = require('../../helpers/cortes');
 
@@ -139,7 +140,7 @@ function syncData(db) {
     const totalDistribuido = totalComprasPagadas + ab.monto;
     if (Math.abs(totalDistribuido - pago.monto) > 1) return;
 
-    const comprasPendientes = db.prepare("SELECT id, fecha, descripcion, valor_cop, COALESCE(monto_abonado,0) as monto_abonado, estado, created_at FROM compras WHERE tarjeta_id=? AND estado IN ('pendiente','bolsillo','bolsillo_parcial') AND (valor_cop - COALESCE(monto_abonado,0)) > 0").all(ab.tarjeta_id);
+    const comprasPendientes = db.prepare("SELECT id, fecha, descripcion, valor_cop, COALESCE(monto_abonado,0) as monto_abonado, estado, created_at FROM compras WHERE tarjeta_id=? AND estado IN ('pendiente','bolsillo','bolsillo_parcial') AND COALESCE(reversada,0)=0 AND (valor_cop - COALESCE(monto_abonado,0)) > 0").all(ab.tarjeta_id);
     if (comprasPendientes.length === 0) return;
 
     console.log('[Sync] Redistribuyendo abono a capital: $' + pago.monto + ' - avance tenia $' + ab.monto + ', hay ' + comprasPendientes.length + ' compras pendientes');
@@ -147,7 +148,7 @@ function syncData(db) {
     db.prepare('DELETE FROM abonos_avance WHERE id=?').run(ab.id);
 
     const ciclosPagados = db.prepare("SELECT ciclo FROM extractos WHERE tarjeta_id=? AND estado='pagado'").all(ab.tarjeta_id).map(e => e.ciclo);
-    const comprasAbonadas = db.prepare("SELECT * FROM compras WHERE tarjeta_id=? AND estado='pagado' AND monto_abonado > 0").all(ab.tarjeta_id);
+    const comprasAbonadas = db.prepare("SELECT * FROM compras WHERE tarjeta_id=? AND estado='pagado' AND monto_abonado > 0 AND COALESCE(reversada,0)=0").all(ab.tarjeta_id);
     comprasAbonadas.forEach(c => {
       if (ciclosPagados.includes(c.ciclo)) return;
       db.prepare("UPDATE compras SET estado='pendiente', monto_abonado=0 WHERE id=?").run(c.id);
@@ -163,7 +164,7 @@ function syncData(db) {
     // afectarlas (lo dispara el usuario). Radio: solo filas de reprogramación; el oldest-first del resto
     // queda intacto.
     // Grupo 1: Compras nacionales
-    const comprasNacionales = db.prepare("SELECT id, fecha, descripcion, valor_cop, valor_usd, COALESCE(monto_abonado,0) as monto_abonado, created_at FROM compras WHERE tarjeta_id=? AND estado IN ('pendiente','bolsillo','bolsillo_parcial') AND (valor_cop - COALESCE(monto_abonado,0)) > 0 AND (valor_usd IS NULL OR valor_usd = 0) AND (notas IS NULL OR notas NOT LIKE '%sellada por reprogramacion%') ORDER BY fecha ASC, created_at ASC").all(ab.tarjeta_id);
+    const comprasNacionales = db.prepare("SELECT id, fecha, descripcion, valor_cop, valor_usd, COALESCE(monto_abonado,0) as monto_abonado, created_at FROM compras WHERE tarjeta_id=? AND estado IN ('pendiente','bolsillo','bolsillo_parcial') AND COALESCE(reversada,0)=0 AND (valor_cop - COALESCE(monto_abonado,0)) > 0 AND (valor_usd IS NULL OR valor_usd = 0) AND (notas IS NULL OR notas NOT LIKE '%sellada por reprogramacion%') ORDER BY fecha ASC, created_at ASC").all(ab.tarjeta_id);
     for (const c of comprasNacionales) {
       if (restante <= 0) break;
       const saldo = c.valor_cop - c.monto_abonado;
@@ -180,7 +181,7 @@ function syncData(db) {
 
     // Grupo 2: Compras internacionales
     if (restante > 0) {
-      const comprasIntl = db.prepare("SELECT id, fecha, descripcion, valor_cop, COALESCE(monto_abonado,0) as monto_abonado, created_at FROM compras WHERE tarjeta_id=? AND estado IN ('pendiente','bolsillo','bolsillo_parcial') AND (valor_cop - COALESCE(monto_abonado,0)) > 0 AND valor_usd IS NOT NULL AND valor_usd > 0 AND (notas IS NULL OR notas NOT LIKE '%sellada por reprogramacion%') ORDER BY fecha ASC, created_at ASC").all(ab.tarjeta_id);
+      const comprasIntl = db.prepare("SELECT id, fecha, descripcion, valor_cop, COALESCE(monto_abonado,0) as monto_abonado, created_at FROM compras WHERE tarjeta_id=? AND estado IN ('pendiente','bolsillo','bolsillo_parcial') AND COALESCE(reversada,0)=0 AND (valor_cop - COALESCE(monto_abonado,0)) > 0 AND valor_usd IS NOT NULL AND valor_usd > 0 AND (notas IS NULL OR notas NOT LIKE '%sellada por reprogramacion%') ORDER BY fecha ASC, created_at ASC").all(ab.tarjeta_id);
       for (const c of comprasIntl) {
         if (restante <= 0) break;
         const saldo = c.valor_cop - c.monto_abonado;
@@ -245,7 +246,7 @@ function syncData(db) {
       .filter(c => !esCicloPagado(pago.tarjeta_id, c.ciclo));
     if (intlCubiertas.length === 0) return;
 
-    const nacSinCubrir = db.prepare("SELECT id, ciclo FROM compras WHERE tarjeta_id=? AND (valor_usd IS NULL OR valor_usd = 0) AND estado IN ('pendiente','bolsillo','bolsillo_parcial') AND (valor_cop - COALESCE(monto_abonado,0)) > 0").all(pago.tarjeta_id)
+    const nacSinCubrir = db.prepare("SELECT id, ciclo FROM compras WHERE tarjeta_id=? AND (valor_usd IS NULL OR valor_usd = 0) AND estado IN ('pendiente','bolsillo','bolsillo_parcial') AND COALESCE(reversada,0)=0 AND (valor_cop - COALESCE(monto_abonado,0)) > 0").all(pago.tarjeta_id)
       .filter(c => !esCicloPagado(pago.tarjeta_id, c.ciclo));
     if (nacSinCubrir.length === 0) return;
 
@@ -273,7 +274,7 @@ function syncData(db) {
     // Grupo 1: Nacionales. (Excluye cuotas SELLADAS y, en Grupo 3, las diferidas HIJA de reprogramación
     // —sin_gracia_cuota1=1—: no re-pagar una cuota facturada ni auto-liberar el bolsillo de la hija al
     // arrancar. El abono MANUAL sí puede afectarlas. Radio: solo filas de reprogramación.)
-    const comprasNac = db.prepare("SELECT id, fecha, descripcion, valor_cop, COALESCE(monto_abonado,0) as monto_abonado, persona_id, created_at FROM compras WHERE tarjeta_id=? AND estado IN ('pendiente','bolsillo','bolsillo_parcial') AND (valor_cop - COALESCE(monto_abonado,0)) > 0 AND (valor_usd IS NULL OR valor_usd = 0) AND (notas IS NULL OR notas NOT LIKE '%sellada por reprogramacion%') ORDER BY fecha ASC, created_at ASC").all(pago.tarjeta_id);
+    const comprasNac = db.prepare("SELECT id, fecha, descripcion, valor_cop, COALESCE(monto_abonado,0) as monto_abonado, persona_id, created_at FROM compras WHERE tarjeta_id=? AND estado IN ('pendiente','bolsillo','bolsillo_parcial') AND COALESCE(reversada,0)=0 AND (valor_cop - COALESCE(monto_abonado,0)) > 0 AND (valor_usd IS NULL OR valor_usd = 0) AND (notas IS NULL OR notas NOT LIKE '%sellada por reprogramacion%') ORDER BY fecha ASC, created_at ASC").all(pago.tarjeta_id);
     for (const c of comprasNac) {
       if (restante <= 0) break;
       const saldo = c.valor_cop - c.monto_abonado;
@@ -290,7 +291,7 @@ function syncData(db) {
 
     // Grupo 2: Internacionales
     if (restante > 0) {
-      const comprasIntl = db.prepare("SELECT id, fecha, descripcion, valor_cop, COALESCE(monto_abonado,0) as monto_abonado, created_at FROM compras WHERE tarjeta_id=? AND estado IN ('pendiente','bolsillo','bolsillo_parcial') AND (valor_cop - COALESCE(monto_abonado,0)) > 0 AND valor_usd IS NOT NULL AND valor_usd > 0 AND (notas IS NULL OR notas NOT LIKE '%sellada por reprogramacion%') ORDER BY fecha ASC, created_at ASC").all(pago.tarjeta_id);
+      const comprasIntl = db.prepare("SELECT id, fecha, descripcion, valor_cop, COALESCE(monto_abonado,0) as monto_abonado, created_at FROM compras WHERE tarjeta_id=? AND estado IN ('pendiente','bolsillo','bolsillo_parcial') AND COALESCE(reversada,0)=0 AND (valor_cop - COALESCE(monto_abonado,0)) > 0 AND valor_usd IS NOT NULL AND valor_usd > 0 AND (notas IS NULL OR notas NOT LIKE '%sellada por reprogramacion%') ORDER BY fecha ASC, created_at ASC").all(pago.tarjeta_id);
       for (const c of comprasIntl) {
         if (restante <= 0) break;
         const saldo = c.valor_cop - c.monto_abonado;
@@ -377,6 +378,45 @@ function syncData(db) {
     fixes++;
     console.log('[Sync] Diferida #' + row.dif_id + ' (' + row.descripcion + ') resincronizada con compra #' + row.compra_id + ': fecha ' + row.dif_fecha + ' → ' + row.compra_fecha + ', primer corte → ' + nuevaFechaPrimerCorte);
   });
+
+  // 12. Migración de reversos PERSONALES al modelo de crédito (v5.9.9).
+  // Hasta v5.9.8 un reverso se anulaba dentro de su propio ciclo (estado='pagado',
+  // monto_abonado=valor_cop). El banco, en cambio, factura el cargo en SU ciclo y aplica el dinero
+  // devuelto a la deuda más vieja exigible. Aquí se convierte el modelo viejo al nuevo: se le
+  // devuelve el peso a la compra —conservando `reversada=1`, que es lo que pinta el badge— y se
+  // emite el crédito hacia el ciclo anterior abierto.
+  // Se hace como auto-heal y no como cirugía puntual para que cualquier BD con reversos previos se
+  // corrija sola al arrancar. Los reversos de TERCERO no se tocan: tienen su propio circuito
+  // (saldos_favor_tercero), donde el crédito es a favor del deudor y no tuyo.
+  try {
+    const reversadasViejas = db.prepare(`
+      SELECT c.id, c.tarjeta_id, c.ciclo, c.descripcion, c.valor_cop, c.estado
+      FROM compras c
+      LEFT JOIN creditos_reverso cr ON cr.origen_compra_id = c.id
+      WHERE COALESCE(c.reversada,0) = 1 AND c.persona_id IS NULL AND cr.id IS NULL
+        AND COALESCE(c.monto_abonado,0) > 0
+    `).all();
+    reversadasViejas.forEach(c => {
+      // Un ciclo con extracto PAGADO ya está sellado y blindado: no se reabre para reacomodar un
+      // reverso viejo (decisión del PO). Esas quedan como están, en el modelo antiguo.
+      const extPropio = db.prepare("SELECT estado FROM extractos WHERE tarjeta_id=? AND ciclo=?").get(c.tarjeta_id, c.ciclo);
+      if (extPropio && extPropio.estado === 'pagado') return;
+      const destino = elegirCicloDestino(db, c.tarjeta_id, c.ciclo);
+      db.transaction(() => {
+        db.prepare("UPDATE compras SET estado='pendiente', monto_abonado=0 WHERE id=?").run(c.id);
+        db.prepare(`INSERT INTO creditos_reverso
+            (tarjeta_id, origen_compra_id, monto, fecha, ciclo_origen, ciclo_destino, estado, descripcion, notas)
+            VALUES (?,?,?,?,?,?,?,?,?)`)
+          .run(c.tarjeta_id, c.id, Math.round(c.valor_cop), hoyLocal(), c.ciclo, destino,
+               destino ? 'aplicado' : 'activo', 'Reverso de ' + c.descripcion,
+               'Migrado del modelo anterior (la compra se anulaba en su propio ciclo).');
+      })();
+      fixes++;
+      console.log('[Sync] Reverso migrado al modelo de credito: compra #' + c.id + ' (' + c.descripcion +
+        ') vuelve a pesar en ' + c.ciclo + '; credito de ' + Math.round(c.valor_cop) +
+        (destino ? ' aplicado al ciclo ' + destino : ' sin ciclo destino (queda disponible)'));
+    });
+  } catch (e) { console.log('[Sync] Migracion de reversos omitida: ' + (e && e.message)); }
 
   console.log('[Sync] Sincronizacion completada. ' + fixes + ' correcciones aplicadas.');
   return fixes;
