@@ -1,4 +1,6 @@
 // backend/helpers/banco.js — Bank and franchise detection helpers
+const { cicloConCorte, getCortesCustomMap } = require('./cortes');
+const { hoyLocal } = require('./dates');
 
 // Cache: tarjeta_id → { esNu, esBancolombia, difiereInteresesCuota1 }
 // Module-level cache survives for the lifetime of the process.
@@ -13,6 +15,7 @@ function _bancoInfo(db, tarjetaOrBancoOrId) {
       _bancoCache[tarjetaOrBancoOrId] = {
         esNu: b.includes('nu'),
         esBancolombia: b.includes('bancolombia'),
+        esRappi: b.includes('rappi') || b.includes('davivienda'),
         // null = no configurado, 0 = no difiere, 1 = sí difiere
         difiereInteresesCuota1: t ? t.difiere_intereses_cuota1 : null
       };
@@ -29,6 +32,7 @@ function _bancoInfo(db, tarjetaOrBancoOrId) {
   return {
     esNu: banco.includes('nu'),
     esBancolombia: banco.includes('bancolombia'),
+    esRappi: banco.includes('rappi') || banco.includes('davivienda'),
     difiereInteresesCuota1: difiere
   };
 }
@@ -129,4 +133,34 @@ function aplicaIntInternacional(banco, franquicia) {
   return !isDualExtracto(franquicia);
 }
 
-module.exports = { esNuBank, esBancolombiaBank, nuOpts, nuOptsDif, avanceOpts, clearBancoCache, isDualExtracto, aplicaIntInternacional };
+/**
+ * ¿El banco SOLO deja tocar el numero de cuotas mientras el extracto sigue ABIERTO?
+ *
+ * RappiCard/Davivienda: si. Confirmado por el Product Owner con el banco real — una vez cerrado el
+ * extracto, la compra queda congelada y no acepta reprogramacion de ninguna clase. Bancolombia si
+ * lo permite sobre meses cerrados (es justo lo que modela "Sellar y Renacer"), y por eso v5.8.0
+ * derogo el candado por TIEMPO de forma global: aquella derogacion era correcta PARA BANCOLOMBIA.
+ * La regla real siempre fue por banco, asi que aqui se reinstaura solo donde aplica.
+ */
+function soloCuotasCicloAbierto(db, tarjetaOrBancoOrId) {
+  return _bancoInfo(db, tarjetaOrBancoOrId).esRappi;
+}
+
+/**
+ * Aplica la regla anterior a un ciclo concreto. Devuelve el MENSAJE de bloqueo, o null si se puede.
+ *
+ * Punto UNICO de la regla: lo llaman los cuatro endpoints que alteran cuotas (convertir, revertir,
+ * reprogramar y reprogramar-saldo) y tambien el GET que pinta la UI, para que el boton no ofrezca
+ * jamas algo que el backend va a rechazar. "Cerrado" es el mismo criterio de esCicloCerrado:
+ * ciclo < vigente CONSCIENTE del corte adelantado (cicloConCorte solo adelanta, nunca retrocede).
+ */
+function bloqueoCuotasCicloCerrado(db, tarjetaId, ciclo) {
+  if (!ciclo || !soloCuotasCicloAbierto(db, tarjetaId)) return null;
+  const tj = db.prepare('SELECT dia_corte, banco FROM tarjetas WHERE id=?').get(tarjetaId);
+  const diaCorte = (tj && tj.dia_corte) || 30;
+  const vigente = cicloConCorte(hoyLocal(), diaCorte, getCortesCustomMap(db, tarjetaId));
+  if (ciclo >= vigente) return null;
+  return (tj && tj.banco ? tj.banco : 'Esta tarjeta') + ' no permite cambiar las cuotas de un extracto ya cerrado (' + ciclo + '). Solo se pueden modificar las compras del extracto abierto (' + vigente + ').';
+}
+
+module.exports = { esNuBank, esBancolombiaBank, nuOpts, nuOptsDif, avanceOpts, clearBancoCache, isDualExtracto, aplicaIntInternacional, soloCuotasCicloAbierto, bloqueoCuotasCicloCerrado };

@@ -6,7 +6,7 @@
 // forma y su ORDEN exactos, y el contrato que se ve desde fuera no cambia ni un apice.
 const { corteDeCiclo } = require('../../helpers/cortes');
 const { calcularAmortizacionDiferida } = require('../../engine/amortizacion');
-const { nuOptsDif } = require('../../helpers/banco');
+const { nuOptsDif, bloqueoCuotasCicloCerrado } = require('../../helpers/banco');
 const { compraTerceroConReembolso } = require('../../helpers/bolsillo');
 
 module.exports = function(router, ctx) {
@@ -122,6 +122,15 @@ module.exports = function(router, ctx) {
     if (!d) return res.status(404).json({ error: 'Diferida no encontrada' });
     const nuevoN = parseInt(num_cuotas, 10);
     if (!nuevoN || nuevoN < 1 || nuevoN > 120) return res.status(400).json({ error: 'El número de cuotas debe ser un entero entre 1 y 120.' });
+
+    // Candado POR BANCO (RappiCard: solo con el extracto abierto). El ciclo se toma de la compra
+    // vinculada si la hay; en una diferida STANDALONE -sin compra, como las de RappiCard- se usa el
+    // ciclo de ORIGEN derivado de fecha_primer_corte, mismo criterio que validateDiferidaMutable
+    // (fecha_compra no sirve: en las omitidas se fija ~30 dias antes y apuntaria al ciclo anterior).
+    const _cVinc = db.prepare('SELECT ciclo FROM compras WHERE diferida_id=? ORDER BY id LIMIT 1').get(req.params.id);
+    const _cicloDif = _cVinc ? _cVinc.ciclo : (d.fecha_primer_corte ? String(d.fecha_primer_corte).slice(0, 7) : null);
+    const _bloqBancoDif = bloqueoCuotasCicloCerrado(db, d.tarjeta_id, _cicloDif);
+    if (_bloqBancoDif) return res.status(403).json({ error: _bloqBancoDif });
 
     // Guard de Terceros: no reprogramar si alguna compra vinculada es de un tercero con reembolsos
     // registrados (reestructurar las cuotas perdería ese libro de deuda). Gestiónalos en Terceros.

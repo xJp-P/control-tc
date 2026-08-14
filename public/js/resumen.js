@@ -90,6 +90,9 @@ function CardResumen({ tarjeta, onDataChange }) {
     posPrevias.current = null;
   }, [compras]);
   const [reproDiferida, setReproDiferida] = useState(null);
+  // Diferida STANDALONE cuyo plan completo se va a regenerar (via distinta de "Sellar y Renacer").
+  const [planDiferida, setPlanDiferida] = useState(null);
+  const [showPlanModal, setShowPlanModal] = useState(false);
   const [showAbonoModal, setShowAbonoModal] = useState(false);
   const [movType, setMovType] = useState('compra');
   const [showAbonoCapitalModal, setShowAbonoCapitalModal] = useState(false);
@@ -515,12 +518,23 @@ function CardResumen({ tarjeta, onDataChange }) {
   // preserva su libro (cada sellada conserva su reembolso + interes_sellado).
   function motivoNoReprogramable(d) {
     if (!d) return 'Sin datos de la diferida';
-    if (!d.compra_id) return 'Sin compra vinculada: todavia no se puede reprogramar el saldo de una diferida suelta';
+    // La regla del BANCO va primero y la resuelve el backend (bloqueo_banco). RappiCard no acepta
+    // tocar cuotas de un extracto cerrado, asi que ahi no hay via alguna: ni el plan completo ni el
+    // saldo. Mostrar el motivo real evita que parezca una limitacion de la app.
+    if (d.bloqueo_banco) return d.bloqueo_banco;
+    // Sin compra vinculada (STANDALONE) ya NO es un bloqueo: se reprograma por la via del plan
+    // completo, que es la correcta cuando el banco aun no ha facturado nada. Lo decide planEsUniforme.
+    if (!d.compra_id) return null;
     if (d.grupo_id) return 'Compra dividida: reprograma cada parte por separado';
     if (d.es_usd_pura) return 'Compra solo en dolares (no soportado)';
     if (d.tiene_abono_parcial) return 'Tiene un abono parcial registrado';
     return null;
   }
+  // Una diferida SIN compra vinculada no puede pasar por "Sellar y Renacer" (ese endpoint opera
+  // sobre la compra). Su camino es POST /diferidas/:id/reprogramar, que regenera el plan desde el
+  // origen: correcto justo cuando no hay ninguna cuota facturada, que es el unico caso en que el
+  // banco lo permite. Por eso las dos vias no compiten, se reparten el terreno.
+  function planEsUniforme(d) { return !!d && !d.compra_id; }
   // El modal necesita `amortizacion` para calcular k y el saldo, y el LISTADO no la trae (seria una
   // tabla completa por cada diferida). Por eso la fila pide el detalle al abrir, en vez de exponer
   // la amortizacion en el listado: el modal siempre trabaja con datos frescos del backend.
@@ -529,8 +543,24 @@ function CardResumen({ tarjeta, onDataChange }) {
       if (!dd || dd.error) { toastErr((dd && dd.error) || 'No se pudo cargar el plan de cuotas.'); return; }
       const motivo = motivoNoReprogramable(dd);
       if (motivo) { toastErr(motivo); return; }
+      // Dos destinos segun haya compra o no: plan completo (standalone) vs sellar y renacer.
+      if (planEsUniforme(dd)) { setPlanDiferida(dd); setShowPlanModal(true); return; }
       setReproDiferida(dd); setShowReprogramarModal(true);
     }).catch(() => toastErr('No se pudo cargar el plan de cuotas.'));
+  }
+  // Plan COMPLETO de una diferida sin compra (regenera desde el origen). No sella nada porque no hay
+  // nada facturado: el backend lo rechaza en cuanto alguna cuota cayo en un ciclo pagado, y el
+  // candado del banco lo corta antes si el extracto ya cerro.
+  function savePlanUniforme(data) {
+    const did = planDiferida && planDiferida.id;
+    if (!did) { toastErr('No se pudo identificar el plan de cuotas.'); return; }
+    api('/diferidas/' + did + '/reprogramar', { method: 'POST', body: data }).then(r => {
+      if (r && r.error) { toastErr(r.error); return; }
+      setShowPlanModal(false); setPlanDiferida(null);
+      setSelectedDiferida(null); setDiferidaDetail(null);
+      refreshAll();
+      toast('Plan de cuotas actualizado a ' + r.num_cuotas + ' cuota(s).');
+    }).catch(() => toastErr('No se pudo actualizar el plan de cuotas.'));
   }
   // Reprogramacion RETROACTIVA de saldo (Sellar y Renacer): opera sobre la COMPRA vinculada.
   function saveReprograma(data) {
@@ -1493,7 +1523,10 @@ function CardResumen({ tarjeta, onDataChange }) {
                         // facturo cuotas, y hasta ahora obligaba a desplegar antes el detalle de amortizacion.
                         (() => {
                           const motivo = motivoNoReprogramable(d);
-                          return e('button', { className: 'btn btn-sm', disabled: !!motivo, title: motivo || 'Reprogramar el saldo restante a un nuevo numero de cuotas', style: motivo ? { opacity: 0.5, cursor: 'not-allowed' } : undefined, onClick: (ev) => { ev.stopPropagation(); if (motivo) return; abrirReprogramar(d.id); } }, e(Ico, { name: 'refresh', size: 14, color: 'currentColor' }));
+                          const titulo = motivo || (planEsUniforme(d)
+                            ? 'Cambiar el numero de cuotas de este plan (se regenera desde el inicio)'
+                            : 'Reprogramar el saldo restante a un nuevo numero de cuotas');
+                          return e('button', { className: 'btn btn-sm', disabled: !!motivo, title: titulo, style: motivo ? { opacity: 0.5, cursor: 'not-allowed' } : undefined, onClick: (ev) => { ev.stopPropagation(); if (motivo) return; abrirReprogramar(d.id); } }, e(Ico, { name: 'refresh', size: 14, color: 'currentColor' }));
                         })(),
                         !cicloPagadoDif && ' ',
                         !cicloPagadoDif && e('button', { className: 'btn btn-sm btn-danger', onClick: (ev) => { ev.stopPropagation(); removeDiferida(d.id); } }, e(Ico, { name: 'trash', size: 14, color: 'currentColor' }))
@@ -1621,7 +1654,8 @@ function CardResumen({ tarjeta, onDataChange }) {
             // El motivo sale del MISMO helper que usa la fila, y se abre por la MISMA via (que releé el
             // detalle): dos superficies, un solo criterio y un solo origen de datos para el modal.
             const noElegible = motivoNoReprogramable(dd);
-            return e('button', { className: 'btn btn-sm', disabled: !!noElegible, title: noElegible || 'Reprogramar el saldo restante a un nuevo numero de cuotas', style: noElegible ? { opacity: 0.5, cursor: 'not-allowed', marginRight: 6 } : { marginRight: 6 }, onClick: () => { if (noElegible) return; abrirReprogramar(dd.id); } }, e(Ico, { name: 'refresh', size: 14, color: 'currentColor' }), ' Reprogramar saldo restante');
+            const uniforme = planEsUniforme(dd);
+            return e('button', { className: 'btn btn-sm', disabled: !!noElegible, title: noElegible || (uniforme ? 'Regenera el plan completo desde el inicio' : 'Reprogramar el saldo restante a un nuevo numero de cuotas'), style: noElegible ? { opacity: 0.5, cursor: 'not-allowed', marginRight: 6 } : { marginRight: 6 }, onClick: () => { if (noElegible) return; abrirReprogramar(dd.id); } }, e(Ico, { name: 'refresh', size: 14, color: 'currentColor' }), uniforme ? ' Cambiar plan de cuotas' : ' Reprogramar saldo restante');
           })(),
           e('button', { className: 'btn btn-sm', onClick: () => { setSelectedDiferida(null); setDiferidaDetail(null); }, style: { fontSize: 18, padding: '4px 10px' } }, '\u{2715}')
         ),
@@ -1817,6 +1851,10 @@ function CardResumen({ tarjeta, onDataChange }) {
     // Reprogramar saldo modal (Sellar y Renacer)
     e(Modal, { show: showReprogramarModal, onClose: () => { setShowReprogramarModal(false); setReproDiferida(null); }, title: 'Reprogramar Cuotas (saldo restante)' },
       reproDiferida && e(ReprogramarForm, { item: reproDiferida, tarjeta, onSave: saveReprograma, onCancel: () => { setShowReprogramarModal(false); setReproDiferida(null); } })
+    ),
+    // Plan completo de una diferida SIN compra vinculada (regenera desde el origen)
+    e(Modal, { show: showPlanModal, onClose: () => { setShowPlanModal(false); setPlanDiferida(null); }, title: 'Cambiar Plan de Cuotas' },
+      planDiferida && e(ReprogramarPlanForm, { item: planDiferida, onSave: savePlanUniforme, onCancel: () => { setShowPlanModal(false); setPlanDiferida(null); } })
     ),
     // Abono a avance modal
     e(Modal, { show: showAbonoModal, onClose: () => setShowAbonoModal(false), title: 'Registrar Abono a Avance' },

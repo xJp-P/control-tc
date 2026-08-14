@@ -6,7 +6,7 @@
 // forma y su ORDEN exactos, y el contrato que se ve desde fuera no cambia ni un apice.
 const { hoyLocal } = require('../../helpers/dates');
 const { calcularAmortizacionDiferida } = require('../../engine/amortizacion');
-const { nuOpts, nuOptsDif } = require('../../helpers/banco');
+const { nuOpts, nuOptsDif, bloqueoCuotasCicloCerrado } = require('../../helpers/banco');
 const { compraTerceroConReembolso } = require('../../helpers/bolsillo');
 const { getCortesCustomMap, cicloConCorte, corteDeCiclo } = require('../../helpers/cortes');
 
@@ -28,6 +28,10 @@ module.exports = function(router, ctx) {
     if (!n || n < 2 || n > 60) return res.status(400).json({ error: 'El número de cuotas debe ser un entero entre 2 y 60.' });
     const c = db.prepare('SELECT * FROM compras WHERE id=?').get(req.params.id);
     if (!c) return res.status(404).json({ error: 'Compra no encontrada' });
+    // Candado POR BANCO: RappiCard solo deja tocar cuotas mientras su extracto sigue abierto.
+    // Ni la conciliacion IA lo exime: no es una politica de la app, es que el banco lo rechaza.
+    const _bloqBancoConv = bloqueoCuotasCicloCerrado(db, c.tarjeta_id, c.ciclo);
+    if (_bloqBancoConv) return res.status(403).json({ error: _bloqBancoConv });
     if (c.estado === 'diferida' || c.diferida_id) return res.status(400).json({ error: 'La compra ya es diferida; su número de cuotas se cambia con la reprogramación.' });
     if (c.grupo_id) return res.status(403).json({ error: 'Esta compra es parte de una compra dividida; conviértela editando el grupo completo.' });
     if ((c.monto_abonado || 0) > 0) return res.status(400).json({ error: 'La compra tiene un abono parcial registrado; no se puede convertir a cuotas.' });
@@ -105,6 +109,10 @@ module.exports = function(router, ctx) {
   router.post('/:id/revertir-diferida', (req, res) => {
     const c = db.prepare('SELECT * FROM compras WHERE id=?').get(req.params.id);
     if (!c) return res.status(404).json({ error: 'Compra no encontrada' });
+    // Candado POR BANCO: RappiCard solo deja tocar cuotas mientras su extracto sigue abierto.
+    // Ni la conciliacion IA lo exime: no es una politica de la app, es que el banco lo rechaza.
+    const _bloqBancoRev = bloqueoCuotasCicloCerrado(db, c.tarjeta_id, c.ciclo);
+    if (_bloqBancoRev) return res.status(403).json({ error: _bloqBancoRev });
     if (!(c.estado === 'diferida' || c.diferida_id)) return res.status(400).json({ error: 'La compra no es diferida; no hay plan de cuotas que revertir.' });
     if (!c.diferida_id) return res.status(400).json({ error: 'La compra no tiene un plan de cuotas vinculado.' });
     if (c.grupo_id) return res.status(403).json({ error: 'Esta compra es parte de una compra dividida; gestiónala editando el grupo completo.' });
@@ -181,6 +189,10 @@ module.exports = function(router, ctx) {
     if (!M || M < 1 || M > 120) return res.status(400).json({ error: 'El número total de cuotas debe ser un entero entre 1 y 120.' });
     const c = db.prepare('SELECT * FROM compras WHERE id=?').get(req.params.id);
     if (!c) return res.status(404).json({ error: 'Compra no encontrada' });
+    // Candado POR BANCO: RappiCard solo deja tocar cuotas mientras su extracto sigue abierto.
+    // Ni la conciliacion IA lo exime: no es una politica de la app, es que el banco lo rechaza.
+    const _bloqBancoRepro = bloqueoCuotasCicloCerrado(db, c.tarjeta_id, c.ciclo);
+    if (_bloqBancoRepro) return res.status(403).json({ error: _bloqBancoRepro });
     if (!(c.estado === 'diferida' || c.diferida_id)) return res.status(400).json({ error: 'La compra no es una diferida; no hay plan de cuotas que reprogramar.' });
     if (!c.diferida_id) return res.status(400).json({ error: 'La compra no tiene un plan de cuotas vinculado.' });
     if (c.grupo_id) return res.status(403).json({ error: 'Esta compra es parte de una compra dividida; reprograma cada parte por separado.' });

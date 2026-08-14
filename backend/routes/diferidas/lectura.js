@@ -8,6 +8,15 @@ const { hoyLocal } = require('../../helpers/dates');
 const { calcularAmortizacionDiferida } = require('../../engine/amortizacion');
 const { nuOptsDif } = require('../../helpers/banco');
 const { compraTerceroConReembolso } = require('../../helpers/bolsillo');
+const { bloqueoCuotasCicloCerrado } = require('../../helpers/banco');
+
+// Ciclo con el que se juzga si una diferida esta en un extracto abierto: el de su compra vinculada
+// y, en una STANDALONE (sin compra, como las de RappiCard), el de ORIGEN derivado de
+// fecha_primer_corte. Mismo criterio que validateDiferidaMutable y que el guard de reprogramar.
+function cicloDeDiferida(d, compraVinc) {
+  if (compraVinc && compraVinc.ciclo) return compraVinc.ciclo;
+  return d.fecha_primer_corte ? String(d.fecha_primer_corte).slice(0, 7) : null;
+}
 
 module.exports = function(router, ctx) {
   const { db, logAction, tjNombre, validateDiferidaMutable } = ctx;
@@ -33,7 +42,7 @@ module.exports = function(router, ctx) {
       // valor_usd/monto_abonado se traen para los flags de elegibilidad de abajo: el boton
       // "Reprogramar saldo" vive ahora en la FILA, asi que su estado no puede depender de haber
       // abierto antes el detalle (GET /:id, el unico sitio donde existian estos flags).
-      const compraVinc = db.prepare(`SELECT id, monto_bolsillo, valor_cop, valor_usd, monto_abonado, grupo_id, nota_personal FROM compras WHERE diferida_id = ? ORDER BY id LIMIT 1`).get(d.id);
+      const compraVinc = db.prepare(`SELECT id, monto_bolsillo, valor_cop, valor_usd, monto_abonado, grupo_id, nota_personal, ciclo FROM compras WHERE diferida_id = ? ORDER BY id LIMIT 1`).get(d.id);
       // Per-cuota bolsillo: mapa {cuota_num: monto} para la compra vinculada
       const bolPorCuota = {};
       if (compraVinc) {
@@ -57,6 +66,10 @@ module.exports = function(router, ctx) {
         es_usd_pura: !!(compraVinc && compraVinc.valor_usd > 0 && !(compraVinc.valor_cop > 0)),
         tiene_abono_parcial: !!(compraVinc && (compraVinc.monto_abonado || 0) > 0),
         tercero_con_reembolso: !!(compraVinc && compraTerceroConReembolso(db, compraVinc.id)),
+        // Bloqueo POR BANCO (RappiCard: solo con el extracto abierto). Lo resuelve el backend y la UI
+        // solo lo muestra: si el frontend lo dedujera, el boton podria ofrecer algo que el endpoint
+        // rechaza. Es el MISMO helper que aplican los cuatro endpoints de cuotas.
+        bloqueo_banco: bloqueoCuotasCicloCerrado(db, d.tarjeta_id, cicloDeDiferida(d, compraVinc)),
         // Nota personal de la compra vinculada (se muestra junto al nombre en la tabla, igual que en Compras).
         nota_personal: compraVinc ? (compraVinc.nota_personal || null) : null,
         // Bolsillo total (cache) y per-cuota
@@ -116,7 +129,7 @@ module.exports = function(router, ctx) {
     const amort = calcularAmortizacionDiferida(d.monto, d.tasa_mv, d.num_cuotas, d.fecha_compra, d.fecha_primer_corte, null, nuOptsDif(db, d));
     // Info de la compra vinculada para la UI de "Reprogramar Cuotas" (necesita el compra_id para el
     // POST /compras/:id/reprogramar-saldo y saber si es elegible: no grupo, no tercero, no USD pura).
-    const compraVinc = db.prepare('SELECT id, grupo_id, persona_id, valor_cop, valor_usd, monto_abonado FROM compras WHERE diferida_id=? ORDER BY id LIMIT 1').get(d.id);
+    const compraVinc = db.prepare('SELECT id, grupo_id, persona_id, valor_cop, valor_usd, monto_abonado, ciclo FROM compras WHERE diferida_id=? ORDER BY id LIMIT 1').get(d.id);
     res.json({
       ...d, amortizacion: amort.tabla, resumen: amort.resumen,
       compra_id: compraVinc ? compraVinc.id : null,
@@ -127,7 +140,9 @@ module.exports = function(router, ctx) {
       // el "Sellar y Renacer" hereda su persona_id en las selladas y la renacida (deuda preservada).
       tercero_con_reembolso: !!(compraVinc && compraTerceroConReembolso(db, compraVinc.id)),
       es_usd_pura: !!(compraVinc && compraVinc.valor_usd > 0 && !(compraVinc.valor_cop > 0)),
-      tiene_abono_parcial: !!(compraVinc && (compraVinc.monto_abonado || 0) > 0)
+      tiene_abono_parcial: !!(compraVinc && (compraVinc.monto_abonado || 0) > 0),
+      // Mismo flag que el listado: fila y detalle no pueden discrepar sobre si el banco lo permite.
+      bloqueo_banco: bloqueoCuotasCicloCerrado(db, d.tarjeta_id, cicloDeDiferida(d, compraVinc))
     });
   });
 };

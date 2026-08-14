@@ -1,7 +1,7 @@
 {
   "generado": "2026-08-01",
   "nota": "Inventario de simbolos de nivel superior del frontend. F4 comprueba que existen; F5, que conservan su tamano. NO regenerar sin una razon aprobada.",
-  "total": 69,
+  "total": 70,
   "simbolos": [
     {
       "nombre": "e",
@@ -228,7 +228,7 @@
     {
       "nombre": "CHANGELOG",
       "tipo": "const",
-      "lineas": 787,
+      "lineas": 790,
       "pieza": "js/changelog.js"
     },
     {
@@ -270,7 +270,7 @@
     {
       "nombre": "CardResumen",
       "tipo": "function",
-      "lineas": 2020,
+      "lineas": 2058,
       "pieza": "js/resumen.js"
     },
     {
@@ -295,6 +295,12 @@
       "nombre": "DiferidaForm",
       "tipo": "function",
       "lineas": 94,
+      "pieza": "js/formularios.js"
+    },
+    {
+      "nombre": "ReprogramarPlanForm",
+      "tipo": "function",
+      "lineas": 46,
       "pieza": "js/formularios.js"
     },
     {

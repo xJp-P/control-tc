@@ -38,10 +38,10 @@ module.exports = {
   // (public/js/avisos.js). Este numero se toca A MANO y a proposito: es el contrato que hace que
   // aparecer un simbolo nuevo sea una decision, no un descuido — regenerar el manifiesto por si solo
   // NO lo mueve, y por eso F4/F6 siguen en rojo hasta que alguien viene aqui.
-  EXACTO_SIMBOLOS: 69,
+  EXACTO_SIMBOLOS: 70,
   // Lo que cuenta F6: declaraciones de nivel superior halladas en el arbol, sin el bootstrap (que
   // es una sentencia, no una declaracion; a ese lo cubre F3 EJECUTANDO la carga).
-  EXACTO_DECLARACIONES: 68,
+  EXACTO_DECLARACIONES: 69,
 
   // Tolerancia de tamano POR SIMBOLO. Un refactor que solo MUEVE cumple esto por definicion;
   // un stub, un borrado o una "mejora" colada, no. Son 2 lineas para absorber el ajuste de

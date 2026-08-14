@@ -946,6 +946,57 @@ function DiferidaForm({ item, tarjeta, onSave, onCancel }) {
 // Reprogramacion RETROACTIVA de saldo ("Sellar y Renacer"). item = diferidaDetail (trae amortizacion,
 // monto, num_cuotas, tasa_mv, etiqueta, compra_id). El preview se calcula en el cliente desde la
 // amortizacion ya cargada + el ciclo vigente de la tarjeta (el POST del backend es la fuente de verdad).
+// Cambio de plan COMPLETO de una diferida SIN compra vinculada (standalone). Regenera la
+// amortizacion desde el origen, que es lo correcto justo cuando el banco no ha facturado ninguna
+// cuota — y es el unico caso en que RappiCard lo permite. NO sella nada: para eso esta
+// ReprogramarForm, que opera sobre la compra y solo existe donde hay compra que reusar.
+function ReprogramarPlanForm({ item, onSave, onCancel }) {
+  const [numCuotas, setNumCuotas] = useState(item.num_cuotas || 1);
+  const [confirmando, setConfirmando] = useState(false);
+  const M = parseInt(numCuotas, 10);
+  const monto = Math.round(item.monto || 0);
+  const capitalPorCuota = (M && M > 0) ? Math.round(monto / M) : 0;
+
+  let err = null;
+  if (!M || M < 1 || M > 120) err = 'Indica un numero de cuotas entre 1 y 120.';
+  else if (M === item.num_cuotas) err = 'Ese ya es el numero de cuotas actual.';
+  const valido = !err;
+
+  if (confirmando && valido) {
+    return e('div', null,
+      e('div', { style: { fontSize: 13.5, color: 'var(--text-secondary)', lineHeight: 1.6, marginBottom: 16 } },
+        e('div', { style: { display: 'inline-flex', alignItems: 'center', gap: 8, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 8 } },
+          e(Ico, { name: 'alert', size: 18, color: 'var(--warning)' }), 'Confirmar cambio de plan'),
+        e('div', null, item.etiqueta, ':'),
+        e('ul', { style: { margin: '10px 0', paddingLeft: 18 } },
+          e('li', null, 'El plan pasa de ', e('strong', null, String(item.num_cuotas)), ' a ', e('strong', null, String(M)), ' cuotas.'),
+          e('li', null, 'La proyeccion se regenera ENTERA desde el inicio, con la misma tasa.'),
+          e('li', { style: { color: 'var(--text-muted)' } }, 'Solo es seguro si el banco aun no te ha facturado ninguna cuota de este plan.')
+        )
+      ),
+      e('div', { className: 'modal-actions' },
+        e('button', { type: 'button', className: 'btn', onClick: () => setConfirmando(false) }, 'Volver'),
+        e('button', { type: 'button', className: 'btn btn-primary', onClick: () => onSave({ num_cuotas: M }) }, 'Confirmar cambio')
+      )
+    );
+  }
+
+  return e('form', { onSubmit: (ev) => { ev.preventDefault(); if (valido) setConfirmando(true); } },
+    e('div', { style: { fontSize: 13, color: 'var(--text-muted)', marginBottom: 12, lineHeight: 1.5 } },
+      'Plan actual: ' + (item.num_cuotas || '?') + ' cuotas por ' + fmtCOP(monto) + '.'),
+    e('div', { className: 'form-group' },
+      e('label', { className: 'form-label' }, 'Nuevo numero de cuotas'),
+      e('input', { type: 'number', className: 'form-input', value: numCuotas, min: 1, max: 120, onChange: ev => setNumCuotas(ev.target.value) }),
+      valido && e('div', { className: 'form-hint' }, 'Quedaria en ' + M + ' cuota(s) de ~' + fmtCOP(capitalPorCuota) + ' de capital, mas sus intereses.'),
+      err && e('div', { className: 'form-hint', style: { color: 'var(--danger)' } }, err)
+    ),
+    e('div', { className: 'modal-actions' },
+      e('button', { type: 'button', className: 'btn', onClick: onCancel }, 'Cancelar'),
+      e('button', { type: 'submit', className: 'btn btn-primary', disabled: !valido }, 'Continuar')
+    )
+  );
+}
+
 function ReprogramarForm({ item, tarjeta, onSave, onCancel }) {
   const vigente = tarjeta.ciclo_vigente || cicloVigente(tarjeta.dia_corte);
   const tabla = item.amortizacion || [];

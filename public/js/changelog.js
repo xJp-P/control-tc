@@ -19,6 +19,9 @@ const CHANGELOG = {
     'Mientras el banco no te haya cobrado ninguna cuota, todo sigue como antes: puedes cambiar el numero de cuotas desde la compra sin restricciones.',
     'LAS CUOTAS YA COBRADAS DE UN PLAN REPROGRAMADO YA NO DICEN QUE NO DEBES NADA. Cuando reprogramas el saldo, las cuotas que el banco ya te cobro quedan guardadas como historial. Si esas cuotas todavia estan sin pagar aparecian con saldo en cero, como si no debieras nada, cuando en realidad tu extracto de ese mes te las esta cobrando. Ahora muestran lo que falta por pagar, y solo llegan a cero cuando de verdad se pagan.',
     'Y si el mes de esa cuota sigue abierto, vuelve a verse en la tabla de Compras para que puedas apartarle dinero y cuadrar el mes como con cualquier otra compra. Cuando el mes queda pagado, se retira de ahi y se queda en Diferidas como historial.',
+    'LA APP YA RESPETA LA REGLA DE RAPPICARD CON LAS CUOTAS. RappiCard solo deja cambiar las cuotas de las compras del extracto que sigue abierto: si el extracto ya cerro, el banco no acepta ningun cambio. Antes la app te dejaba intentarlo igual y el resultado no coincidia con tu tarjeta. Ahora esas compras salen bloqueadas y te dice el motivo, en vez de parecer una limitacion nuestra.',
+    'En las compras a cuotas de RappiCard que pertenecen al extracto abierto si puedes cambiar el numero de cuotas, incluso en las que no tienen una compra asociada, que antes no se podian tocar por ningun lado.',
+    'En Bancolombia todo sigue igual: ahi si se puede reprogramar el saldo de meses anteriores, y para eso esta "Reprogramar saldo restante".',
   ],
   '6.0.0': [
     'YA PUEDES ORDENAR TUS COMPRAS A MANO. Cada fila tiene ahora dos flechas para subirla o bajarla dentro de su dia. Ese orden manda: si despues editas una compra, ya no salta de sitio como pasaba antes. Una compra dividida se mueve entera, con todas sus partes.',
