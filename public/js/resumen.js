@@ -32,6 +32,10 @@ function CardResumen({ tarjeta, onDataChange }) {
   const [showDiferidaModal, setShowDiferidaModal] = useState(false);
   const [editDiferida, setEditDiferida] = useState(null);
   const [showReprogramarModal, setShowReprogramarModal] = useState(false);
+  // Animación del reordenamiento: qué filas acaban de moverse y en qué sentido. Se limpia sola con
+  // el timer, cuyo handle vive en un ref para poder cancelarlo si el usuario encadena clics.
+  const [filasMovidas, setFilasMovidas] = useState(null);
+  const movTimer = useRef(null);
   const [reproDiferida, setReproDiferida] = useState(null);
   const [showAbonoModal, setShowAbonoModal] = useState(false);
   const [movType, setMovType] = useState('compra');
@@ -408,6 +412,11 @@ function CardResumen({ tarjeta, onDataChange }) {
     // veces y el backend recibe una cadena, con lo que req.body.direccion queda undefined -> 400.
     api('/compras/' + c.id + '/mover', { method: 'POST', body: { direccion } }).then((r) => {
       if (r && r.error) { toastErr(r.error); return; }
+      // Se marca qué filas animar ANTES de refrescar: el estado sobrevive al re-render con los datos
+      // nuevos, así que la clase ya está puesta cuando la fila aparece en su sitio nuevo.
+      setFilasMovidas({ dir: direccion, movidas: r.movida_ids || [c.id], cedieron: r.desplazada_ids || [] });
+      if (movTimer.current) clearTimeout(movTimer.current);
+      movTimer.current = setTimeout(() => setFilasMovidas(null), 700);
       refreshAll();
     }).catch((err) => {
       // Sin este catch el clic era MUDO: ante un 400 la respuesta no es JSON, res.json() lanza y la
@@ -952,6 +961,14 @@ function CardResumen({ tarjeta, onDataChange }) {
         // Flechas de orden manual. Se deshabilitan en los bordes del día con el aviso educativo en el
         // `title`, para que se lea ANTES de pulsar y no como un error después. `row` trae los bordes
         // que calculó purchaseRows; sin él (llamadas sin fila) no se pintan.
+        // Clase de animacion de una fila recien reordenada. Devuelve '' cuando no hay movimiento en
+        // curso, asi que no ensucia el className del resto del tiempo.
+        const claseMov = (id) => {
+          if (!filasMovidas) return '';
+          if ((filasMovidas.movidas || []).indexOf(id) !== -1) return 'fila-movida-' + filasMovidas.dir;
+          if ((filasMovidas.cedieron || []).indexOf(id) !== -1) return 'fila-cedio';
+          return '';
+        };
         const AVISO_BORDE = 'Para mover esta compra a otro dia, por favor edite la fecha manualmente.';
         const flechasOrden = (c, row) => {
           if (!row) return null;
@@ -989,7 +1006,7 @@ function CardResumen({ tarjeta, onDataChange }) {
           const faltaBolsillo = (!esFuturoCiclo && badgeEstado === 'bolsillo_parcial') ? Math.round(bolsilloTarget - bolsillo) : 0;
           const showAsPaid = c.estado === 'pagado' || isPaidLikePast;
           const valorMostrar = isDif && c.cuotaCorte ? c.cuotaCorte : c.valor_cop;
-          return e('tr', { key: c.id, style: showAsPaid ? { background: 'rgba(52,211,153,0.10)' } : tieneParcial ? { background: 'rgba(59,130,246,0.08)' } : null },
+          return e('tr', { key: c.id, className: claseMov(c.id), style: showAsPaid ? { background: 'rgba(52,211,153,0.10)' } : tieneParcial ? { background: 'rgba(59,130,246,0.08)' } : null },
             e('td', null, fmtDate(c.fecha)),
             // Descripción compacta en UNA línea: nombre + nota personal (muted) + badge de cuota +
             // abono parcial, todos inline (flex, gap). Sin <div> en bloque para la nota → no infla
@@ -1136,7 +1153,8 @@ function CardResumen({ tarjeta, onDataChange }) {
                   }
                   const grpEsIntl = item.partes.length > 0 && !!(item.partes[0].es_internacional);
                   const grpInteres = item.partes.reduce((s, p) => s + calcInteresIntl(p), 0);
-                  const parentRow = e('tr', { key: 'grp-' + item.grupo_id, style: { background: grupoPaidPast ? 'rgba(52,211,153,0.10)' : 'var(--bg-tertiary)' } },
+                  const claseGrupo = item.partes.map(p => claseMov(p.id)).find(Boolean) || '';
+                  const parentRow = e('tr', { key: 'grp-' + item.grupo_id, className: claseGrupo, style: { background: grupoPaidPast ? 'rgba(52,211,153,0.10)' : 'var(--bg-tertiary)' } },
                     e('td', null, fmtDate(item.fecha)),
                     // Descripción compacta inline (igual que la fila simple): nombre + nota + cuota.
                     e('td', null,
@@ -1207,7 +1225,7 @@ function CardResumen({ tarjeta, onDataChange }) {
                     }
                     var childFalta = (!esFuturoCiclo && childBadge === 'bolsillo_parcial') ? Math.round(childTarget - childBol) : 0;
                     var childValor = item.esDiferida ? (c.cuotaCorte || 0) : c.valor_cop;
-                    return e('tr', { key: c.id, style: { background: childPaidPast ? 'rgba(52,211,153,0.08)' : 'rgba(99,102,241,0.04)' } },
+                    return e('tr', { key: c.id, className: claseGrupo, style: { background: childPaidPast ? 'rgba(52,211,153,0.08)' : 'rgba(99,102,241,0.04)' } },
                       e('td', null),
                       // Descripcion: vacía (la madre ya la muestra). Mantenemos indentación con muted "↳" para jerarquía visual.
                       e('td', { style: { paddingLeft: 24, fontSize: 12, color: 'var(--text-muted)' } },

@@ -270,7 +270,7 @@
     {
       "nombre": "CardResumen",
       "tipo": "function",
-      "lineas": 1871,
+      "lineas": 1889,
       "pieza": "js/resumen.js"
     },
     {

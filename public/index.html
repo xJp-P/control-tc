@@ -240,6 +240,35 @@ tbody tr.row-highlight { background: var(--accent-bg); }
 .loading { display: flex; align-items: center; justify-content: center; padding: 60px; color: var(--text-muted); }
 .spinner { width: 32px; height: 32px; border: 3px solid var(--border); border-top-color: var(--success); border-radius: 50%; animation: spin 0.6s linear infinite; margin: 0 auto; }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* Reordenar una compra: la fila entra deslizándose DESDE el lado del que viene y se resalta un
+   instante, para que el ojo la siga hasta su nueva posición. Sin esto el reordenamiento es un
+   salto seco y hay que buscar a dónde fue a parar la fila.
+   Se anima sobre las <td> y no sobre el <tr>: el transform en una fila de tabla lo ignoran varios
+   motores de render, y además el fondo propio de las filas de grupo se conserva al terminar
+   (la animación no lleva fill-mode, así que no persiste ningún estilo). */
+@keyframes filaEntraDesdeAbajo {
+  0%   { transform: translateY(15px); background-color: var(--accent-bg); }
+  70%  { background-color: var(--accent-bg); }
+  100% { transform: translateY(0); background-color: transparent; }
+}
+@keyframes filaEntraDesdeArriba {
+  0%   { transform: translateY(-15px); background-color: var(--accent-bg); }
+  70%  { background-color: var(--accent-bg); }
+  100% { transform: translateY(0); background-color: transparent; }
+}
+tr.fila-movida-arriba > td { animation: filaEntraDesdeAbajo 460ms cubic-bezier(.22,1,.36,1); }
+tr.fila-movida-abajo  > td { animation: filaEntraDesdeArriba 460ms cubic-bezier(.22,1,.36,1); }
+/* La fila DESPLAZADA por el movimiento se marca en gris, más discreta: deja claro cuál cedió el
+   sitio sin competir con la que el usuario acaba de mover. */
+tr.fila-cedio > td { animation: filaCede 460ms ease-out; }
+@keyframes filaCede {
+  0%   { background-color: rgba(148,163,184,0.16); }
+  100% { background-color: transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  tr.fila-movida-arriba > td, tr.fila-movida-abajo > td, tr.fila-cedio > td { animation: none; }
+}
 .empty-state { text-align: center; padding: 60px 20px; color: var(--text-muted); }
 .empty-state .icon { font-size: 48px; margin-bottom: 12px; }
 

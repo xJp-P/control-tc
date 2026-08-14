@@ -226,6 +226,10 @@ module.exports = function(router, ctx) {
       b.ids.forEach(id => set.run(i + 1, id));
     })();
     logAction('editar', tjNombre(c.tarjeta_id) + 'Orden manual: ' + c.descripcion + ' movida ' + dir + ' en el dia ' + c.fecha);
-    res.json({ ok: true, direccion: dir, posicion: j + 1, total_dia: unidades.length });
+    // `movida_ids` / `desplazada_ids`: con qué filas animar el intercambio. Las calcula el backend
+    // porque ya resolvió las unidades (una dividida son varias filas); recalcularlo en la vista
+    // sería duplicar esa lógica y arriesgarse a que las dos versiones se separen.
+    res.json({ ok: true, direccion: dir, posicion: j + 1, total_dia: unidades.length,
+      movida_ids: unidades[i].ids, desplazada_ids: unidades[j].ids });
   });
 };
