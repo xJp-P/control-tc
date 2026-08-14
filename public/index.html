@@ -247,22 +247,18 @@ tbody tr.row-highlight { background: var(--accent-bg); }
    Se anima sobre las <td> y no sobre el <tr>: el transform en una fila de tabla lo ignoran varios
    motores de render, y además el fondo propio de las filas de grupo se conserva al terminar
    (la animación no lleva fill-mode, así que no persiste ningún estilo). */
-/* Recorrido corto (9px) y desvanecido GRADUAL del resaltado a lo largo de toda la animación: sin
-   parada intermedia, el color no cae de golpe al final. La curva es un ease-out suave, sin el
-   frenazo de las curvas tipo "back" — el movimiento se acompaña, no se persigue. */
-@keyframes filaEntraDesdeAbajo {
-  0%   { transform: translateY(9px); background-color: var(--accent-bg); }
-  100% { transform: translateY(0); background-color: transparent; }
+/* El MOVIMIENTO lo hace FLIP desde JS (ver flipReordenar): mide dónde estaba cada fila, la coloca
+   de vuelta ahí con un transform y la deja viajar hasta su sitio nuevo. Así se ve el recorrido
+   COMPLETO entre las dos posiciones, no un desliz corto al aparecer ya colocada.
+   Aquí solo queda el RESALTADO de color, que acompaña ese viaje. */
+@keyframes filaResaltada {
+  0%   { background-color: var(--accent-bg); }
+  100% { background-color: transparent; }
 }
-@keyframes filaEntraDesdeArriba {
-  0%   { transform: translateY(-9px); background-color: var(--accent-bg); }
-  100% { transform: translateY(0); background-color: transparent; }
-}
-tr.fila-movida-arriba > td { animation: filaEntraDesdeAbajo 780ms cubic-bezier(.25,.46,.45,.94); }
-tr.fila-movida-abajo  > td { animation: filaEntraDesdeArriba 780ms cubic-bezier(.25,.46,.45,.94); }
-/* La fila DESPLAZADA por el movimiento se marca en gris, más discreta: deja claro cuál cedió el
-   sitio sin competir con la que el usuario acaba de mover. */
-tr.fila-cedio > td { animation: filaCede 780ms cubic-bezier(.25,.46,.45,.94); }
+tr.fila-movida-arriba > td, tr.fila-movida-abajo > td { animation: filaResaltada 900ms ease-out; }
+/* La fila DESPLAZADA se marca en gris, más discreta: deja claro cuál cedió el sitio sin competir
+   con la que el usuario acaba de mover. */
+tr.fila-cedio > td { animation: filaCede 900ms ease-out; }
 @keyframes filaCede {
   0%   { background-color: rgba(148,163,184,0.14); }
   100% { background-color: transparent; }

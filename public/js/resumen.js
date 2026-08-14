@@ -36,6 +36,59 @@ function CardResumen({ tarjeta, onDataChange }) {
   // el timer, cuyo handle vive en un ref para poder cancelarlo si el usuario encadena clics.
   const [filasMovidas, setFilasMovidas] = useState(null);
   const movTimer = useRef(null);
+  // Posiciones de las filas ANTES de reordenar, para la técnica FLIP.
+  const posPrevias = useRef(null);
+
+  // FLIP (First, Last, Invert, Play): la unica forma de que se vea el RECORRIDO entre las dos
+  // posiciones y no un simple desliz al aparecer ya colocada. Se mide donde estaba cada fila
+  // (First), se deja que React pinte el orden nuevo (Last), se la devuelve visualmente a su sitio
+  // viejo con un transform (Invert) y se suelta con transicion (Play).
+  //
+  // El transform va sobre las <td> y no sobre el <tr>: en layout de tabla el transform de una fila
+  // lo ignoran varios motores, y las celdas se mueven igual de bien.
+  function medirFilas() {
+    const pos = {};
+    document.querySelectorAll('tr[data-cid]').forEach(tr => {
+      // Se limpia cualquier transform que siga vivo de un movimiento anterior ANTES de medir: si el
+      // usuario encadena clics, getBoundingClientRect devolvería la posición a medio animar y el
+      // siguiente salto arrancaría desde un punto falso.
+      const celdas = tr.children;
+      for (let i = 0; i < celdas.length; i++) { celdas[i].style.transition = ''; celdas[i].style.transform = ''; }
+      pos[tr.getAttribute('data-cid')] = tr.getBoundingClientRect().top;
+    });
+    return pos;
+  }
+  function flipReordenar(previas) {
+    if (!previas) return;
+    document.querySelectorAll('tr[data-cid]').forEach(tr => {
+      const antes = previas[tr.getAttribute('data-cid')];
+      if (antes == null) return;
+      const delta = antes - tr.getBoundingClientRect().top;
+      if (!delta) return;                       // no se movio: nada que animar
+      const celdas = tr.children;
+      for (let i = 0; i < celdas.length; i++) {
+        const td = celdas[i];
+        td.style.transition = 'none';
+        td.style.transform = 'translateY(' + delta + 'px)';
+      }
+      void tr.offsetHeight;                      // reflow: fija el punto de partida
+      for (let i = 0; i < celdas.length; i++) {
+        const td = celdas[i];
+        td.style.transition = 'transform 700ms cubic-bezier(.4,0,.2,1)';
+        td.style.transform = '';
+      }
+      setTimeout(() => {
+        for (let i = 0; i < celdas.length; i++) { celdas[i].style.transition = ''; celdas[i].style.transform = ''; }
+      }, 760);
+    });
+  }
+  // useLayoutEffect corre con el DOM ya actualizado y ANTES de pintar: es justo el hueco donde el
+  // FLIP tiene que invertir la posicion, para que el usuario nunca llegue a ver el salto.
+  React.useLayoutEffect(() => {
+    if (!posPrevias.current) return;
+    flipReordenar(posPrevias.current);
+    posPrevias.current = null;
+  }, [compras]);
   const [reproDiferida, setReproDiferida] = useState(null);
   const [showAbonoModal, setShowAbonoModal] = useState(false);
   const [movType, setMovType] = useState('compra');
@@ -418,6 +471,9 @@ function CardResumen({ tarjeta, onDataChange }) {
       // Ambos setState caen en el mismo tick, así que React pinta UNA vez: la fila ya en su sitio
       // nuevo y con la clase puesta.
       return api('/compras?tarjeta_id=' + tarjeta.id + '&ciclo=' + ciclo).then((nuevas) => {
+        // FIRST: se fotografían las posiciones ANTES de que React repinte con el orden nuevo. El
+        // useLayoutEffect de arriba las recoge y hace el resto del FLIP.
+        posPrevias.current = medirFilas();
         setCompras(nuevas);
         setFilasMovidas({ dir: direccion, movidas: r.movida_ids || [c.id], cedieron: r.desplazada_ids || [], tick: Date.now() });
         if (movTimer.current) clearTimeout(movTimer.current);
@@ -1019,7 +1075,7 @@ function CardResumen({ tarjeta, onDataChange }) {
           const showAsPaid = c.estado === 'pagado' || isPaidLikePast;
           const valorMostrar = isDif && c.cuotaCorte ? c.cuotaCorte : c.valor_cop;
           const claseFila = claseMov(c.id);
-          return e('tr', { key: keyMov(c.id, claseFila), className: claseFila, style: showAsPaid ? { background: 'rgba(52,211,153,0.10)' } : tieneParcial ? { background: 'rgba(59,130,246,0.08)' } : null },
+          return e('tr', { key: keyMov(c.id, claseFila), 'data-cid': 'c' + c.id, className: claseFila, style: showAsPaid ? { background: 'rgba(52,211,153,0.10)' } : tieneParcial ? { background: 'rgba(59,130,246,0.08)' } : null },
             e('td', null, fmtDate(c.fecha)),
             // Descripción compacta en UNA línea: nombre + nota personal (muted) + badge de cuota +
             // abono parcial, todos inline (flex, gap). Sin <div> en bloque para la nota → no infla
@@ -1167,7 +1223,7 @@ function CardResumen({ tarjeta, onDataChange }) {
                   const grpEsIntl = item.partes.length > 0 && !!(item.partes[0].es_internacional);
                   const grpInteres = item.partes.reduce((s, p) => s + calcInteresIntl(p), 0);
                   const claseGrupo = item.partes.map(p => claseMov(p.id)).find(Boolean) || '';
-                  const parentRow = e('tr', { key: keyMov('grp-' + item.grupo_id, claseGrupo), className: claseGrupo, style: { background: grupoPaidPast ? 'rgba(52,211,153,0.10)' : 'var(--bg-tertiary)' } },
+                  const parentRow = e('tr', { key: keyMov('grp-' + item.grupo_id, claseGrupo), 'data-cid': 'g' + item.grupo_id, className: claseGrupo, style: { background: grupoPaidPast ? 'rgba(52,211,153,0.10)' : 'var(--bg-tertiary)' } },
                     e('td', null, fmtDate(item.fecha)),
                     // Descripción compacta inline (igual que la fila simple): nombre + nota + cuota.
                     e('td', null,
@@ -1238,7 +1294,7 @@ function CardResumen({ tarjeta, onDataChange }) {
                     }
                     var childFalta = (!esFuturoCiclo && childBadge === 'bolsillo_parcial') ? Math.round(childTarget - childBol) : 0;
                     var childValor = item.esDiferida ? (c.cuotaCorte || 0) : c.valor_cop;
-                    return e('tr', { key: keyMov(c.id, claseGrupo), className: claseGrupo, style: { background: childPaidPast ? 'rgba(52,211,153,0.08)' : 'rgba(99,102,241,0.04)' } },
+                    return e('tr', { key: keyMov(c.id, claseGrupo), 'data-cid': 'c' + c.id, className: claseGrupo, style: { background: childPaidPast ? 'rgba(52,211,153,0.08)' : 'rgba(99,102,241,0.04)' } },
                       e('td', null),
                       // Descripcion: vacía (la madre ya la muestra). Mantenemos indentación con muted "↳" para jerarquía visual.
                       e('td', { style: { paddingLeft: 24, fontSize: 12, color: 'var(--text-muted)' } },
