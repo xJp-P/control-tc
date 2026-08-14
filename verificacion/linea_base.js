@@ -59,11 +59,11 @@ module.exports = {
   // ─── Contrato HTTP ─────────────────────────────────────────────────────────
   // Recorriendo el stack del router devuelto por createApp.
   // EXACTO: repartir un router no puede perder ni inventar una ruta.
-  EXACTO_ENDPOINTS: 82,
+  EXACTO_ENDPOINTS: 83,
   EXACTO_PREFIJOS: 17,
   // Reparto por prefijo, para que un fallo diga DONDE y no solo "faltan rutas".
   ENDPOINTS_POR_PREFIJO: {
-    '/api/config': 3, '/api/tarjetas': 8, '/api/personas': 4, '/api/compras': 16,
+    '/api/config': 3, '/api/tarjetas': 8, '/api/personas': 4, '/api/compras': 17,
     '/api/avances': 8, '/api/abonos': 2, '/api/diferidas': 8, '/api/pagos': 4,
     '/api/extractos': 5, '/api/abono-capital': 2, '/api/terceros': 3, '/api/saldos-favor': 6,
     '/api/dashboard': 1, '/api/proyecciones': 1, '/api/calculadora': 1, '/api/ia': 3,

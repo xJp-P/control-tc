@@ -253,6 +253,13 @@ function aplicarMigraciones(db) {
   db.prepare("UPDATE compras SET tercero_pagado = 0 WHERE estado = 'por_cobrar' AND persona_id IS NOT NULL").run();
   db.prepare("UPDATE compras SET estado = 'pagado' WHERE estado = 'por_cobrar'").run();
 
+  // Orden MANUAL dentro de un mismo día (v6.0.0). NULL = sin orden fijado: la fila cae al criterio
+  // automático de siempre (última edición, luego id). Solo se materializa cuando el usuario toca las
+  // flechas, así que una BD que nunca las use se ordena exactamente igual que antes.
+  // Mismo patrón que `tarjetas.orden`, que ya se resuelve con COALESCE(orden, 999999).
+  try { db.prepare('SELECT orden_dia FROM compras LIMIT 1').get(); }
+  catch (e) { db.exec('ALTER TABLE compras ADD COLUMN orden_dia INTEGER'); }
+
   // Limpieza de la tabla 'log' legacy (reemplazada por 'historial', creada arriba).
   try { db.exec('DROP TABLE IF EXISTS log'); } catch (e) {}
 }

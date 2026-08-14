@@ -401,6 +401,14 @@ function CardResumen({ tarjeta, onDataChange }) {
       toast(r.credito_creado ? ('Compra reversada · saldo a favor de ' + fmtCOP(r.monto_favor) + ' creado') : 'Compra reversada');
     });
   }
+  // Orden manual dentro del día (v6.0.0). El backend materializa el orden del día y hace el swap;
+  // aquí solo se refresca. El 409 del borde trae su propio mensaje y se muestra tal cual.
+  function moverCompra(c, direccion) {
+    api('/compras/' + c.id + '/mover', { method: 'POST', body: JSON.stringify({ direccion }) }).then((r) => {
+      if (r && r.error) { toastErr(r.error); return; }
+      refreshAll();
+    });
+  }
   function saveAvance(data) {
     data.tarjeta_id = tarjeta.id; data.dia_corte = tarjeta.dia_corte;
     const method = editAvance ? 'PUT' : 'POST';
@@ -519,6 +527,8 @@ function CardResumen({ tarjeta, onDataChange }) {
         // id de orden del grupo = el menor id de sus partes (nacimiento de la compra dividida) —
         // desempate determinista FINAL ante misma fecha + misma última edición.
         _ordenId: Math.min(...items.map(c => c.id)),
+        // Orden manual del grupo: todas sus partes comparten valor, así la dividida se mueve entera.
+        _ordenDia: items.reduce((m, c) => (c.orden_dia != null && (m == null || c.orden_dia < m) ? c.orden_dia : m), null),
         // Timestamp de orden del grupo = la updated_at MÁS RECIENTE de sus partes: el grupo salta si
         // editas cualquier parte (mismo criterio que un single). Desempate primario ante misma fecha.
         _ordenTs: items.reduce((m, c) => { const t = c.updated_at || c.created_at || ''; return t > m ? t : m; }, ''),
@@ -535,6 +545,12 @@ function CardResumen({ tarjeta, onDataChange }) {
       const fb = b.tipo === 'grupo' ? b.fecha : b.data.fecha;
       const byFecha = fb.localeCompare(fa);
       if (byFecha !== 0) return byFecha;
+      // ORDEN MANUAL (v6.0.0): si el usuario fijó el orden de ese día con las flechas, MANDA sobre
+      // el salto automático por última edición. Espejo exacto del ORDER BY del backend.
+      const oa = (a.tipo === 'grupo' ? a._ordenDia : a.data.orden_dia);
+      const ob = (b.tipo === 'grupo' ? b._ordenDia : b.data.orden_dia);
+      const byOrden = (oa == null ? 999999 : oa) - (ob == null ? 999999 : ob);
+      if (byOrden !== 0) return byOrden;
       const ta = a.tipo === 'grupo' ? a._ordenTs : (a.data.updated_at || a.data.created_at || '');
       const tb = b.tipo === 'grupo' ? b._ordenTs : (b.data.updated_at || b.data.created_at || '');
       const byTs = String(tb).localeCompare(String(ta));
@@ -542,6 +558,15 @@ function CardResumen({ tarjeta, onDataChange }) {
       const ia = a.tipo === 'grupo' ? a._ordenId : a.data.id;
       const ib = b.tipo === 'grupo' ? b._ordenId : b.data.id;
       return ib - ia;
+    });
+    // Bordes del día: con ellos las flechas se deshabilitan ANTES del clic y el aviso se lee en el
+    // tooltip, en vez de descubrirlo al chocar contra el 409.
+    result.forEach((r, i) => {
+      const f = r.tipo === 'grupo' ? r.fecha : r.data.fecha;
+      const fPrev = i > 0 ? (result[i - 1].tipo === 'grupo' ? result[i - 1].fecha : result[i - 1].data.fecha) : null;
+      const fNext = i < result.length - 1 ? (result[i + 1].tipo === 'grupo' ? result[i + 1].fecha : result[i + 1].data.fecha) : null;
+      r._primeroDia = fPrev !== f;
+      r._ultimoDia = fNext !== f;
     });
     return result;
   })();
@@ -917,7 +942,24 @@ function CardResumen({ tarjeta, onDataChange }) {
           if (dias <= 0) return 0;
           return Math.round(saldo * tasaIntl * (dias / 30));
         };
-        const renderSingleRow = (c) => {
+        // Flechas de orden manual. Se deshabilitan en los bordes del día con el aviso educativo en el
+        // `title`, para que se lea ANTES de pulsar y no como un error después. `row` trae los bordes
+        // que calculó purchaseRows; sin él (llamadas sin fila) no se pintan.
+        const AVISO_BORDE = 'Para mover esta compra a otro dia, por favor edite la fecha manualmente.';
+        const flechasOrden = (c, row) => {
+          if (!row) return null;
+          const btn = (dir, icono, tope) => e('button', {
+            key: dir,
+            className: 'btn btn-sm',
+            disabled: !!tope,
+            title: tope ? AVISO_BORDE : ('Mover ' + dir + ' dentro del ' + fmtDate(c.fecha)),
+            style: Object.assign({ padding: '2px 6px', lineHeight: 1 }, tope ? { opacity: 0.35, cursor: 'not-allowed' } : null),
+            onClick: () => { if (tope) { toastErr(AVISO_BORDE); return; } moverCompra(c, dir); }
+          }, e(Ico, { name: icono, size: 12, color: 'currentColor' }));
+          return e('span', { style: { display: 'inline-flex', gap: 2, marginRight: 6, verticalAlign: 'middle' } },
+            btn('arriba', 'chevron-up', row._primeroDia), btn('abajo', 'chevron-down', row._ultimoDia));
+        };
+        const renderSingleRow = (c, row) => {
           const abonado = c.monto_abonado || 0;
           const tieneParcial = abonado > 0 && c.estado !== 'pagado';
           const bolsillo = c.monto_bolsillo || 0;
@@ -1011,6 +1053,9 @@ function CardResumen({ tarjeta, onDataChange }) {
             e('td', { style: { whiteSpace: 'nowrap' } },
               // Editar/eliminar: solo mientras no esté pagada. Cuando el ciclo está pagado el badge
               // "Pagado" vive en la columna Estado (arriba); acá queda solo la acción Reversar.
+              // Orden manual dentro del dia: va PRIMERO y no depende del estado de la compra
+              // (una pagada tambien se coloca donde el usuario quiera).
+              flechasOrden(c, row),
               !showAsPaid && e('button', { className: 'btn btn-sm', onClick: () => { setEditCompra(c); setShowCompraModal(true); } }, e(Ico, { name: 'edit', size: 14, color: 'currentColor' })),
               !showAsPaid && ' ',
               !showAsPaid && e('button', { className: 'btn btn-sm btn-danger', onClick: () => removeCompra(c.id) }, e(Ico, { name: 'trash', size: 14, color: 'currentColor' })),
@@ -1124,6 +1169,7 @@ function CardResumen({ tarjeta, onDataChange }) {
                           e(Ico, { name: 'check', size: 12, color: 'currentColor' }), 'Pagado')
                       : e('span', { className: 'badge badge-' + grupoBadge }, grupoBadge.replace(/_/g, ' '))),
                     e('td', { style: { whiteSpace: 'nowrap' } },
+                      flechasOrden(item.partes[0], item),
                       !grupoPaidPast && e('button', { className: 'btn btn-sm', onClick: (ev) => { ev.stopPropagation(); editGrupo(item); }, title: 'Editar compra dividida' }, e(Ico, { name: 'edit', size: 14, color: 'currentColor' })),
                       !grupoPaidPast && ' ',
                       !grupoPaidPast && e('button', { className: 'btn btn-sm btn-danger', onClick: (ev) => { ev.stopPropagation(); removeGrupo(item.partes); }, title: 'Eliminar compra dividida' }, e(Ico, { name: 'trash', size: 14, color: 'currentColor' }))
@@ -1201,7 +1247,7 @@ function CardResumen({ tarjeta, onDataChange }) {
                   });
                   return [parentRow, ...childRows];
                 }
-                return [renderSingleRow(item.data)];
+                return [renderSingleRow(item.data, item)];
               })
             )
           )

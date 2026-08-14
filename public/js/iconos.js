@@ -34,6 +34,7 @@ const ICONS = {
   bulb:       'M9 18h6 M10 22h4 M15.09 14c.18-.98.65-1.74 1.41-2.5A4.65 4.65 0 0018 8a6 6 0 00-12 0c0 1 .23 2.23 1.5 3.5A4.61 4.61 0 018.91 14',
   'chevron-right': 'M9 18l6-6-6-6',
   'chevron-down':  'M6 9l6 6 6-6',
+  'chevron-up':    'M18 15l-6-6-6 6',
   sparkles:   'M12 3l1.9 5.6 5.6 1.9-5.6 1.9L12 18l-1.9-5.6L4.5 10.5l5.6-1.9z M19 14l.8 2.2 2.2.8-2.2.8L19 20l-.8-2.2L16 17l2.2-.8z M6 4l.6 1.7L8 6.3l-1.4.6L6 8.5l-.6-1.6L4 6.3l1.4-.6z',
 };
 function Ico({ name, size = 18, sw = 1.8, color = 'currentColor', style, className }) {

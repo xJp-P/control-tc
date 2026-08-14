@@ -26,7 +26,10 @@ module.exports = function(router, ctx) {
     // Orden de display: fecha DESC; ante misma fecha, última EDICIÓN MANUAL primero (updated_at DESC,
     // COALESCE con created_at para filas viejas); id DESC como desempate determinista final. El frontend
     // (purchaseRows) replica exactamente este criterio para reordenar EN VIVO al guardar sin recargar.
-    sql += ' ORDER BY c.fecha DESC, COALESCE(c.updated_at, c.created_at) DESC, c.id DESC';
+    // `orden_dia` (v6.0.0) va por delante de la última edición: cuando el usuario fija un orden a
+    // mano con las flechas, ese orden MANDA y editar una compra ya no la hace saltar. Con NULL
+    // (nadie tocó las flechas ese día) el criterio es el de siempre.
+    sql += ' ORDER BY c.fecha DESC, COALESCE(c.orden_dia, 999999) ASC, COALESCE(c.updated_at, c.created_at) DESC, c.id DESC';
     const compras = db.prepare(sql).all(...params);
     const hoy = hoyLocal();
 

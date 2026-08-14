@@ -13,6 +13,9 @@
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
   '6.0.0': [
+    'YA PUEDES ORDENAR TUS COMPRAS A MANO. Cada fila tiene ahora dos flechas para subirla o bajarla dentro de su dia. Ese orden manda: si despues editas una compra, ya no salta de sitio como pasaba antes. Una compra dividida se mueve entera, con todas sus partes.',
+    'Las flechas solo mueven dentro del mismo dia, porque la tabla se ordena por fecha. Al llegar al primero o al ultimo del dia la flecha se apaga y te explica que, para llevarla a otro dia, tienes que editarle la fecha.',
+    'Si le cambias la fecha a una compra que habias colocado a mano, aterriza en la posicion natural de su nuevo dia y desde ahi la puedes reordenar.',
     'CUANDO TE DEVUELVEN UNA COMPRA, EL DINERO VA AL MES QUE TE LO DESCONTO EL BANCO. Al marcar una compra como devuelta, la app la anulaba dentro de su propio mes. El banco no hace eso: cobra la compra igual en su mes y aplica el dinero devuelto a la deuda mas antigua que tengas sin pagar. El total salia bien, pero el mes no: te pedia de mas en el mes viejo y de menos en el nuevo, y si pagabas lo que decia la app le girabas dinero de mas al banco.',
     'Ahora la devolucion viaja sola al extracto anterior y rebaja lo que te falta por pagar, con una linea que explica de que compra viene. La compra sigue marcada como "Reversada" en su mes, igual que en tu extracto real, donde aparecen el cargo y su devolucion anulandose.',
     'Tu deuda total y tu cupo no cambian ni un peso: lo que se corrige es en que mes cae cada cosa.',
