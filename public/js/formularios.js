@@ -82,7 +82,15 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
   // diferirse (la amortización corre sobre el COP); solo se excluye la compra USD PURA (sin valor
   // en pesos, ej. MC/Amex dual), que no es amortizable en COP.
   const esUsdPura = !!(item && item.valor_usd > 0 && !(item.valor_cop > 0));
-  const cuotasEditables = !!item && !item._isGrupo && !esUsdPura && !((item.monto_abonado || 0) > 0);
+  // Cuotas del plan YA FACTURADAS por el banco (backend, GET /compras: su corte cayo en un ciclo
+  // anterior al vigente). Este campo cambia el plan COMPLETO desde el origen, asi que con >=1 cuota
+  // facturada borraria cuotas que el banco ya cobro: se bloquea y se manda a "Reprogramar saldo
+  // restante" (Diferidas), que sella lo facturado y solo reprograma el saldo. Cubre las DOS
+  // transiciones -N->M y N->1-, porque revertir tiene exactamente el mismo efecto destructivo.
+  // El criterio lo calcula el BACKEND para que sea el mismo que la `k` de reprogramar-saldo.
+  const cuotasFacturadas = item ? (parseInt(item.cuotas_facturadas, 10) || 0) : 0;
+  const yaFacturoCuotas = cuotasFacturadas >= 1;
+  const cuotasEditables = !!item && !item._isGrupo && !esUsdPura && !((item.monto_abonado || 0) > 0) && !yaFacturoCuotas;
   // Cuotas con las que la compra está HOY en la BD (diferida → su total real; si no, 1).
   const cuotasOriginales = item ? ((item.estado === 'diferida' || item.diferida_id) ? (parseInt(item.cuotas_total || item.num_cuotas, 10) || 1) : 1) : 1;
 
@@ -674,19 +682,26 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
     ),
     e('div', { className: 'form-row' },
       !(item && item._isGrupo) && e('div', { className: 'form-group' },
-        e('label', { className: 'form-label' }, 'Cuotas'),
+        // El nombre desambigua de entrada: este campo rehace el PLAN COMPLETO. La otra operacion
+        // -"Reprogramar saldo restante"- vive en Diferidas y solo toca el saldo no facturado.
+        e('label', { className: 'form-label' }, (item && cuotasOriginales > 1) ? 'Cuotas (plan completo, desde el inicio)' : 'Cuotas'),
         // Libertad total: 1→N convierte, N→M reprograma, N→1 revierte (endpoints dedicados tras el
         // PUT; la fila original queda intacta). Bloqueado solo para grupos, USD o con abono parcial.
         e('input', { type: 'number', className: 'form-input', value: numCuotas, onChange: ev => setNumCuotas(ev.target.value), min: 1, max: 60, disabled: !!item && !cuotasEditables, style: (item && !cuotasEditables) ? { opacity: 0.6, cursor: 'not-allowed' } : undefined }),
-        item && !cuotasEditables && e('div', { className: 'form-hint', style: { color: 'var(--text-muted)' } },
-          'Las cuotas no se pueden cambiar aquí: la compra es de un ciclo ya cerrado, es dividida, tiene abonos o es una compra solo en dólares (sin valor en pesos).'
+        // Dos motivos distintos, dos mensajes: el de "ya facturó" no es un no, es un desvío — dice a
+        // dónde ir. El genérico dejó de mencionar el ciclo cerrado, que ya no bloquea desde v5.8.0.
+        item && !cuotasEditables && yaFacturoCuotas && e('div', { className: 'form-hint', style: { color: 'var(--warning)' } },
+          'El banco ya facturó ' + cuotasFacturadas + ' cuota' + (cuotasFacturadas === 1 ? '' : 's') + ' de este plan. Cambiarlas aquí reharía el plan desde el inicio y borraría lo ya cobrado. Para cambiar el plan usa "Reprogramar saldo restante" en la pestaña Diferidas: sella lo facturado y reprograma solo el saldo.'
+        ),
+        item && !cuotasEditables && !yaFacturoCuotas && e('div', { className: 'form-hint', style: { color: 'var(--text-muted)' } },
+          'Las cuotas no se pueden cambiar aquí: la compra es dividida, tiene un abono parcial o es una compra solo en dólares (sin valor en pesos).'
         ),
         item && cuotasEditables && (parseInt(numCuotas, 10) || 1) !== cuotasOriginales && e('div', { className: 'form-hint', style: { color: 'var(--warning)' } },
           cuotasOriginales === 1
             ? 'Esta compra se convertirá en diferida a ' + numCuotas + ' cuotas conservando su fecha original.'
             : (parseInt(numCuotas, 10) || 1) === 1
               ? 'Esta compra volverá a ser de 1 cuota: se elimina su plan de cuotas y el dinero apartado por cuota se consolida en el bolsillo de la compra.'
-              : 'El plan de cuotas se reprogramará de ' + cuotasOriginales + ' a ' + numCuotas + ' cuotas (la proyección se regenera con la misma tasa).'
+              : 'Cambiar plan completo (desde el inicio): el plan pasa de ' + cuotasOriginales + ' a ' + numCuotas + ' cuotas y la proyección se regenera entera con la misma tasa. Si el banco ya te facturó cuotas, lo que necesitas es "Reprogramar saldo restante" en Diferidas.'
         ),
         ((!item && numCuotas > 1) || (item && cuotasEditables && cuotasOriginales === 1 && numCuotas > 1)) && e('div', null,
           e('div', { style: { marginTop: 6, marginBottom: 4 } },

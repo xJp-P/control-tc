@@ -7,6 +7,7 @@
 const { hoyLocal, daysBetween } = require('../../helpers/dates');
 const { calcularAmortizacionDiferida } = require('../../engine/amortizacion');
 const { nuOptsDif, aplicaIntInternacional } = require('../../helpers/banco');
+const { cicloConCorte, getCortesCustomMap } = require('../../helpers/cortes');
 
 module.exports = function(router, ctx) {
   const { db, logAction, tjNombre, calcCiclo, avisoCifraOficial, esCicloPagado, esCicloCerrado, targetBolsillo } = ctx;
@@ -62,6 +63,14 @@ module.exports = function(router, ctx) {
       return rest;
     };
 
+    // Ciclo VIGENTE por tarjeta (consciente del corte adelantado), cacheado: el listado recorre
+    // cientos de compras y `getCortesCustomMap` es una consulta por tarjeta, no por fila.
+    const _vigCache = {};
+    const cicloVigenteDe = (tjId, diaCorte) => {
+      if (_vigCache[tjId] === undefined) _vigCache[tjId] = cicloConCorte(hoy, diaCorte, getCortesCustomMap(db, tjId));
+      return _vigCache[tjId];
+    };
+
     const result = compras.map(c => {
       const interes_intl = calcInteresIntlCompra(c);
       if (c.estado !== 'diferida' || !c.diferida_id) {
@@ -82,6 +91,20 @@ module.exports = function(router, ctx) {
         cuota_num: cuotaNum,
         cuotas_total: dif.num_cuotas,
         reprog_total: dif.reprog_total || null,
+        // Cuotas YA FACTURADAS (su corte cayo en un ciclo anterior al vigente). Es la MISMA `k` que
+        // calcula POST /compras/:id/reprogramar-saldo, y se expone aqui para que el formulario de
+        // Compras gatee el campo Cuotas con ese unico criterio: si el frontend lo dedujera por su
+        // cuenta, una franja de dias podria quedar bloqueada en el formulario y a la vez sin nada
+        // que sellar en "Reprogramar saldo". NO se usa "ciclo pagado": una cuota facturada en un
+        // ciclo cerrado impago ya se facturo igual, y regenerar el plan desde el origen la borraria.
+        //
+        // Se amortiza sobre `dif.monto` y NO se reusa `amort` (que corre sobre c.valor_cop para el
+        // desglose de la cuota): en una compra USD PURA valor_cop es 0, la tabla sale VACIA y el
+        // conteo daba 0 sobre planes con 36 cuotas ya facturadas. El gate no llegaba a fallar -las
+        // USD puras ya estan excluidas antes-, pero el campo mentia, y `dif.monto` es exactamente la
+        // entrada que usa reprogramar-saldo, que es lo que este campo promete replicar.
+        cuotas_facturadas: calcularAmortizacionDiferida(dif.monto, dif.tasa_mv, dif.num_cuotas, dif.fecha_compra, dif.fecha_primer_corte, null, nuOptsDif(db, dif))
+          .tabla.filter(q => q.fechaCorte.slice(0, 7) < cicloVigenteDe(c.tarjeta_id, c._tj_dia_corte || 30)).length,
         // Marca de diferida HIJA de reprogramacion de saldo: el frontend la OCULTA de la tabla de Compras
         // (la compra renacida no es una compra real, es el saldo vivo del plan -> vive solo en Diferidas).
         sin_gracia_cuota1: dif.sin_gracia_cuota1 || 0,

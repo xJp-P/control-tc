@@ -12,6 +12,12 @@
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '6.1.0': [
+    'REPROGRAMAR EL SALDO DE UNA COMPRA A CUOTAS AHORA ESTA A UN CLIC. El boton vive en la fila de cada compra a cuotas, en la pestana Diferidas. Antes habia que abrir primero la tabla de amortizacion para encontrarlo.',
+    'LAS DOS FORMAS DE CAMBIAR CUOTAS YA NO SE CONFUNDEN. Se llaman distinto porque hacen cosas distintas: "Cuotas (plan completo, desde el inicio)" en el formulario de la compra rehace el plan entero desde cero, y "Reprogramar saldo restante" en Diferidas respeta lo que el banco ya te cobro y solo reparte lo que queda.',
+    'SI EL BANCO YA TE COBRO CUOTAS DE UN PLAN, EL FORMULARIO DE LA COMPRA YA NO TE DEJA CAMBIAR EL NUMERO AHI. Antes si te dejaba, y rehacer el plan desde el inicio borraba cuotas que ya habias pagado. Ahora el campo se bloquea, te dice cuantas cuotas van cobradas y te manda a "Reprogramar saldo restante", que es la via que conserva ese historial.',
+    'Mientras el banco no te haya cobrado ninguna cuota, todo sigue como antes: puedes cambiar el numero de cuotas desde la compra sin restricciones.',
+  ],
   '6.0.0': [
     'YA PUEDES ORDENAR TUS COMPRAS A MANO. Cada fila tiene ahora dos flechas para subirla o bajarla dentro de su dia. Ese orden manda: si despues editas una compra, ya no salta de sitio como pasaba antes. Una compra dividida se mueve entera, con todas sus partes.',
     'Las flechas solo mueven dentro del mismo dia, porque la tabla se ordena por fecha. Al llegar al primero o al ultimo del dia la flecha se apaga y te explica que, para llevarla a otro dia, tienes que editarle la fecha.',

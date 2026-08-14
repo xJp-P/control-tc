@@ -30,7 +30,10 @@ module.exports = function(router, ctx) {
         WHERE c.diferida_id = ? AND c.persona_id IS NOT NULL LIMIT 1`).get(d.id);
       // Compra vinculada a esta diferida (para gestionar bolsillo + mostrar su nota personal en la
       // tabla). Toma la primera/principal.
-      const compraVinc = db.prepare(`SELECT id, monto_bolsillo, valor_cop, grupo_id, nota_personal FROM compras WHERE diferida_id = ? ORDER BY id LIMIT 1`).get(d.id);
+      // valor_usd/monto_abonado se traen para los flags de elegibilidad de abajo: el boton
+      // "Reprogramar saldo" vive ahora en la FILA, asi que su estado no puede depender de haber
+      // abierto antes el detalle (GET /:id, el unico sitio donde existian estos flags).
+      const compraVinc = db.prepare(`SELECT id, monto_bolsillo, valor_cop, valor_usd, monto_abonado, grupo_id, nota_personal FROM compras WHERE diferida_id = ? ORDER BY id LIMIT 1`).get(d.id);
       // Per-cuota bolsillo: mapa {cuota_num: monto} para la compra vinculada
       const bolPorCuota = {};
       if (compraVinc) {
@@ -49,6 +52,11 @@ module.exports = function(router, ctx) {
         persona_color: compraPersona ? compraPersona.color : null,
         compra_id: compraVinc ? compraVinc.id : null,
         grupo_id: compraVinc ? compraVinc.grupo_id : null,
+        // Elegibilidad para "Reprogramar saldo" — MISMOS tres flags y MISMA definicion que GET /:id,
+        // para que la fila y el detalle no puedan discrepar sobre si el boton va habilitado.
+        es_usd_pura: !!(compraVinc && compraVinc.valor_usd > 0 && !(compraVinc.valor_cop > 0)),
+        tiene_abono_parcial: !!(compraVinc && (compraVinc.monto_abonado || 0) > 0),
+        tercero_con_reembolso: !!(compraVinc && compraTerceroConReembolso(db, compraVinc.id)),
         // Nota personal de la compra vinculada (se muestra junto al nombre en la tabla, igual que en Compras).
         nota_personal: compraVinc ? (compraVinc.nota_personal || null) : null,
         // Bolsillo total (cache) y per-cuota

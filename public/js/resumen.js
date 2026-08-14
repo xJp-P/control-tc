@@ -509,6 +509,29 @@ function CardResumen({ tarjeta, onDataChange }) {
     if (!await confirmDialog('Eliminar esta diferida?', { confirmText: 'Eliminar' })) return;
     api('/diferidas/' + id, { method: 'DELETE' }).then(() => { refreshAll(); setSelectedDiferida(null); setDiferidaDetail(null); toast('Diferida eliminada'); });
   }
+  // Elegibilidad de "Reprogramar saldo". UN SOLO punto para la FILA y para el DETALLE: si cada
+  // superficie repitiera la cadena de ternarios, bastaria anadir un guard en una para que la otra
+  // ofreciera un boton que el backend rechaza. No se bloquea por tercero_con_reembolso: el motor
+  // preserva su libro (cada sellada conserva su reembolso + interes_sellado).
+  function motivoNoReprogramable(d) {
+    if (!d) return 'Sin datos de la diferida';
+    if (!d.compra_id) return 'Sin compra vinculada: todavia no se puede reprogramar el saldo de una diferida suelta';
+    if (d.grupo_id) return 'Compra dividida: reprograma cada parte por separado';
+    if (d.es_usd_pura) return 'Compra solo en dolares (no soportado)';
+    if (d.tiene_abono_parcial) return 'Tiene un abono parcial registrado';
+    return null;
+  }
+  // El modal necesita `amortizacion` para calcular k y el saldo, y el LISTADO no la trae (seria una
+  // tabla completa por cada diferida). Por eso la fila pide el detalle al abrir, en vez de exponer
+  // la amortizacion en el listado: el modal siempre trabaja con datos frescos del backend.
+  function abrirReprogramar(id) {
+    api('/diferidas/' + id).then(dd => {
+      if (!dd || dd.error) { toastErr((dd && dd.error) || 'No se pudo cargar el plan de cuotas.'); return; }
+      const motivo = motivoNoReprogramable(dd);
+      if (motivo) { toastErr(motivo); return; }
+      setReproDiferida(dd); setShowReprogramarModal(true);
+    }).catch(() => toastErr('No se pudo cargar el plan de cuotas.'));
+  }
   // Reprogramacion RETROACTIVA de saldo (Sellar y Renacer): opera sobre la COMPRA vinculada.
   function saveReprograma(data) {
     const cid = reproDiferida && reproDiferida.compra_id;
@@ -1457,6 +1480,13 @@ function CardResumen({ tarjeta, onDataChange }) {
                       bolsilloCellDif(d),
                       e('td', { style: { whiteSpace: 'nowrap' } },
                         e('button', { className: 'btn btn-sm', title: 'Editar nombre y nota', onClick: (ev) => { ev.stopPropagation(); setEditDiferida(d); setShowDiferidaModal(true); } }, e(Ico, { name: 'edit', size: 14, color: 'currentColor' })),
+                        ' ',
+                        // "Reprogramar saldo" en la FILA: es la operacion correcta para una diferida que ya
+                        // facturo cuotas, y hasta ahora obligaba a desplegar antes el detalle de amortizacion.
+                        (() => {
+                          const motivo = motivoNoReprogramable(d);
+                          return e('button', { className: 'btn btn-sm', disabled: !!motivo, title: motivo || 'Reprogramar el saldo restante a un nuevo numero de cuotas', style: motivo ? { opacity: 0.5, cursor: 'not-allowed' } : undefined, onClick: (ev) => { ev.stopPropagation(); if (motivo) return; abrirReprogramar(d.id); } }, e(Ico, { name: 'refresh', size: 14, color: 'currentColor' }));
+                        })(),
                         !cicloPagadoDif && ' ',
                         !cicloPagadoDif && e('button', { className: 'btn btn-sm btn-danger', onClick: (ev) => { ev.stopPropagation(); removeDiferida(d.id); } }, e(Ico, { name: 'trash', size: 14, color: 'currentColor' }))
                       )
@@ -1558,8 +1588,10 @@ function CardResumen({ tarjeta, onDataChange }) {
             // Ya NO se bloquea por tercero_con_reembolso: reprogramar-saldo preserva el libro del tercero
             // (cada cuota sellada conserva su reembolso integro + interes_sellado, y la renacida hereda
             // su persona_id). El flag sigue expuesto por GET /diferidas/:id para otros usos.
-            const noElegible = !dd.compra_id ? 'Sin compra vinculada' : dd.grupo_id ? 'Compra dividida: reprograma cada parte por separado' : dd.es_usd_pura ? 'Compra solo en dolares (no soportado)' : dd.tiene_abono_parcial ? 'Tiene un abono parcial registrado' : null;
-            return e('button', { className: 'btn btn-sm', disabled: !!noElegible, title: noElegible || 'Reprogramar el saldo restante a un nuevo numero de cuotas', style: noElegible ? { opacity: 0.5, cursor: 'not-allowed', marginRight: 6 } : { marginRight: 6 }, onClick: () => { if (noElegible) return; setReproDiferida(dd); setShowReprogramarModal(true); } }, e(Ico, { name: 'refresh', size: 14, color: 'currentColor' }), ' Reprogramar');
+            // El motivo sale del MISMO helper que usa la fila, y se abre por la MISMA via (que releé el
+            // detalle): dos superficies, un solo criterio y un solo origen de datos para el modal.
+            const noElegible = motivoNoReprogramable(dd);
+            return e('button', { className: 'btn btn-sm', disabled: !!noElegible, title: noElegible || 'Reprogramar el saldo restante a un nuevo numero de cuotas', style: noElegible ? { opacity: 0.5, cursor: 'not-allowed', marginRight: 6 } : { marginRight: 6 }, onClick: () => { if (noElegible) return; abrirReprogramar(dd.id); } }, e(Ico, { name: 'refresh', size: 14, color: 'currentColor' }), ' Reprogramar saldo restante');
           })(),
           e('button', { className: 'btn btn-sm', onClick: () => { setSelectedDiferida(null); setDiferidaDetail(null); }, style: { fontSize: 18, padding: '4px 10px' } }, '\u{2715}')
         ),
