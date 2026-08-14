@@ -187,6 +187,10 @@ function cargarFrontend(raiz, opts) {
     useMemo: (f) => (typeof f === 'function' ? f() : undefined), Fragment: 'Fragment',
   };
   const ReactDOM = { createRoot: () => { marcas.createRoot++; return { render: () => { marcas.render++; } }; } };
+  // `opts.fetch` deja que F9 ejercite la capa api() con un doble instrumentado. Mismo motivo que
+  // opts.React: un sandbox aparte acabaria teniendo su propia lista de globales, y dos listas que
+  // se separan sin que nadie lo note es justo lo que este archivo evita.
+  const fetchDoble = (opts && opts.fetch) || (() => Promise.resolve({ ok: true, json: () => Promise.resolve({}) }));
   const almacen = {};
   const localStorage = {
     getItem: (k) => (k in almacen ? almacen[k] : null),
@@ -201,7 +205,7 @@ function cargarFrontend(raiz, opts) {
   const ventana = { localStorage, addEventListener: () => {}, matchMedia: () => ({ matches: false, addEventListener: () => {} }) };
   const ctx = vm.createContext({
     React, ReactDOM, document: documento, window: ventana, localStorage,
-    fetch: () => Promise.resolve({ ok: true, json: () => Promise.resolve({}) }),
+    fetch: fetchDoble,
     console: { log: () => {}, warn: () => {}, error: () => {} },
     setTimeout: () => 0, clearTimeout: () => {}, setInterval: () => 0,
     navigator: { clipboard: { writeText: () => Promise.resolve() } },
@@ -853,7 +857,140 @@ const F8 = {
   },
 };
 
-module.exports = [F1, F2, F3, F4, F5, F6, F7, F8];
+// ─── F9: la capa api(), ejecutada de verdad ─────────────────────────────────
+//
+// POR QUE EXISTE: `api()` es el unico camino por el que el frontend habla con el backend -122
+// llamadas, 70 de ellas de ESCRITURA- y ningun detector la ejecutaba. Los smokes que se escriben a
+// mano suelen invocar el handler directamente, asi que prueban el backend y NO el camino real: por
+// ahi paso el doble `JSON.stringify` de v6.0.0, que ademas fallaba EN SILENCIO (body-parser
+// respondia 400, la respuesta no era JSON, `res.json()` lanzaba y la promesa se rechazaba sin
+// `.catch`: ni toast, ni consola, ni pista).
+//
+// Los tres contratos que fija, y que son faciles de romper sin que nada mas se entere:
+//   1. api() SERIALIZA ELLA MISMA. Un llamador que pase `body: JSON.stringify(x)` serializa dos
+//      veces y el backend recibe una cadena escapada.
+//   2. api() NO LANZA en 4xx/5xx: resuelve con el cuerpo de error. Por eso los llamadores tienen
+//      que mirar `resp.error` -lo aprendio v5.7.1, cuando un pago fallido mostraba toast de exito-.
+//   3. api() SI RECHAZA cuando el cuerpo no es JSON (un 404 en HTML, por ejemplo). Ese rechazo es
+//      el que exige `.catch` en el llamador.
+const F9 = {
+  id: 'F9',
+  nombre: 'Capa api() ejecutada: serializacion, promesas y fallos que no se ven',
+  async medir(raiz) {
+    const notas = [];
+    const cifras = {};
+
+    // Doble de fetch: anota lo que se le pasa y responde lo que pida el caso de prueba.
+    let ultima = null;
+    let guion = () => ({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }) });
+    const fetchEspia = (url, init) => { ultima = { url, init }; return Promise.resolve(guion()); };
+
+    let ctx;
+    try { ({ ctx } = cargarFrontend(raiz, { fetch: fetchEspia })); }
+    catch (e) { return resultado(false, {}, ['FALLO cargando el frontend: ' + e.message]); }
+    if (typeof ctx.api !== 'function') return resultado(false, {}, ['FALLO: api() no es alcanzable en el ambito global']);
+
+    // ── 1) lo que api() ENVIA ────────────────────────────────────────────────
+    try {
+      const cuerpo = { num_cuotas: 3, nota: 'con "comillas" y acentos: ñ' };
+      await ctx.api('/compras/1/reprogramar', { method: 'POST', body: cuerpo });
+      const enviado = ultima && ultima.init ? ultima.init.body : undefined;
+      cifras.tipoBody = typeof enviado;
+      if (typeof enviado !== 'string') {
+        notas.push('FALLO: api() no serializo el body (llego ' + typeof enviado + ') -> el backend recibiria [object Object]');
+      } else {
+        let una;
+        try { una = JSON.parse(enviado); } catch (e) { una = null; }
+        if (!una || typeof una !== 'object') {
+          notas.push('FALLO: el body enviado no es JSON valido: ' + String(enviado).slice(0, 60));
+        } else if (typeof una === 'string' || typeof JSON.parse(enviado) === 'string') {
+          notas.push('FALLO: DOBLE serializacion -> el backend recibe una cadena escapada, no un objeto');
+        } else if (una.num_cuotas !== 3) {
+          notas.push('FALLO: el body llego alterado: ' + enviado.slice(0, 80));
+        }
+        // La firma exacta del bug de v6.0.0: si alguien vuelve a stringificar en el llamador, el
+        // valor que ve fetch es la cadena YA escapada, y parsearla una vez devuelve un string.
+        if (typeof una === 'string') notas.push('FALLO: parsear el body una vez devuelve un string -> venia stringificado dos veces');
+      }
+      const ct = ultima && ultima.init && ultima.init.headers ? ultima.init.headers['Content-Type'] : null;
+      if (ct !== 'application/json') notas.push('FALLO: falta el Content-Type application/json (llego ' + ct + ')');
+      if (!ultima || String(ultima.url).indexOf('/api/compras/1/reprogramar') === -1) {
+        notas.push('FALLO: la URL no se compuso sobre la base /api: ' + (ultima && ultima.url));
+      }
+      if (ultima.init.method !== 'POST') notas.push('FALLO: el method no se propago (llego ' + ultima.init.method + ')');
+    } catch (e) {
+      notas.push('FALLO ejecutando api() con body: ' + e.message);
+    }
+
+    // ── 2) sin body no se inventa uno ────────────────────────────────────────
+    try {
+      ultima = null;
+      await ctx.api('/compras?tarjeta_id=4');
+      const b = ultima && ultima.init ? ultima.init.body : 'SIN-INIT';
+      if (b !== undefined) notas.push('FALLO: una peticion sin body mando body=' + JSON.stringify(b) + ' (un GET con cuerpo puede ser rechazado)');
+    } catch (e) {
+      notas.push('FALLO ejecutando api() sin body: ' + e.message);
+    }
+
+    // ── 3) 4xx: RESUELVE con el error, no lanza ──────────────────────────────
+    // Es el contrato que obliga a los llamadores a mirar `resp.error`. Si algun dia api() pasara a
+    // lanzar, decenas de `.then(r => ...)` dejarian de ejecutarse en silencio.
+    try {
+      guion = () => ({ ok: false, status: 403, json: () => Promise.resolve({ error: 'ciclo pagado' }) });
+      const r = await ctx.api('/compras/1', { method: 'PUT', body: { x: 1 } });
+      if (!r || r.error !== 'ciclo pagado') notas.push('FALLO: con 403 api() no devolvio el cuerpo de error: ' + JSON.stringify(r));
+      cifras.err4xx = 'resuelve';
+    } catch (e) {
+      notas.push('FALLO: api() LANZO ante un 403 -> los llamadores que hacen .then(r => r.error) dejarian de ejecutarse: ' + e.message);
+      cifras.err4xx = 'lanza';
+    }
+
+    // ── 4) cuerpo no-JSON: RECHAZA (y por eso hace falta .catch) ─────────────
+    let rechazo = false;
+    try {
+      guion = () => ({ ok: false, status: 404, json: () => Promise.reject(new SyntaxError('Unexpected token <')) });
+      await ctx.api('/ruta/que/no/existe');
+    } catch (e) { rechazo = true; }
+    cifras.noJson = rechazo ? 'rechaza' : 'silencioso';
+    if (!rechazo) {
+      notas.push('FALLO: con un cuerpo que no es JSON api() NO rechaza -> el fallo se vuelve invisible ' +
+        'para el usuario y para la consola (es exactamente como se comporto el bug del doble stringify)');
+    }
+
+    // ── 5) ningun llamador vuelve a serializar por su cuenta ─────────────────
+    // El aserto es de CERO, no un umbral: hoy no queda ninguno y cualquier reaparicion es el bug.
+    const { piezas } = piezasEnOrden(raiz);
+    const dobles = [];
+    for (const p of piezas) {
+      if (!p.fuente) continue;
+      const re = /body:\s*JSON\.stringify/g;
+      let m;
+      while ((m = re.exec(p.fuente)) !== null) {
+        const linea = p.fuente.slice(0, m.index).split('\n').length;
+        dobles.push(p.nombre + ':' + linea);
+      }
+    }
+    cifras.dobleStringify = dobles.length;
+    if (dobles.length) {
+      notas.push('FALLO: ' + dobles.length + ' llamada(s) serializan el body ANTES de api(), que ya serializa -> ' +
+        'el backend recibe una cadena escapada y responde 400 sin JSON: ' + dobles.slice(0, 4).join(', '));
+    }
+
+    return resultado(notas.length === 0, cifras, notas);
+  },
+  defecto: 'api() deja de serializar el body (lo pasa crudo a fetch): rompe las 70 escrituras del frontend y ningun otro detector lo ve',
+  mutar(raiz) {
+    // Por CONTENIDO y lanzando si no aparece. Se elige el corazon de la capa: sin el stringify,
+    // fetch recibe un objeto y el backend un "[object Object]". F1 lo ve sintacticamente correcto,
+    // F5 no nota el cambio (mismas lineas) y F4/F6 siguen viendo el simbolo `api` en su sitio.
+    const aguja = 'JSON.stringify(opts.body)';
+    if (!mutarEnAlgunaPieza(raiz, aguja, 'opts.body')) {
+      throw new Error('no se encontro "' + aguja + '" en la capa api()');
+    }
+  },
+};
+
+module.exports = [F1, F2, F3, F4, F5, F6, F7, F8, F9];
 module.exports.medirSimbolos = medirSimbolos;
 module.exports.piezasEnOrden = piezasEnOrden;
 module.exports.RUTA_SIMBOLOS = RUTA_SIMBOLOS;
