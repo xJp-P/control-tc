@@ -158,8 +158,15 @@ const R6 = {
         const c = r0.c, ext = c.ext;
         chk('el extracto declara que trae cifra oficial (' + c.tarjeta + ', ' + ext.ciclo + ')' + (r0.sembrado ? ' [sembrada por la suite]' : ''),
           !!ext.tiene_oficial, 'tiene_oficial=' + ext.tiene_oficial);
+        // Se paga el FALTANTE menos 500, no el minimo completo: si el extracto ya traia abonos
+        // (un pago parcial del usuario), pagar el minimo entero lo sella de largo y el aserto medía
+        // otra cosa. Paso en ago-2026 con el pago parcial de 1.400.000 sobre la Visa de julio.
+        const yaAbonado = Number(ext.monto_pagado || 0);
+        const faltante = Number(ext.pago_minimo) - yaAbonado;
+        chk('el extracto elegido deja un faltante > 500 con que probar la banda', faltante > 500,
+          'faltante=' + faltante + ' (minimo ' + ext.pago_minimo + ' - abonado ' + yaAbonado + ')');
         const r = await pedir(port, 'PUT', '/api/extractos/' + ext.id + '/pagar',
-          { monto_pagado: Number(ext.pago_minimo) - 500, fecha_pagado: '2026-08-01' });
+          { monto_pagado: faltante - 500, fecha_pagado: '2026-08-01' });
         chk('con cifra oficial, faltar 500 NO sella', !(r.j && r.j.pagadoCompleto),
           'pagadoCompleto=' + (r.j && r.j.pagadoCompleto) + ' (con la cifra del banco la banda es de $1)');
       });

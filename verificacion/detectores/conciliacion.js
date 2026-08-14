@@ -34,6 +34,15 @@ const B = require('../linea_base');
 const dd = (iso) => { const p = String(iso).slice(0, 10).split('-'); return p[2] + '/' + p[1]; };
 const cop = (n) => '$' + Math.round(n).toLocaleString('es-CO');
 
+// Retira los abonos de un ciclo para que vuelva a ser "previo impago". CADA conApp trabaja sobre una
+// COPIA NUEVA de produccion, asi que sembrar solo en la copia que ELIGE el escenario no sirve de
+// nada: hay que repetirlo en la copia donde el escenario se EJECUTA. Ese fue justo el fallo de la
+// primera version de esta siembra.
+function sembrarPrevioImpago(db, tarjetaId, cicloPrevio) {
+  db.prepare("UPDATE extractos SET monto_pagado=0 WHERE tarjeta_id=? AND ciclo=?").run(tarjetaId, cicloPrevio);
+  db.prepare("DELETE FROM pagos WHERE tarjeta_id=? AND ciclo=? AND tipo='abono_extracto'").run(tarjetaId, cicloPrevio);
+}
+
 function textoSintetico(mv, compraReverso, montoAbono) {
   // Encabezado con etiqueta e importe en lineas separadas: es lo que lee `parsearResumen` de las
   // estrategias que saben extraer la cifra oficial del pago minimo (bloque 6).
@@ -107,6 +116,24 @@ const R7 = {
         previoImpago = { tarjeta_id: p.tarjeta_id, ciclo: sig };
         break;
       }
+      // SIEMBRA (mismo criterio que R6): un ABONO PARCIAL del usuario sobre el ciclo anterior deja
+      // este escenario sin candidatos —paso en ago-2026 con el pago de 1.400.000 sobre la Visa de
+      // julio— y el invariante del bloque 8 se quedaba sin probar. Como se trabaja sobre una COPIA,
+      // se retira ese abono del candidato en vez de declarar el caso caducado, que es lo que la
+      // regla madre prohibe: un invariante sin comprobar es un hueco silencioso.
+      if (!previoImpago) {
+        const cand = db.prepare(
+          "SELECT tarjeta_id, ciclo FROM extractos WHERE estado != 'pagado' AND COALESCE(pago_minimo,0) > 0 " +
+          "ORDER BY ciclo ASC").all();
+        for (const p of cand) {
+          const [y, m] = p.ciclo.split('-').map(Number);
+          const sig = (m === 12 ? y + 1 : y) + '-' + String(m === 12 ? 1 : m + 1).padStart(2, '0');
+          if (conCompras(p.tarjeta_id, sig) < 1) continue;
+          sembrarPrevioImpago(db, p.tarjeta_id, p.ciclo);
+          previoImpago = { tarjeta_id: p.tarjeta_id, ciclo: sig, sembrado: true, cicloPrevio: p.ciclo };
+          break;
+        }
+      }
       return { intl, previoImpago };
     }
 
@@ -115,10 +142,18 @@ const R7 = {
       const rm = await pedir(port, 'GET', '/api/ia/movimientos?tarjeta_id=' + tj + '&ciclo=' + ciclo, null, 20000);
       if (rm.s !== 200 || !rm.j) return { error: 'GET /movimientos -> ' + rm.s + ' ' + rm.b.slice(0, 120) };
       const mv = rm.j;
+      // El cebo debe ser una compra SIN GEMELAS: detectarReversos cruza por monto (+-$2) y
+      // descripcion difusa, asi que con varias compras identicas (el caso real "APPLE.COM/BILL
+      // $44.900", que se repite cuatro veces) todas puntuan igual y el match cae en cualquiera de
+      // ellas. El detector acierta -emite el reverso- pero apunta a la hermana, y el aserto de
+      // identidad fallaba por una ambiguedad de los DATOS, no del codigo.
       const cRev = db.prepare(
-        "SELECT id, descripcion, valor_cop FROM compras WHERE tarjeta_id=? AND grupo_id IS NULL " +
+        "SELECT id, descripcion, valor_cop FROM compras c WHERE tarjeta_id=? AND grupo_id IS NULL " +
         "AND diferida_id IS NULL AND estado != 'diferida' AND COALESCE(valor_cop,0) > 1000 " +
-        "AND COALESCE(reversada,0)=0 ORDER BY id DESC LIMIT 1").get(tj);
+        "AND COALESCE(reversada,0)=0 " +
+        "AND NOT EXISTS (SELECT 1 FROM compras o WHERE o.id <> c.id AND o.tarjeta_id = c.tarjeta_id " +
+        "  AND o.descripcion = c.descripcion AND ABS(COALESCE(o.valor_cop,0) - c.valor_cop) <= 2) " +
+        "ORDER BY id DESC LIMIT 1").get(tj);
       // El monto del abono se toma del minimo que la app calcula para el ciclo anterior: es la
       // referencia contra la que detectarPagosOmitidos cuadra la linea (tolerancia ~1%).
       const { calcExtracto } = require(path.join(raiz, 'backend', 'engine', 'extracto.js'));
@@ -196,6 +231,10 @@ const R7 = {
       try {
         await conApp(raiz, 'IA2', async (port, db) => {
           const { tarjeta_id, ciclo } = esc.previoImpago;
+          // Esta es OTRA copia: si el escenario se eligio sembrando, hay que volver a sembrarlo aqui.
+          if (esc.previoImpago.sembrado && esc.previoImpago.cicloPrevio) {
+            sembrarPrevioImpago(db, tarjeta_id, esc.previoImpago.cicloPrevio);
+          }
           const { r, pmPrev, pmOficial } = await correr(port, db, tarjeta_id, ciclo);
           const donde = ' (tarjeta ' + tarjeta_id + ', ciclo ' + ciclo + ')';
           if (!r) { chk('escenario B' + donde, false, 'no se pudo preparar'); return; }
