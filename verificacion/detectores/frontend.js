@@ -16,7 +16,7 @@
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
-const { leer, analizarIndexHtml, resultado } = require('../lib');
+const { leer, analizarIndexHtml, resultado, conApp, pedir } = require('../lib');
 const B = require('../linea_base');
 
 const INDEX = (raiz) => path.join(raiz, 'public', 'index.html');
@@ -1030,7 +1030,169 @@ const F9 = {
   },
 };
 
-module.exports = [F1, F2, F3, F4, F5, F6, F7, F8, F9];
+// ─── F10: la pestaña Pagos anuncia lo que el backend va a hacer ─────────────
+//
+// POR QUE EXISTE: es la unica pantalla donde un error de display cuesta MORA. Y ya paso dos veces:
+// v5.7.1 (submitPago no cortaba ante resp.error y celebraba un pago fallido) y v5.7.2 (el aviso
+// prometia $2.000 de margen cuando la banda real era $1, porque habia cifra oficial cargada: quien
+// le creyera pagaria de menos y el extracto NO sellaria). Las dos son el mismo patron -la UI
+// prometiendo algo que el backend no hace- y ninguna prueba lo vigilaba.
+//
+// Por eso este detector no comprueba el boton contra si mismo: usa el BACKEND REAL como oraculo.
+// Para cada monto renderiza la pestaña, lee lo que anuncia el boton, y ejecuta ese mismo pago
+// contra una copia limpia de la BD. Si el boton dice "Completar Pago", el extracto tiene que quedar
+// sellado; si dice "Registrar Abono", no. Cualquier separacion entre las dos capas sale roja.
+const F10 = {
+  id: 'F10',
+  nombre: 'Pestaña Pagos: el boton anuncia lo que el backend hara (paridad real)',
+  async medir(raiz) {
+    const notas = [];
+    const cifras = {};
+
+    // Los dos regimenes de la banda de tolerancia son distintos y hay que probar los dos:
+    //   sin cifra oficial -> min($2.000, 2% del minimo): el estimado no puede ser exacto por diseño.
+    //   con cifra oficial -> $1: ahi un faltante no es imprecision del modelo, es plata que falta.
+    let escenarios;
+    try {
+      escenarios = await conApp(raiz, 'F10base', async (port, db) => {
+        const out = [];
+        const tjs = db.prepare('SELECT id FROM tarjetas').all();
+        for (const t of tjs) {
+          const r = await pedir(port, 'GET', '/api/extractos?tarjeta_id=' + t.id);
+          if (!r.j || !Array.isArray(r.j)) continue;
+          for (const ext of r.j) {
+            if (ext.estado === 'pagado') continue;
+            const restante = Math.round((ext.pago_minimo || 0) - (ext.monto_pagado || 0));
+            if (!(restante > 5000)) continue;   // margen suficiente para separar los tres montos
+            out.push({ id: ext.id, tarjeta_id: t.id, ciclo: ext.ciclo, tiene_oficial: !!ext.tiene_oficial, restante, ext });
+          }
+        }
+        return out;
+      });
+    } catch (e) { return resultado(false, {}, ['FALLO leyendo los extractos: ' + e.message]); }
+
+    const conOficial = escenarios.find(x => x.tiene_oficial);
+    const sinOficial = escenarios.find(x => !x.tiene_oficial);
+    cifras.candidatos = escenarios.length;
+    if (!sinOficial) {
+      return resultado(false, cifras, ['FALLO: no hay ningun extracto pendiente SIN cifra oficial -> no se puede probar la banda del 2%']);
+    }
+    // El caso "con cifra oficial" se SIEMBRA si no existe: dejarlo sin probar es el hueco silencioso
+    // que la regla madre prohibe, y es justo el regimen donde el margen cae a $1.
+    const casos = [];
+    casos.push({ nombre: 'sin cifra oficial', base: sinOficial, sembrarOficial: false });
+    if (conOficial) casos.push({ nombre: 'con cifra oficial', base: conOficial, sembrarOficial: false });
+    else casos.push({ nombre: 'con cifra oficial (sembrada)', base: sinOficial, sembrarOficial: true });
+    cifras.casos = casos.length;
+
+    const { ctx } = (() => { try { return cargarFrontend(raiz, {}); } catch (e) { return { ctx: null }; } })();
+    if (!ctx || typeof ctx.bandaToleranciaCop !== 'function') {
+      return resultado(false, cifras, ['FALLO: bandaToleranciaCop no es alcanzable -> el frontend ya no comparte la banda con el backend']);
+    }
+
+    let comparaciones = 0, discrepancias = 0;
+    for (const caso of casos) {
+      // La banda que el FRONTEND anuncia, calculada con su propia funcion (no con una copia).
+      const extFront = Object.assign({}, caso.base.ext, caso.sembrarOficial ? { tiene_oficial: true } : {});
+      const minimoCompleto = Math.round(extFront.pago_minimo || 0);
+      const banda = ctx.bandaToleranciaCop(extFront, minimoCompleto);
+      const R = caso.base.restante;
+      // Tres montos alrededor del borde: dentro, justo en el borde, y un peso fuera.
+      const montos = [
+        { monto: R, espera: true, que: 'el restante exacto' },
+        { monto: Math.max(1, R - banda), espera: true, que: 'el borde de la banda (' + banda + ')' },
+        { monto: Math.max(1, R - banda - 1), espera: false, que: 'un peso MAS ABAJO del borde' },
+      ];
+      for (const m of montos) {
+        // ── lo que ANUNCIA el boton, leido del render real ──
+        let etiqueta = null;
+        try {
+          const semilla = [];
+          semilla[3] = extFront;                 // pagoExtracto
+          semilla[4] = String(m.monto);          // pagoMonto
+          const c = montarConEstado(raiz, semilla);
+          const arbol = c.Pagos({ tarjeta: { id: caso.base.tarjeta_id, nombre: 'T', dia_corte: 30, banco: 'Bancolombia', franquicia: 'Visa' }, onDataChange: () => {} });
+          // Las ranuras se comprueban DESPUES de renderizar: los useState solo se ejecutan al
+          // invocar el componente, asi que antes de esa llamada `__hooks` esta vacio y el aserto
+          // mediria la nada. Si alguien reordena los hooks, esto grita en vez de sembrar en otra
+          // variable y dar por bueno un render que no es el que se cree.
+          const orden = c.__hooks || [];
+          if (orden[3] !== null || orden[4] !== '') {
+            notas.push('FALLO: las ranuras de Pagos cambiaron de orden (se esperaba 3=pagoExtracto null, 4=pagoMonto "") -> el fixture sembraria otra variable');
+            break;
+          }
+          recorrerArbol(arbol, n => {
+            if (etiqueta) return;
+            if (n.type === 'button') {
+              const t = textoDe(n);
+              if (/Completar Pago/.test(t)) etiqueta = 'completa';
+              else if (/Registrar Abono/.test(t)) etiqueta = 'abona';
+            }
+          });
+        } catch (e) {
+          notas.push('FALLO renderizando la pestaña Pagos (' + caso.nombre + '): ' + e.message);
+          break;
+        }
+        if (!etiqueta) { notas.push('FALLO: no se encontro el boton de pago en el render (' + caso.nombre + ')'); break; }
+
+        // ── lo que HACE el backend con ese mismo monto, sobre una copia limpia ──
+        let sello = null;
+        try {
+          sello = await conApp(raiz, 'F10_' + comparaciones, async (port, db) => {
+            if (caso.sembrarOficial) {
+              const r0 = await pedir(port, 'PUT', '/api/extractos/pago-oficial', null);   // sonda: existe la ruta?
+              db.prepare("INSERT OR REPLACE INTO extractos_oficiales (tarjeta_id, ciclo, pago_minimo, pago_total, fuente) VALUES (?,?,?,?,'conciliacion')")
+                .run(caso.base.tarjeta_id, caso.base.ciclo, minimoCompleto, Math.max(minimoCompleto, Math.round(extFront.pago_total || minimoCompleto)));
+              void r0;
+            }
+            // Los nombres del body son los del contrato REAL de pagarExtracto: monto_pagado y
+            // fecha_pagado. Con `monto` a secas el campo llega undefined, el endpoint cae a su
+            // valor por defecto y el detector acabaria midiendo siempre el pago del minimo completo.
+            const r = await pedir(port, 'PUT', '/api/extractos/' + caso.base.id + '/pagar', { monto_pagado: m.monto, fecha_pagado: '2026-08-14', moneda: 'COP' });
+            if (!r.j) return null;
+            return !!r.j.pagadoCompleto;
+          });
+        } catch (e) {
+          notas.push('FALLO ejecutando el pago real (' + caso.nombre + '): ' + e.message);
+          break;
+        }
+        if (sello === null) { notas.push('FALLO: el backend no devolvio pagadoCompleto (' + caso.nombre + ')'); break; }
+
+        comparaciones++;
+        const anuncia = etiqueta === 'completa';
+        if (anuncia !== sello) {
+          discrepancias++;
+          notas.push('FALLO [' + caso.nombre + ' / ' + m.que + ']: el boton dice "' +
+            (anuncia ? 'Completar Pago' : 'Registrar Abono') + '" y el backend ' +
+            (sello ? 'SI' : 'NO') + ' sella el mes -> el usuario paga creyendo otra cosa (monto ' + m.monto + ', banda ' + banda + ')');
+        }
+        // Ademas de la paridad, el sentido: el borde tiene que caer del lado que dice el contrato.
+        if (sello !== m.espera) {
+          notas.push('FALLO [' + caso.nombre + ' / ' + m.que + ']: el backend ' + (sello ? 'sella' : 'no sella') +
+            ' cuando se esperaba lo contrario (monto ' + m.monto + ', restante ' + R + ', banda ' + banda + ')');
+        }
+      }
+    }
+    cifras.comparaciones = comparaciones;
+    cifras.discrepancias = discrepancias;
+    if (comparaciones < 6) notas.push('FALLO: solo se pudieron comparar ' + comparaciones + ' escenarios de 6 -> el detector se quedo corto sin decirlo');
+
+    return resultado(notas.length === 0, cifras, notas);
+  },
+  defecto: 'el boton usa el tope fijo de tolerancia en vez de la banda real (el defecto EXACTO de v5.7.2: promete margen donde no lo hay)',
+  mutar(raiz) {
+    // Se reproduce el bug historico: anunciar TOLERANCIA_PAGO_COP en lugar de la banda que calcula
+    // bandaToleranciaCop. Con una cifra oficial cargada la banda real es $1, asi que el boton diria
+    // "Completar Pago" sobre un pago que NO sella. F1/F5 no lo ven: es un identificador valido y el
+    // simbolo conserva su tamaño.
+    const aguja = 'var bandaCop = bandaToleranciaCop(pagoExtracto, pagoMinimoActual);';
+    if (!mutarEnAlgunaPieza(raiz, aguja, 'var bandaCop = TOLERANCIA_PAGO_COP;')) {
+      throw new Error('no se encontro "' + aguja + '" en la pestaña Pagos');
+    }
+  },
+};
+
+module.exports = [F1, F2, F3, F4, F5, F6, F7, F8, F9, F10];
 module.exports.medirSimbolos = medirSimbolos;
 module.exports.piezasEnOrden = piezasEnOrden;
 module.exports.RUTA_SIMBOLOS = RUTA_SIMBOLOS;
