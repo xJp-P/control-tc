@@ -1,13 +1,17 @@
 'use strict';
-// verificacion/detectores/frontend.js — F1..F7
+// verificacion/detectores/frontend.js — F1..F8
 //
-// El frontend es un unico <script> inline de ~7.771 lineas sin build, sin JSX y sin modulos ES.
-// Se verifica con cuatro angulos distintos porque cada uno se queda ciego de una forma:
+// El frontend son 19 archivos clasicos sin build, sin JSX y sin modulos ES, que comparten un unico
+// ambito global. Se verifica con angulos distintos porque cada uno se queda ciego de una forma:
 //   F1 parsea cada pieza por separado  -> no ve colisiones entre piezas.
 //   F2 parsea la concatenacion         -> ve las colisiones, no ve el orden de evaluacion.
 //   F3 EJECUTA la carga con dobles     -> ve el orden y la TDZ, no ve si falta un simbolo.
 //   F4 pregunta por cada identificador -> ve los simbolos, no ve su tamano.
 //   F5 mide el tamano de cada simbolo  -> mata el stub vacio que satisface a los otros cuatro.
+//   F6 busca simbolos de MAS           -> caza el duplicado que F4/F5 no pueden ver.
+//   F7 DIBUJA el panel de IA           -> ejecuta el render, no solo la carga.
+//   F8 DIBUJA la vista principal       -> lo mismo para la tabla de Compras/Diferidas y las cards,
+//                                         que es donde se colaron los defectos de v6.0.0 y v6.1.0.
 
 const fs = require('fs');
 const path = require('path');
@@ -496,6 +500,9 @@ function montarConEstado(raiz, semilla) {
       return [store[i], () => {}];
     },
     useEffect: () => {}, useCallback: (f) => f, useRef: () => ({ current: null }),
+    // useLayoutEffect NO esta desestructurado en core.js: se usa via React.* (el FLIP del
+    // reordenamiento de v6.0.0). Sin el, CardResumen revienta antes de dibujar una sola fila.
+    useLayoutEffect: () => {},
     useMemo: (f) => (typeof f === 'function' ? f() : undefined), Fragment: 'Fragment',
   };
   const { ctx } = cargarFrontend(raiz, { React });
@@ -660,7 +667,193 @@ const F7 = {
   },
 };
 
-module.exports = [F1, F2, F3, F4, F5, F6, F7];
+// ─── Andamiaje de F8: escenario SEMBRADO para la vista principal ────────────
+// Los 33 campos escalares que el render de CardResumen llega a leer de `data`. Se descubrieron
+// instrumentando el render con un Proxy, no a ojo. Van a 0 y el caso de prueba sobrescribe solo lo
+// que mide: asi el fixture es corto y cada cifra que aparece en un aserto esta puesta a proposito.
+const CAMPOS_DATA_F8 = ['comprasCiclo', 'comprasTotalPendientes', 'comprasTotalPendientesUsd', 'cuotasCorte',
+  'deudaAvances', 'deudaDiferidas', 'deudaDiferidasUsd', 'deudaPersonal', 'deudaPersonalAvances',
+  'deudaPersonalCompras', 'deudaPersonalDiferidas', 'deudaPersonalIntIntl', 'deudaPersonalUsd', 'deudaTotal',
+  'deudaTotalEnCop', 'deudaUsd', 'dualExtracto', 'interesesComprasIntl', 'interesesComprasUsd', 'interesesMes',
+  'interesesMesAvances', 'interesesMesDiferidas', 'interesesMesDiferidasUsd', 'interesesMesUsd', 'minimoUsd',
+  'montoPagadoExtracto', 'pagoMinimo', 'saldoBolsillo', 'saldoBolsilloAbonado', 'saldoBolsilloBruto',
+  'saldoBolsilloUsd', 'saldoBolsilloUsdAbonado', 'saldoBolsilloUsdBruto'];
+
+// El escenario NO sale de la BD real, a proposito: asi este detector no caduca cada vez que el
+// usuario registra una compra. Mide REGRESIONES DE UI, no el estado de los datos (de eso ya se
+// ocupan R4 y R5).
+function fixtureDataF8(over) {
+  const d = {};
+  CAMPOS_DATA_F8.forEach(k => { d[k] = 0; });
+  d.extractoCiclo = { estado: 'pendiente', pago_minimo: 3000000, monto_pagado: 0, fecha_pagado: null };
+  d.meDeben = { total: 0, totalUsd: 0, detalle: [] };
+  d.meDebenCorte = { total: 0, totalUsd: 0, detalle: [] };
+  d.proximoCorte = { fecha: '2026-08-30', diasFaltan: 16 };
+  d.fechaPago = { fecha: '2026-09-15', diasFaltan: 32, esManual: false };
+  d.proximosPagos = [];
+  d.extractosVencidos = [];
+  // Cifras redondas para que los asertos de las cards sean legibles: 10M sobre un cupo de 40M
+  // son 25.0% usado y 30M disponibles.
+  d.deudaTotal = 10000000; d.deudaTotalEnCop = 10000000;
+  d.saldoBolsillo = 500000; d.saldoBolsilloBruto = 500000;
+  d.pagoMinimo = 3000000;
+  return Object.assign(d, over || {});
+}
+const TARJETA_F8 = { id: 4, nombre: 'Tarjeta F8', dia_corte: 30, banco: 'Bancolombia', franquicia: 'Visa',
+  cupo_total: 40000000, ciclo_vigente: '2026-08', ciclo_sugerido: '2026-08', cortes_custom: {} };
+// Las cuatro formas que conviven en la tabla de Compras y que se tratan DISTINTO al dibujar.
+// Nombres distinguibles entre tablas: la misma cuota se ve en Compras y en Diferidas, y con el
+// mismo texto un aserto no podria decir en cual de las dos esta mirando.
+const COMPRAS_F8 = [
+  { id: 901, fecha: '2026-08-05', descripcion: 'COMPRA NORMAL F8', valor_cop: 120000, estado: 'pendiente', ciclo: '2026-08', notas: null, monto_abonado: 0, monto_bolsillo: 0, persona_id: null },
+  { id: 902, fecha: '2026-08-04', descripcion: 'CUOTA SELLADA COMPRA F8', valor_cop: 11225, estado: 'pendiente', ciclo: '2026-08', notas: 'Cuota 1/3 sellada por reprogramacion de saldo (4->3)', monto_abonado: 0, monto_bolsillo: 0, persona_id: null },
+  { id: 903, fecha: '2026-08-03', descripcion: 'SALDO RENACIDO F8', valor_cop: 33675, estado: 'diferida', ciclo: '2026-08', notas: 'Saldo reprogramado', sin_gracia_cuota1: 1, diferida_id: 801, cuota_num: 1, cuotas_total: 2, monto_abonado: 0, monto_bolsillo: 0, persona_id: null },
+  { id: 904, fecha: '2026-08-02', descripcion: 'COMPRA TERCERO F8', valor_cop: 50000, estado: 'pendiente', ciclo: '2026-08', notas: null, monto_abonado: 0, monto_bolsillo: 0, persona_id: 7, persona_nombre: 'Tercero F8', persona_color: '#ff0000' },
+];
+const DIFERIDAS_F8 = [
+  { id: 801, etiqueta: 'PLAN LIBRE F8', monto: 300000, tasa_mv: 0.02, num_cuotas: 3, fecha_compra: '2026-08-01',
+    saldoActual: 200000, cuotaCorte: 100000, cuotasRestantes: 2, ciclos: ['2026-08'], compra_id: 903, grupo_id: null,
+    es_de_tercero: false, persona_id: null, monto_bolsillo: 0, bolsillo_por_cuota: {}, bloqueo_banco: null,
+    es_usd_pura: false, tiene_abono_parcial: false, tercero_con_reembolso: false, reprog_total: null },
+  { id: 802, etiqueta: 'PLAN BLOQUEADO F8', monto: 400000, tasa_mv: 0.018, num_cuotas: 24, fecha_compra: '2025-11-01',
+    saldoActual: 250000, cuotaCorte: 16000, cuotasRestantes: 15, ciclos: ['2026-08'], compra_id: null, grupo_id: null,
+    es_de_tercero: false, persona_id: null, monto_bolsillo: 0, bolsillo_por_cuota: {},
+    bloqueo_banco: 'RappiCard no permite cambiar las cuotas de un extracto ya cerrado (2025-11).',
+    es_usd_pura: false, tiene_abono_parcial: false, tercero_con_reembolso: false, reprog_total: null },
+  { id: 'sellada-902', _sellada: true, etiqueta: 'CUOTA SELLADA DIF F8', fecha_compra: '2026-08-04', cuotaCorte: 11225,
+    saldoActual: 11225, cuotasRestantes: 0, ciclos: ['2026-08'], cuota_num_sellada: 1, reprog_total_sellada: 3,
+    estado_sellada: 'pendiente', es_de_tercero: false, persona_id: null, compra_id: 902, valor_cop: 11225,
+    interes_sellado: 0, monto_bolsillo: 0, bolsillo_por_cuota: {} },
+];
+
+// Dibuja CardResumen con el escenario sembrado. Devuelve { arbol, texto, ranuras } o lanza.
+function dibujarCardResumen(raiz, over) {
+  const sonda = montarConEstado(raiz, []);
+  if (typeof sonda.CardResumen !== 'function') throw new Error('CardResumen no es alcanzable en el ambito global');
+  const semilla = [];
+  semilla[0] = fixtureDataF8(over && over.data);
+  semilla[1] = COMPRAS_F8;
+  semilla[6] = DIFERIDAS_F8;
+  const c = montarConEstado(raiz, semilla);
+  const arbol = c.CardResumen({ tarjeta: TARJETA_F8, onDataChange: () => {} });
+  // Las ranuras se siembran por posicion, asi que hay que COMPROBAR que se sembro donde se cree:
+  // los tipos iniciales de las tres (null, [], []) y, sobre todo, que el contenido llego al dibujo.
+  const orden = c.__hooks || [];
+  const ranuras = { data: orden[0] === null, compras: Array.isArray(orden[1]), diferidas: Array.isArray(orden[6]) };
+  return { arbol, ranuras };
+}
+
+// ─── F8: RENDER real de la vista principal (tabla de Compras/Diferidas + cards) ──
+//
+// POR QUE EXISTE: F7 dibuja el panel de IA y ahi se acaba la cobertura de render. La VISTA
+// PRINCIPAL -la tabla de Compras, la de Diferidas y las cards de arriba- no la dibujaba nadie, y es
+// donde se han colado los defectos de verdad: los tres del reordenamiento manual de v6.0.0 pasaron
+// un 18/18 en VERDE, y los dos de v6.1.0 (el saldo $0 quemado en la fila sellada y el boton de
+// bolsillo ausente) los encontro el usuario mirando la pantalla. Ninguno era invisible por sutil:
+// eran invisibles porque ningun detector ejecutaba ese codigo.
+//
+// El escenario se SIEMBRA (no sale de la BD) para que este detector no caduque cuando el usuario
+// registra una compra: mide regresiones de UI, no el estado de los datos.
+const F8 = {
+  id: 'F8',
+  nombre: 'Render real de la vista principal (tabla de Compras/Diferidas y cards)',
+  medir(raiz) {
+    const notas = [];
+    const cifras = {};
+
+    // ── a) ciclo IMPAGO: es el estado en que la tabla muestra mas cosas ──────
+    let r1;
+    try { r1 = dibujarCardResumen(raiz, {}); }
+    catch (e) { return resultado(false, {}, ['FALLO renderizando CardResumen: ' + e.message]); }
+    if (!r1.ranuras.data) notas.push('FALLO: la ranura 0 ya no es `data` (useState(null)) -> el fixture se estaria sembrando en otra variable');
+    if (!r1.ranuras.compras) notas.push('FALLO: la ranura 1 ya no es `compras` (useState([]))');
+    if (!r1.ranuras.diferidas) notas.push('FALLO: la ranura 6 ya no es `diferidas` (useState([]))');
+
+    const t1 = textoDe(r1.arbol);
+    cifras.textoImpago = t1.length;
+    // Aserto de sanidad del montaje: si lo sembrado no llega al dibujo, todo lo de abajo mediria
+    // la nada y saldria verde por omision.
+    if (t1.indexOf('COMPRA NORMAL F8') === -1) {
+      return resultado(false, cifras, ['FALLO: la compra sembrada no aparece en el render -> el escenario no llego a la tabla y ningun aserto valdria']);
+    }
+
+    // Tabla de Compras: que se ve y que NO.
+    if (t1.indexOf('CUOTA SELLADA COMPRA F8') === -1) notas.push('FALLO: con el ciclo IMPAGO la cuota sellada NO aparece en Compras (es deuda viva: hay que poder apartarle bolsillo)');
+    if (t1.indexOf('SALDO RENACIDO F8') !== -1) notas.push('FALLO: la compra RENACIDA aparece en Compras (no es una compra, es el saldo vivo del plan)');
+    if (t1.indexOf('COMPRA TERCERO F8') === -1) notas.push('FALLO: la compra de tercero no aparece en la tabla');
+
+    // Cards de arriba: deuda, cupo y bolsillo con cifras puestas a proposito.
+    if (t1.indexOf('$10.000.000') === -1) notas.push('FALLO: la card de deuda no muestra la deuda total sembrada ($10.000.000)');
+    if (t1.indexOf('25.0') === -1) notas.push('FALLO: el cupo usado no sale al 25.0% (10M sobre un cupo de 40M)');
+    if (t1.indexOf('$30.000.000') === -1) notas.push('FALLO: no aparece el cupo disponible ($30.000.000 = 40M - 10M)');
+    if (t1.indexOf('$500.000') === -1) notas.push('FALLO: la card "Saldo en Bolsillo" no muestra los $500.000 sembrados');
+
+    // Badges de bolsillo: los personales se pueden pulsar, el de un tercero NO (se gestiona en Terceros).
+    const badges = [];
+    recorrerArbol(r1.arbol, n => {
+      if (n.type === 'span' && n.props && typeof n.props.className === 'string' && n.props.className.indexOf('badge') !== -1 && n.props.onClick) {
+        badges.push({ txt: textoDe(n).trim(), clickable: n.props.className.indexOf('badge-clickable') !== -1, title: n.props.title || '' });
+      }
+    });
+    cifras.badgesBolsillo = badges.length;
+    if (!badges.length) notas.push('FALLO: ningun badge de bolsillo quedo pulsable en toda la vista');
+    const deTercero = badges.filter(b => /Terceros/i.test(b.title));
+    if (!deTercero.length) notas.push('FALLO: el badge de la compra de TERCERO no lleva el aviso de gestionarlo desde Terceros');
+    if (deTercero.some(b => b.clickable)) notas.push('FALLO: el badge de un TERCERO quedo como badge-clickable -> deja editar un reembolso que no es plata propia');
+
+    // Tabla de Diferidas: el boton de reprogramar y el motivo del banco.
+    const botones = botonesDe(r1.arbol);
+    cifras.botones = botones.length;
+    const bloqueados = [];
+    recorrerArbol(r1.arbol, n => {
+      if (n.type === 'button' && n.props && typeof n.props.title === 'string' && /no permite cambiar las cuotas/.test(n.props.title)) {
+        bloqueados.push(!!n.props.disabled);
+      }
+    });
+    cifras.reprogBloqueados = bloqueados.length;
+    if (!bloqueados.length) notas.push('FALLO: la diferida con bloqueo_banco no muestra el motivo del banco en su boton');
+    if (bloqueados.some(d => !d)) notas.push('FALLO: el boton con el motivo del banco quedo HABILITADO -> ofrece algo que el backend rechaza con 403');
+    // La fila SELLADA inyectada tiene que mostrar su saldo real, no un 0 fijo.
+    if (t1.indexOf('$11.225') === -1) notas.push('FALLO: la cuota sellada impaga no muestra su saldo real ($11.225) en Diferidas');
+
+    // ── b) ciclo PAGADO: la sellada pasa a ser historial y se retira de Compras ──
+    try {
+      const r2 = dibujarCardResumen(raiz, { data: { extractoCiclo: { estado: 'pagado', pago_minimo: 3000000, monto_pagado: 3000000, fecha_pagado: '2026-09-15' } } });
+      const t2 = textoDe(r2.arbol);
+      if (t2.indexOf('COMPRA NORMAL F8') === -1) notas.push('FALLO: con el ciclo PAGADO desaparecio hasta la compra normal (el filtro se paso de largo)');
+      if (t2.indexOf('CUOTA SELLADA COMPRA F8') !== -1) notas.push('FALLO: con el ciclo PAGADO la cuota sellada sigue en Compras (ahi ya es historial cerrado)');
+    } catch (e) {
+      notas.push('FALLO renderizando el caso de ciclo pagado: ' + e.message);
+    }
+
+    // ── c) SOBRECUPO: la deuda supera el cupo ────────────────────────────────
+    try {
+      const r3 = dibujarCardResumen(raiz, { data: { deudaTotal: 45000000, deudaTotalEnCop: 45000000 } });
+      const t3 = textoDe(r3.arbol);
+      if (!/Sobrecupo/i.test(t3)) notas.push('FALLO: con la deuda por encima del cupo no aparece "Sobrecupo"');
+    } catch (e) {
+      notas.push('FALLO renderizando el caso de sobrecupo: ' + e.message);
+    }
+
+    return resultado(notas.length === 0, cifras, notas);
+  },
+  defecto: 'se rompe un identificador DENTRO del render de la tabla de Diferidas (invisible para los otros detectores)',
+  mutar(raiz) {
+    // Por CONTENIDO y lanzando si no aparece: una mutacion que no se aplica daria un falso "no
+    // detectado". Se elige una llamada del camino de DIBUJO (no de un manejador de eventos, que no
+    // se ejecuta al renderizar) y que ademas vive DENTRO de CardResumen, asi que F4/F5/F6 -que solo
+    // miran declaraciones de nivel superior y tamanos- no pueden verla.
+    const { piezas } = piezasEnOrden(raiz);
+    const pieza = piezas.find(p => p.ruta && p.fuente && p.fuente.indexOf('function CardResumen') !== -1);
+    if (!pieza) throw new Error('no se encontro la pieza que declara CardResumen');
+    const src = leer(pieza.ruta);
+    const aguja = 'const motivo = motivoNoReprogramable(d);';
+    if (src.indexOf(aguja) === -1) throw new Error('no se encontro "' + aguja + '" en el render de la fila de Diferidas');
+    fs.writeFileSync(pieza.ruta, src.replace(aguja, 'const motivo = motivoNoReprogramableQueNoExiste(d);'), 'utf8');
+  },
+};
+
+module.exports = [F1, F2, F3, F4, F5, F6, F7, F8];
 module.exports.medirSimbolos = medirSimbolos;
 module.exports.piezasEnOrden = piezasEnOrden;
 module.exports.RUTA_SIMBOLOS = RUTA_SIMBOLOS;
