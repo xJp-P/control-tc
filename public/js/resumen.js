@@ -985,7 +985,17 @@ function CardResumen({ tarjeta, onDataChange }) {
               // total bruto original (el badge "Pagado" ya indica saldo 0) para no mostrar $0 confuso.
               fmtCOP(showAsPaid ? valorMostrar : ((interesIntl > 0 ? valorMostrar + interesIntl : valorMostrar) - abonado))),
             e('td', null,
-              showAsPaid
+              // REVERSADA manda sobre cualquier otro estado (v6.0.0). Contablemente la compra sigue
+              // pesando en su ciclo —el banco la factura y su reverso viaja como crédito al mes que
+              // el banco descontó—, pero para el usuario el estado de esa fila es uno solo. Antes se
+              // veía el badge de "pendiente" en esta columna y otro de "Reversada" colgando de la de
+              // acciones, que descuadraba el layout y contaba dos estados para la misma compra.
+              c.reversada
+                ? e('span', { className: 'badge', title: 'El banco devolvio esta compra; el dinero se aplico como credito',
+                    style: { display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, padding: '4px 10px',
+                             background: 'rgba(148,163,184,0.15)', color: 'var(--text-muted)', border: '1px solid var(--border)' } },
+                    e(Ico, { name: 'undo', size: 12, color: 'currentColor' }), 'Reversada')
+                : showAsPaid
                 ? e('span', { className: 'badge badge-pagado', style: { display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, padding: '4px 10px' } },
                     e(Ico, { name: 'check', size: 12, color: 'currentColor' }), 'Pagado')
                 : (c.estado !== 'pagado'
@@ -1005,11 +1015,12 @@ function CardResumen({ tarjeta, onDataChange }) {
               !showAsPaid && ' ',
               !showAsPaid && e('button', { className: 'btn btn-sm btn-danger', onClick: () => removeCompra(c.id) }, e(Ico, { name: 'trash', size: 14, color: 'currentColor' })),
               // Reversar (devolución del banco): disponible también en compras pagadas/antiguas — es su
-              // caso de uso. No aplica a diferidas (v1). Si ya se reversó, se muestra el badge "Reversada".
+              // caso de uso. No aplica a diferidas (v1). Si ya se reversó, el botón desaparece y el
+              // estado se lee en la columna ESTADO, que pasa a decir "Reversada" (v6.0.0).
               // Ternario (no `cond &&`): c.reversada es un número (0/1); con `&&` React pintaría el "0".
               (!isDif && !c.reversada) ? ' ' : null,
-              (!isDif && !c.reversada) ? e('button', { className: 'btn btn-sm', title: 'Reversar compra (devolución del banco)', onClick: () => reverseCompra(c) }, e(Ico, { name: 'undo', size: 14, color: 'currentColor' })) : null,
-              c.reversada ? e('span', { className: 'badge', style: { fontSize: 10, background: 'rgba(148,163,184,0.15)', color: 'var(--text-muted)' } }, 'Reversada') : null
+              (!isDif && !c.reversada) ? e('button', { className: 'btn btn-sm', title: 'Reversar compra (devolución del banco)', onClick: () => reverseCompra(c) }, e(Ico, { name: 'undo', size: 14, color: 'currentColor' })) : null
+              // El badge "Reversada" vive en la columna ESTADO, no aquí: es un estado, no una acción.
             )
           );
         };

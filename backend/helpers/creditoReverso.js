@@ -57,25 +57,26 @@ function creditosDeTarjeta(db, tarjetaId) {
   } catch (e) { return 0; }
 }
 
-// Elige a qué ciclo imputar un crédito nacido en `cicloOrigen`: el extracto NO sellado más reciente
-// ANTERIOR al origen. Se recorre hacia atrás desde el ciclo previo.
-//   · Un ciclo con extracto 'pagado' NO se toca: su histórico está sellado y blindado (decisión del
-//     PO). Se sigue buscando más atrás por si hubiera uno anterior aún abierto.
-//   · Sin destino (todo sellado, o no hay extracto anterior) devuelve null y el crédito queda
-//     'activo' a la espera; NUNCA se imputa al propio ciclo de la compra, que es justo el error que
-//     este modelo viene a corregir.
-function elegirCicloDestino(db, tarjetaId, cicloOrigen, maxAtras) {
+// Elige a qué ciclo imputar un crédito nacido en `cicloOrigen`. La regla es de negocio y es
+// ESTRICTA (dictada por el PO): el crédito viaja al mes anterior **si y solo si** ese mes sigue
+// siendo deuda EXIGIBLE, o sea si su extracto aún no está pagado.
+//   · anterior ABIERTO  -> el crédito va allí: es lo que el banco descuenta primero.
+//   · anterior PAGADO   -> NO se viaja hacia atrás. Un mes sellado no se reabre, y tampoco tiene
+//     sentido saltar por encima a uno más viejo: si el banco ya cobró ese mes, el dinero devuelto
+//     se queda contra el ciclo de la propia compra. Ahí el cargo y su crédito se anulan (neto 0),
+//     que es exactamente como se comportaba la app antes de v6.0.0.
+//   · sin extracto anterior -> igual que pagado: no hay deuda exigible que rebajar.
+// Se mira SOLO el mes inmediatamente anterior a propósito: recorrer más atrás buscando "el primer
+// abierto" era lo que hacía la primera versión, y podía imputar el crédito a un mes de hace medio
+// año saltándose uno ya sellado, que no es lo que hace el banco ni lo que el usuario espera ver.
+function elegirCicloDestino(db, tarjetaId, cicloOrigen) {
   if (!db || !tarjetaId || !cicloOrigen) return null;
-  let c = cicloAnterior(cicloOrigen);
-  const tope = maxAtras || 24;
-  for (let i = 0; i < tope && c; i++) {
-    let ext = null;
-    try { ext = db.prepare('SELECT estado FROM extractos WHERE tarjeta_id=? AND ciclo=?').get(tarjetaId, c); }
-    catch (e) { return null; }
-    if (ext && ext.estado !== 'pagado') return c;   // primer ciclo abierto hacia atrás
-    c = cicloAnterior(c);
-  }
-  return null;
+  const prev = cicloAnterior(cicloOrigen);
+  if (!prev) return cicloOrigen;
+  let ext = null;
+  try { ext = db.prepare('SELECT estado FROM extractos WHERE tarjeta_id=? AND ciclo=?').get(tarjetaId, prev); }
+  catch (e) { return cicloOrigen; }
+  return (ext && ext.estado !== 'pagado') ? prev : cicloOrigen;
 }
 
 module.exports = { cicloAnterior, creditosDeCiclo, creditosDeTarjeta, elegirCicloDestino };
