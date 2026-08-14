@@ -416,7 +416,9 @@ function CardResumen({ tarjeta, onDataChange }) {
       // nuevos, así que la clase ya está puesta cuando la fila aparece en su sitio nuevo.
       setFilasMovidas({ dir: direccion, movidas: r.movida_ids || [c.id], cedieron: r.desplazada_ids || [] });
       if (movTimer.current) clearTimeout(movTimer.current);
-      movTimer.current = setTimeout(() => setFilasMovidas(null), 700);
+      // Por encima de los 780ms que dura la animación: si el estado se limpiara antes, la clase
+      // desaparecería a media transición y la fila daría un tirón justo al final.
+      movTimer.current = setTimeout(() => setFilasMovidas(null), 1000);
       refreshAll();
     }).catch((err) => {
       // Sin este catch el clic era MUDO: ante un 400 la respuesta no es JSON, res.json() lanza y la
