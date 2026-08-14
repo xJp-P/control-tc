@@ -2,7 +2,7 @@
 // verificacion/detectores/runtime.js — R1..R5 (cargan la app REAL contra una COPIA de la BD)
 //
 // Nada de esto se puede stubear. Si better-sqlite3 falla por ABI la salida facil es sustituirlo
-// por un doble, y entonces initDb, syncData, los 82 endpoints y las huellas dejan de ejercitar la
+// por un doble, y entonces initDb, syncData, el contrato de endpoints y las huellas dejan de ejercitar la
 // capa de datos: la suite pasaria a validar unicamente que los archivos parsean, que es
 // exactamente lo que ya hacia antes. Por eso corre bajo ELECTRON_RUN_AS_NODE.
 
@@ -17,7 +17,7 @@ const B = require('../linea_base');
 function tablaDeMontaje(raiz) {
   // Se descartan las lineas comentadas ANTES de buscar. Sin esto, un `app.use` que alguien deja
   // comentado -el olvido tipico al repartir un router- sigue contando como montado y el detector
-  // da 82 endpoints sobre una app a la que le falta un prefijo entero.
+  // daria el recuento completo sobre una app a la que le falta un prefijo entero.
   const src = leer(path.join(raiz, 'backend', 'app.js'))
     .split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
   const re = /app\.use\(\s*'([^']+)'\s*,\s*require\('\.\/routes\/([A-Za-z0-9_]+)'\)\s*\(([^)]*)\)\s*\)/g;
@@ -53,7 +53,9 @@ function abrirApp(raiz, rutaBd) {
 // ─── R1: contrato HTTP ──────────────────────────────────────────────────────
 const R1 = {
   id: 'R1',
-  nombre: 'Contrato HTTP: 82 endpoints exactos en 17 prefijos',
+  // El rotulo se DERIVA de la linea base: escribir la cifra a mano es lo que la dejo diciendo 82
+  // mientras el comparador exigia 83 -el detector acertaba y su titulo mentia-.
+  nombre: 'Contrato HTTP: ' + B.EXACTO_ENDPOINTS + ' endpoints exactos en ' + B.EXACTO_PREFIJOS + ' prefijos',
   medir(raiz, ctx) {
     const notas = [];
     let db;

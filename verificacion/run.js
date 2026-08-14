@@ -6,7 +6,7 @@
 //
 // Tiene que correr bajo Electron porque better-sqlite3 esta compilado para su ABI. Si algun dia
 // falla con NODE_MODULE_VERSION, la salida facil es sustituir better-sqlite3 por un doble: NO
-// HACERLO. Con el doble, initDb, syncData, los 82 endpoints y las huellas dejan de tocar la capa
+// HACERLO. Con el doble, initDb, syncData, el contrato de endpoints y las huellas dejan de tocar la capa
 // de datos y la suite pasa a verificar unicamente que los archivos parsean.
 
 const fs = require('fs');
