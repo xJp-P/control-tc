@@ -1574,9 +1574,28 @@ function CardResumen({ tarjeta, onDataChange }) {
                       e('td', null, (s.cuota_num_sellada || 1) + (s.reprog_total_sellada ? '/' + s.reprog_total_sellada : '')),
                       e('td', { className: 'text-mono' }, '—'),
                       e('td', { className: 'text-right text-mono', style: { fontWeight: 700, color: (s.saldoActual || 0) > 0 ? 'var(--danger)' : 'var(--success)' } }, fmtCOP(s.saldoActual || 0)),
-                      e('td', null, pagada
-                        ? e('span', { className: 'badge badge-pagado', style: { display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, padding: '4px 10px' } }, e(Ico, { name: 'check', size: 12, color: 'currentColor' }), 'Pagado')
-                        : e('span', { className: 'badge badge-pendiente' }, 'pendiente')),
+                      // Estado + BOLSILLO, como en cualquier compra de 1 cuota. Mientras la cuota siga
+                      // impaga hay que poder apartarle dinero desde aqui: se veia en Diferidas pero solo
+                      // se podia gestionar desde Compras, y para eso hay que saber que la misma fila
+                      // vive en las dos pestañas. Pagada ya no se toca (su bolsillo se consumio).
+                      // El target lleva interes_sellado; el intercept de openBolsilloModal sigue
+                      // desviando a Terceros cuando la cuota es de un tercero (por eso va persona_id).
+                      e('td', null, (() => {
+                        if (pagada) return e('span', { className: 'badge badge-pagado', style: { display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, padding: '4px 10px' } }, e(Ico, { name: 'check', size: 12, color: 'currentColor' }), 'Pagado');
+                        var objetivo = Math.round((s.valor_cop || 0) + (s.interes_sellado || 0));
+                        var bol = Math.round(s.monto_bolsillo || 0);
+                        var est = (objetivo > 0 && bol >= objetivo) ? 'bolsillo' : (bol > 0 ? 'bolsillo_parcial' : 'pendiente');
+                        var falta = Math.max(0, objetivo - bol);
+                        return e('div', null,
+                          e('span', {
+                            className: s.persona_id ? 'badge' : ('badge badge-' + est + ' badge-clickable'),
+                            onClick: () => openBolsilloModal({ id: s.compra_id, persona_id: s.persona_id || null, descripcion: s.etiqueta + ' (cuota ' + (s.cuota_num_sellada || 1) + (s.reprog_total_sellada ? '/' + s.reprog_total_sellada : '') + ')', estado: est, valor_cop: s.valor_cop, monto_bolsillo: bol, _bolsilloTarget: objetivo }),
+                            title: s.persona_id ? 'Gestionar abono desde la pestaña Terceros' : 'Clic para gestionar bolsillo',
+                            style: s.persona_id ? { background: 'var(--bg-input)', color: 'var(--text-muted)', cursor: 'not-allowed', border: '1px solid ' + estadoColor(est) } : undefined
+                          }, est.replace(/_/g, ' ')),
+                          falta > 0 && bol > 0 && e('div', { style: { fontSize: 11, color: 'var(--warning)', marginTop: 2 } }, 'Falta: ' + fmtCOP(falta))
+                        );
+                      })()),
                       e('td', null)
                     );
                   };

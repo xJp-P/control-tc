@@ -96,7 +96,14 @@ module.exports = function(router, ctx) {
           estado_sellada: s.estado,
           es_de_tercero: !!s.persona_id, persona_id: s.persona_id || null,
           persona_nombre: s._pnom || null, persona_color: s._pcol || null,
-          monto_bolsillo: 0, bolsillo_por_cuota: {}
+          // Datos de la COMPRA sellada, para poder gestionarle el bolsillo desde esta misma fila: es
+          // una compra de 1 cuota corriente, asi que usa el modal de Compras (PUT /compras/:id/bolsillo),
+          // no el per-cuota de diferidas. monto_bolsillo era 0 fijo y ocultaba lo que ya hubiera apartado.
+          // El objetivo incluye interes_sellado, que es el interes que el banco facturo por esa cuota
+          // (en una sellada de TERCERO forma parte de lo que el debe; en una personal es 0).
+          compra_id: s.id, valor_cop: s.valor_cop,
+          interes_sellado: s.interes_sellado || 0,
+          monto_bolsillo: Math.round(s.monto_bolsillo || 0), bolsillo_por_cuota: {}
         });
       });
     }
