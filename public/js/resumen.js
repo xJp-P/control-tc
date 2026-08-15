@@ -1013,8 +1013,10 @@ function CardResumen({ tarjeta, onDataChange }) {
         copValue: fmtCOP(data.saldoBolsilloBruto || 0),
         usdValue: fmtUsd(data.saldoBolsilloUsdBruto || 0),
         hasUsd: !!(data.dualExtracto && ((data.saldoBolsilloUsdBruto || 0) > 0 || (data.saldoBolsilloUsdAbonado || 0) > 0 || (data.saldoBolsilloUsd || 0) > 0)),
-        // Solo cuando hay abonos: sin ellos el neto ES el bruto y repetirlo seria ruido.
-        copExtra: ((data.saldoBolsilloAbonado || 0) > 0)
+        // Solo cuando hay abonos Y queda algo apartado: sin abonos el neto ES el bruto y repetirlo
+        // seria ruido; y con el bruto en 0 -mes ya pagado, donde el bolsillo cumplio su fin- un
+        // desglose de abonos bajo un principal de $0 no explica nada, solo confunde.
+        copExtra: ((data.saldoBolsilloAbonado || 0) > 0 && (data.saldoBolsilloBruto || 0) > 0)
           ? e('div', { style: { display: 'flex', gap: 14, marginTop: 8, flexWrap: 'wrap' } },
               e('div', null,
                 e('div', { style: { fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 } }, 'Abonos Realizados'),
@@ -1029,7 +1031,7 @@ function CardResumen({ tarjeta, onDataChange }) {
         // Mismo criterio en el piso de dolares: el valor grande ya es el bruto, asi que aqui va lo
         // que lo explica (abonos y neto). Si los dos pisos no siguieran la misma regla, la card
         // diria una cosa arriba y otra abajo.
-        usdExtra: ((data.saldoBolsilloUsdAbonado || 0) > 0)
+        usdExtra: ((data.saldoBolsilloUsdAbonado || 0) > 0 && (data.saldoBolsilloUsdBruto || 0) > 0)
           ? e('div', { style: { display: 'flex', gap: 14, marginTop: 8, flexWrap: 'wrap' } },
               e('div', null,
                 e('div', { style: { fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 } }, 'Abonos Realizados'),

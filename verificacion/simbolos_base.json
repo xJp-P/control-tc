@@ -228,7 +228,7 @@
     {
       "nombre": "CHANGELOG",
       "tipo": "const",
-      "lineas": 797,
+      "lineas": 803,
       "pieza": "js/changelog.js"
     },
     {
@@ -270,7 +270,7 @@
     {
       "nombre": "CardResumen",
       "tipo": "function",
-      "lineas": 2068,
+      "lineas": 2070,
       "pieza": "js/resumen.js"
     },
     {

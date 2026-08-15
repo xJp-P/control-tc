@@ -44,7 +44,42 @@ module.exports = function(db) {
     const comprasCiclo = db.prepare("SELECT COALESCE(SUM(valor_cop - COALESCE(monto_abonado,0)),0) as total FROM compras WHERE ciclo=? AND estado NOT IN ('pagado','diferida')" + tjFilter).get(cicloActual, ...tjParams);
     // 'bolsillo' usa (valor_cop − abonado) en vez de valor_cop: una compra cubierta por bolsillo que
     // además recibió un abono a capital parcial debe contar solo su saldo neto (abonado=0 → valor_cop).
-    const saldoBolsilloCompras = db.prepare("SELECT COALESCE(SUM(CASE WHEN estado='bolsillo' THEN valor_cop - COALESCE(monto_abonado,0) WHEN estado='bolsillo_parcial' THEN COALESCE(monto_bolsillo,0) WHEN estado='diferida' THEN COALESCE(monto_bolsillo,0) ELSE 0 END),0) as total FROM compras WHERE ciclo=? AND estado IN ('bolsillo','bolsillo_parcial','diferida')" + tjFilter).get(cicloActual, ...tjParams);
+    // El bolsillo de una DIFERIDA se reparte por cuota (bolsillo_cuotas), y cada cuota pertenece al
+    // ciclo de SU corte, no al de la compra. Sumar el cache `monto_bolsillo` al ciclo de la compra
+    // -como se hacia antes- rompe por los DOS lados: infla el mes de la compra con dinero de cuotas
+    // futuras y deja ese dinero fuera del mes que le toca. Medido en la BD real: junio mostraba
+    // $287.332 incluyendo $148.030 que son de cuotas de JULIO, y julio no los veia.
+    // Es el MISMO criterio que ya seguian los avances mas abajo (bolsillo_cuotas_avance filtrado por
+    // la cuota del ciclo, nunca avances.monto_bolsillo).
+    //
+    // Y si el extracto del ciclo ya esta PAGADO, su bolsillo cumplio su fin: no cuenta. El gate es
+    // POR TARJETA porque en la vista global conviven ciclos pagados y pendientes.
+    // OJO: esto NO borra un solo dato. `monto_bolsillo` de una compra de TERCERO es su REEMBOLSO
+    // (lo leen Terceros y "Me Deben"); limpiarlo es el bug que corrompio 6 terceros en v4.1.0.
+    const tjCicloPagado = new Set(
+      db.prepare("SELECT tarjeta_id FROM extractos WHERE ciclo=? AND estado='pagado'").all(cicloActual).map(r => r.tarjeta_id)
+    );
+    // (a) Compras de 1 cuota: el bolsillo vive en la propia fila y pertenece al ciclo de la compra.
+    let bolsilloCompras1c = 0;
+    for (const c of db.prepare("SELECT tarjeta_id, estado, valor_cop, monto_abonado, monto_bolsillo FROM compras WHERE ciclo=? AND estado IN ('bolsillo','bolsillo_parcial')" + tjFilter).all(cicloActual, ...tjParams)) {
+      if (tjCicloPagado.has(c.tarjeta_id)) continue;
+      bolsilloCompras1c += (c.estado === 'bolsillo')
+        ? (c.valor_cop || 0) - (c.monto_abonado || 0)
+        : (c.monto_bolsillo || 0);
+    }
+    // (b) Diferidas CON compra: se busca la cuota cuyo corte cae en el ciclo navegado y se suma SOLO
+    // el bolsillo de esa cuota. La tabla la da el motor (unico punto de verdad del calendario), no
+    // una aritmetica de fechas repetida aqui, que se desincronizaria del corte adelantado.
+    let bolsilloComprasDif = 0;
+    for (const row of db.prepare("SELECT c.id AS compra_id, c.tarjeta_id, c.valor_cop, d.id AS dif_id, d.tasa_mv, d.num_cuotas, d.fecha_compra, d.fecha_primer_corte, d.sin_gracia_cuota1 FROM compras c JOIN diferidas d ON d.id = c.diferida_id WHERE c.estado='diferida'" + tjFilter.replace(/tarjeta_id/g, 'c.tarjeta_id')).all(...tjParams)) {
+      if (tjCicloPagado.has(row.tarjeta_id)) continue;
+      const amortB = calcularAmortizacionDiferida(row.valor_cop, row.tasa_mv, row.num_cuotas, row.fecha_compra, row.fecha_primer_corte, null, nuOptsDif(db, row));
+      const cuotaCiclo = amortB.tabla.find(q => q.fechaCorte.slice(0, 7) === cicloActual);
+      if (!cuotaCiclo) continue;
+      const bolCuota = db.prepare("SELECT monto FROM bolsillo_cuotas WHERE compra_id=? AND cuota_num=? AND COALESCE(moneda,'COP')='COP'").get(row.compra_id, cuotaCiclo.numCuota);
+      if (bolCuota) bolsilloComprasDif += Math.round(bolCuota.monto);
+    }
+    const saldoBolsilloCompras = { total: bolsilloCompras1c + bolsilloComprasDif };
     // Avances: bolsillo per-cuota se acumula en el forEach de avancesActivos (más abajo)
     // a partir de bolsillo_cuotas_avance, filtrado por la cuota_num del ciclo navegado.
     // NO se usa avances.monto_bolsillo (que es el cache total acumulado de todas las cuotas).
@@ -153,7 +188,8 @@ module.exports = function(db) {
         // Bolsillo per-cuota del ciclo navegado: solo cuenta si esa cuota tiene aparte propio.
         // Si el avance no tiene cuota en el ciclo (cuotaActual undefined), suma 0.
         const bolCuotaAvRow = db.prepare('SELECT monto FROM bolsillo_cuotas_avance WHERE avance_id=? AND cuota_num=?').get(av.id, cuotaActual.numCuota);
-        if (bolCuotaAvRow) bolsilloAvancesCiclo += Math.round(bolCuotaAvRow.monto);
+        // Mismo gate que las compras: con el extracto del ciclo ya pagado, el bolsillo cumplio su fin.
+        if (bolCuotaAvRow && !tjCicloPagado.has(av.tarjeta_id)) bolsilloAvancesCiclo += Math.round(bolCuotaAvRow.monto);
         proximosPagos.push({ tipo: 'avance', etiqueta: av.etiqueta, fechaCorte: cuotaActual.fechaCorte, interes: cuotaActual.interes, capital: cuotaActual.cuotaCapital, total: cuotaActual.totalExtracto });
       }
     });
@@ -504,9 +540,11 @@ module.exports = function(db) {
     const deudaPersonalCorteUsd = Math.round((comprasPersonalCicloUsd.total || 0) * 100) / 100;
     // Saldo Bolsillo USD: bruto = suma de monto_bolsillo_usd; abonado = monto_pagado_usd del
     // extracto del ciclo; neto = max(0, bruto - abonado). Espejo de la lógica COP.
+    // Mismo gate de ciclo pagado que el piso COP: si no, la card diria $0 arriba y un saldo vivo
+    // abajo sobre el mismo mes ya saldado.
     const saldoBolsilloComprasUsd = db.prepare(
-      "SELECT COALESCE(SUM(monto_bolsillo_usd),0) as total FROM compras WHERE ciclo=? AND estado IN ('bolsillo','bolsillo_parcial','diferida') AND COALESCE(monto_bolsillo_usd,0) > 0" + tjFilter
-    ).get(cicloActual, ...tjParams);
+      "SELECT COALESCE(SUM(monto_bolsillo_usd),0) as total FROM compras WHERE ciclo=? AND estado IN ('bolsillo','bolsillo_parcial','diferida') AND COALESCE(monto_bolsillo_usd,0) > 0 AND tarjeta_id NOT IN (SELECT tarjeta_id FROM extractos WHERE ciclo=? AND estado='pagado')" + tjFilter
+    ).get(cicloActual, cicloActual, ...tjParams);
     const saldoBolsilloUsdBruto = Math.round((saldoBolsilloComprasUsd.total || 0) * 100) / 100;
     const saldoBolsilloUsdAbonado = Math.round((montoPagadoUsdExtractoCiclo || 0) * 100) / 100;
     const saldoBolsilloUsd = Math.max(0, Math.round((saldoBolsilloUsdBruto - saldoBolsilloUsdAbonado) * 100) / 100);

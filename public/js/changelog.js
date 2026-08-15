@@ -12,6 +12,12 @@
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '6.1.2': [
+    'EL DINERO APARTADO PARA UNA CUOTA AHORA SE CUENTA EN EL MES DE ESA CUOTA. Cuando apartabas dinero para una compra a cuotas, la tarjeta "Saldo en Bolsillo" sumaba TODO lo apartado del plan al mes de la compra, aunque una parte fuera para cuotas de meses siguientes. Eso inflaba el mes viejo y dejaba el mes que viene sin ver ese dinero.',
+    'Ahora cada cuota cuenta en el mes en que el banco la cobra. En un caso real de la aplicacion, junio mostraba dinero que en realidad era de la cuota de julio, y julio no lo veia: eran mas de cien mil pesos apareciendo en el mes equivocado.',
+    'Y SI EL MES YA ESTA PAGADO, EL BOLSILLO DE ESE MES QUEDA EN CERO. El bolsillo sirve para juntar la plata del pago; una vez pagado el mes, deja de tener sentido y ya no se muestra. Antes seguia apareciendo en los meses viejos como si aun tuvieras ese dinero apartado.',
+    'Nada de esto borra informacion: lo que cambia es en que mes se muestra cada cosa. El dinero que los responsables te han reembolsado sigue intacto en la pestaña Terceros.',
+  ],
   '6.1.1': [
     'CUANDO ALGO FALLA AL GUARDAR, AHORA TE ENTERAS. Si se cae la conexion con el programa mientras registras, editas, pagas o reprogramas algo, antes el boton simplemente no hacia nada: ni un aviso, ni una pista de que habia pasado. Ahora sale un mensaje de error en pantalla.',
     'El aviso solo aparece cuando falla algo que estabas GUARDANDO. Las consultas de fondo que el programa hace solo, como las sugerencias de nombres o la tasa del dolar, siguen fallando en silencio a proposito: si no estan, no te sirve de nada que te interrumpan.',

@@ -548,7 +548,89 @@ const R5 = {
   },
 };
 
-module.exports = [R1, R2, R3, R4, R5];
+// ─── R8: el bolsillo se atribuye a la cuota que le toca, y muere con el mes pagado ──
+//
+// POR QUE EXISTE: el bolsillo de una DIFERIDA se reparte por cuota (bolsillo_cuotas) y cada cuota
+// pertenece al ciclo de SU corte. El dashboard sumaba el cache `monto_bolsillo` -el total de TODAS
+// las cuotas- al ciclo de la COMPRA, y eso rompia por los dos lados a la vez: inflaba el mes de la
+// compra con dinero de cuotas futuras y dejaba ese dinero fuera del mes al que pertenece. Medido en
+// la BD real antes del arreglo: junio mostraba $287.332 con $148.030 que eran de JULIO, y julio no
+// los veia. La segunda mitad de la regla la puso el PO: con el extracto ya PAGADO el bolsillo
+// cumplio su fin y no debe seguir contando.
+//
+// Es un invariante de CALCULO, no de pantalla: F8 siembra su propio `data` y por tanto pasaria en
+// verde aunque este query volviera a sumar mal. Por eso vive aqui, contra la BD real.
+//
+// El escenario se SIEMBRA entero (criterio de R6) para no depender de que la BD del usuario tenga
+// una diferida a caballo entre un mes pagado y uno abierto.
+const R8 = {
+  id: 'R8',
+  nombre: 'Bolsillo por cuota: al ciclo que le toca y cero en meses pagados',
+  async medir(raiz, ctx) {
+    const { pedir, conApp } = require('../lib');
+    const notas = [];
+    const cifras = {};
+    void ctx;
+    try {
+      const r = await conApp(raiz, 'R8', async (port, db) => {
+        const tj = db.prepare('SELECT id, dia_corte FROM tarjetas ORDER BY id LIMIT 1').get();
+        if (!tj) return { sinDatos: 'no hay ninguna tarjeta' };
+        // Dos ciclos consecutivos y lejanos, para no chocar con datos reales del usuario.
+        const A = '2029-03', B = '2029-04';
+        const corteA = A + '-' + String(tj.dia_corte).padStart(2, '0');
+        const dif = db.prepare("INSERT INTO diferidas (tarjeta_id, etiqueta, monto, tasa_mv, num_cuotas, fecha_compra, fecha_primer_corte, estado, notas) VALUES (?,?,?,?,?,?,?,'activo','R8')")
+          .run(tj.id, 'R8 BOLSILLO', 200000, 0, 2, A + '-01', corteA);
+        const compra = db.prepare("INSERT INTO compras (tarjeta_id, fecha, descripcion, valor_cop, estado, ciclo, diferida_id, notas, monto_bolsillo) VALUES (?,?,?,?, 'diferida', ?, ?, 'Diferida a 2 cuotas', ?)")
+          .run(tj.id, A + '-01', 'R8 BOLSILLO', 200000, A, dif.lastInsertRowid, 150000);
+        // 60.000 en la cuota 1 (mes A) y 90.000 en la cuota 2 (mes B). El cache suma 150.000: si el
+        // dashboard usara el cache, A mostraria 150.000 y B cero.
+        db.prepare("INSERT INTO bolsillo_cuotas (compra_id, cuota_num, monto, moneda) VALUES (?,1,?, 'COP')").run(compra.lastInsertRowid, 60000);
+        db.prepare("INSERT INTO bolsillo_cuotas (compra_id, cuota_num, monto, moneda) VALUES (?,2,?, 'COP')").run(compra.lastInsertRowid, 90000);
+
+        // Primero con AMBOS ciclos SIN pagar: se mide la atribucion por cuota.
+        const dA1 = (await pedir(port, 'GET', '/api/dashboard?tarjeta_id=' + tj.id + '&ciclo=' + A)).j || {};
+        const dB1 = (await pedir(port, 'GET', '/api/dashboard?tarjeta_id=' + tj.id + '&ciclo=' + B)).j || {};
+
+        // Ahora se marca PAGADO el extracto del mes A: su bolsillo debe desaparecer, y el de B no.
+        const extA = db.prepare('SELECT id FROM extractos WHERE tarjeta_id=? AND ciclo=?').get(tj.id, A);
+        if (extA) db.prepare("UPDATE extractos SET estado='pagado', monto_pagado=pago_minimo WHERE id=?").run(extA.id);
+        else db.prepare("INSERT INTO extractos (tarjeta_id, ciclo, fecha_corte, fecha_pago, pago_minimo, pago_total, estado, monto_pagado) VALUES (?,?,?,?,?,?, 'pagado', ?)")
+          .run(tj.id, A, corteA, corteA, 100000, 200000, 100000);
+        const dA2 = (await pedir(port, 'GET', '/api/dashboard?tarjeta_id=' + tj.id + '&ciclo=' + A)).j || {};
+        const dB2 = (await pedir(port, 'GET', '/api/dashboard?tarjeta_id=' + tj.id + '&ciclo=' + B)).j || {};
+        return { A: dA1.saldoBolsilloBruto, B: dB1.saldoBolsilloBruto, Apag: dA2.saldoBolsilloBruto, Bpag: dB2.saldoBolsilloBruto };
+      });
+      if (r.sinDatos) return resultado(false, {}, ['FALLO: ' + r.sinDatos]);
+      cifras.cuota1EnSuMes = r.A;
+      cifras.cuota2EnSuMes = r.B;
+      cifras.mesPagado = r.Apag;
+      cifras.otroMesTrasPagar = r.Bpag;
+      // Atribucion: cada cuota en SU mes, ni el cache entero en el mes de la compra ni nada en el otro.
+      if (r.A !== 60000) notas.push('FALLO: el mes de la cuota 1 deberia sumar 60000 (su bolsillo) y suma ' + r.A +
+        (r.A === 150000 ? ' -> se esta usando el cache monto_bolsillo, que mete ahi tambien el dinero de la cuota 2' : ''));
+      if (r.B !== 90000) notas.push('FALLO: el mes de la cuota 2 deberia sumar 90000 y suma ' + r.B +
+        (r.B === 0 ? ' -> el dinero de esa cuota se quedo atribuido al mes de la compra' : ''));
+      // Regla del PO: pagado el extracto, el bolsillo de ese mes deja de contar.
+      if (r.Apag !== 0) notas.push('FALLO: con el extracto del mes ya PAGADO el bolsillo sigue contando (' + r.Apag + ') -> el "fantasma" en meses historicos');
+      // Y no puede llevarse por delante los meses vecinos.
+      if (r.Bpag !== 90000) notas.push('FALLO: pagar un mes altero el bolsillo de OTRO ciclo (' + r.Bpag + ' en vez de 90000)');
+    } catch (e) {
+      return resultado(false, cifras, ['FALLO ejecutando el escenario: ' + e.message]);
+    }
+    return resultado(notas.length === 0, cifras, notas);
+  },
+  defecto: 'el dashboard vuelve a sumar el cache monto_bolsillo al ciclo de la COMPRA (infla el mes de la compra y vacia el de la cuota)',
+  mutar(raiz) {
+    const p = path.join(raiz, 'backend', 'routes', 'dashboard.js');
+    const src = fs.readFileSync(p, 'utf8');
+    const aguja = 'if (bolCuota) bolsilloComprasDif += Math.round(bolCuota.monto);';
+    if (src.indexOf(aguja) === -1) throw new Error('no se encontro el bucle per-cuota del bolsillo en dashboard.js');
+    fs.writeFileSync(p, src.replace(aguja,
+      'if (bolCuota) bolsilloComprasDif += Math.round(bolCuota.monto); if (row.compra_id) { const _c = db.prepare("SELECT monto_bolsillo m FROM compras WHERE id=?").get(row.compra_id); bolsilloComprasDif += Math.round((_c && _c.m) || 0) - Math.round((bolCuota && bolCuota.monto) || 0); }'), 'utf8');
+  },
+};
+
+module.exports = [R1, R2, R3, R4, R5, R8];
 module.exports.abrirApp = abrirApp;
 module.exports.RUTA_HUELLA = RUTA_HUELLA;
 module.exports.calcularHuella = calcularHuella;

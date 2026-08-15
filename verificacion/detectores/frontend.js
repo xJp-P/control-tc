@@ -838,6 +838,20 @@ const F8 = {
       notas.push('FALLO renderizando el caso de ciclo pagado: ' + e.message);
     }
 
+    // ── b2) mes ya PAGADO: el bolsillo llega en 0 y la card no debe desglosar nada ──
+    // Con el bruto en cero (el bolsillo cumplio su fin al pagarse el extracto) un desglose de abonos
+    // bajo un principal de $0 no explica nada. El calculo de ese cero lo vigila R8, contra la BD;
+    // aqui solo se comprueba que la card no pinte un desglose incongruente cuando llega asi.
+    try {
+      const r2b = dibujarCardResumen(raiz, { data: { saldoBolsilloBruto: 0, saldoBolsillo: 0, saldoBolsilloAbonado: 1400000 } });
+      const t2b = textoDe(r2b.arbol);
+      if (t2b.indexOf('Neto Restante') !== -1 || t2b.indexOf('Abonos Realizados') !== -1) {
+        notas.push('FALLO: con el bolsillo en 0 la card sigue desglosando abonos/neto -> desglose vacio sobre un principal de $0');
+      }
+    } catch (e) {
+      notas.push('FALLO renderizando el caso de bolsillo en cero: ' + e.message);
+    }
+
     // ── c) SOBRECUPO: la deuda supera el cupo ────────────────────────────────
     try {
       const r3 = dibujarCardResumen(raiz, { data: { deudaTotal: 45000000, deudaTotalEnCop: 45000000 } });
