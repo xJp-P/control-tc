@@ -12,7 +12,7 @@
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
-  '6.1.2': [
+  '6.1.3': [
     'EL DINERO APARTADO PARA UNA CUOTA AHORA SE CUENTA EN EL MES DE ESA CUOTA. Cuando apartabas dinero para una compra a cuotas, la tarjeta "Saldo en Bolsillo" sumaba TODO lo apartado del plan al mes de la compra, aunque una parte fuera para cuotas de meses siguientes. Eso inflaba el mes viejo y dejaba el mes que viene sin ver ese dinero.',
     'Ahora cada cuota cuenta en el mes en que el banco la cobra. En un caso real de la aplicacion, junio mostraba dinero que en realidad era de la cuota de julio, y julio no lo veia: eran mas de cien mil pesos apareciendo en el mes equivocado.',
     'Y SI EL MES YA ESTA PAGADO, EL BOLSILLO DE ESE MES QUEDA EN CERO. El bolsillo sirve para juntar la plata del pago; una vez pagado el mes, deja de tener sentido y ya no se muestra. Antes seguia apareciendo en los meses viejos como si aun tuvieras ese dinero apartado.',
