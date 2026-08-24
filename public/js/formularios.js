@@ -301,12 +301,9 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
         if (cicloSpilloverBody) {
           fechaPrimerCorte = corteDeCiclo(cicloSpilloverBody, diaCorte);
         } else {
-          const d = new Date(fecha + 'T12:00:00');
-          let year = d.getFullYear(), month = d.getMonth();
-          if (d.getDate() >= diaCorte) { month += 1; if (month > 11) { month = 0; year += 1; } }
-          const lastDay = new Date(year, month + 1, 0).getDate();
-          const day = Math.min(diaCorte, lastDay);
-          fechaPrimerCorte = new Date(year, month, day).toISOString().slice(0, 10);
+          // Punto unico: mismos helpers que el resto del frontend (calcCicloLocal usa "> diaCorte").
+          // El inline propio usaba ">=" y desalineaba el plan del ciclo de su compra el DIA del corte.
+          fechaPrimerCorte = corteDeCiclo(calcCicloLocal(fecha, diaCorte), diaCorte);
         }
 
         const allParts = splits.filter(sp => sp.persona_id && sp.persona_id !== 'personal' && parseFloat(sp.monto) > 0)
@@ -356,12 +353,9 @@ function CompraForm({ item, personas, ciclo, tarjeta, onSave, onCancel }) {
       if (cicloSpilloverBody) {
         fechaPrimerCorte = corteDeCiclo(cicloSpilloverBody, diaCorte);
       } else {
-        const d = new Date(fecha + 'T12:00:00');
-        let year = d.getFullYear(), month = d.getMonth();
-        if (d.getDate() >= diaCorte) { month += 1; if (month > 11) { month = 0; year += 1; } }
-        const lastDay = new Date(year, month + 1, 0).getDate();
-        const day = Math.min(diaCorte, lastDay);
-        fechaPrimerCorte = new Date(year, month, day).toISOString().slice(0, 10);
+        // Punto unico: mismos helpers que el resto del frontend (calcCicloLocal usa "> diaCorte").
+        // El inline propio usaba ">=" y desalineaba el plan del ciclo de su compra el DIA del corte.
+        fechaPrimerCorte = corteDeCiclo(calcCicloLocal(fecha, diaCorte), diaCorte);
       }
       const dif = await api('/diferidas', { method: 'POST', body: {
         tarjeta_id: tarjeta.id,
@@ -863,13 +857,9 @@ function DiferidaForm({ item, tarjeta, onSave, onCancel }) {
 
   useEffect(() => {
     if (fechaCompra && !item) {
-      const d = new Date(fechaCompra + 'T12:00:00');
-      const diaCorte = tarjeta.dia_corte;
-      let year = d.getFullYear(), month = d.getMonth();
-      if (d.getDate() >= diaCorte) { month += 1; if (month > 11) { month = 0; year += 1; } }
-      const lastDay = new Date(year, month + 1, 0).getDate();
-      const day = Math.min(diaCorte, lastDay);
-      setFechaPrimerCorte(new Date(year, month, day).toISOString().slice(0, 10));
+      // Punto unico: mismos helpers que el resto del frontend (calcCicloLocal usa "> diaCorte").
+      // El inline propio usaba ">=" y desalineaba el plan del ciclo de su compra el DIA del corte.
+      setFechaPrimerCorte(corteDeCiclo(calcCicloLocal(fechaCompra, tarjeta.dia_corte), tarjeta.dia_corte));
     }
   }, [fechaCompra]);
 

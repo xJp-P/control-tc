@@ -2161,6 +2161,69 @@ const F13 = {
       cifras.diferidasPorParte = difs.length;
     }
 
+    // ══ C10 — el plan arranca en el corte del ciclo de SU compra (dia del corte incluido) ══
+    //
+    // Hasta el 24-ago-2026 el primer corte se calculaba con un bloque inline propio que usaba
+    // ">= diaCorte", mientras el ciclo de la compra sale de calcCicloLocal, que usa "> diaCorte".
+    // Divergian en UNA fecha por mes -el propio dia del corte- y ahi la compra quedaba en el ciclo
+    // que cierra con su plan arrancando un mes despues: la primera cuota no se facturaba en el
+    // extracto donde aparece la compra. El bloque vivia TRIPLICADO (dividida, individual y
+    // DiferidaForm), asi que se comprueban los tres caminos.
+    //
+    // El oraculo es la derivacion del BACKEND para esa fecha, no el `ciclo` del payload: en el
+    // camino natural ese campo es el ciclo de la VISTA (el backend deriva el real de la fecha).
+    {
+      const diaCorte = 30;
+      const corteCanonico = (f) => cortes.corteDeCiclo(cortes.cicloConCorte(f, diaCorte, {}), diaCorte);
+      const responder = (url) => (url.indexOf('/diferidas') !== -1 ? { id: 1 } : {});
+      let comprobadas = 0;
+      for (const f of ['2029-06-15', '2029-06-29', '2029-06-30', '2029-07-01', '2029-05-31']) {
+        const esperado = corteCanonico(f);
+
+        const div = montar({ valorCop: '90000', dividir: true, numCuotas: 3, fecha: f,
+          splits: [{ persona_id: '7', monto: '60000' }, { persona_id: 'personal', monto: '30000' }] }, null, responder);
+        await enviarForm(div.arbol);
+        const pDiv = div.red.peticiones.filter(x => x.url.indexOf('/diferidas') !== -1);
+        const malDiv = pDiv.filter(x => x.cuerpo.fecha_primer_corte !== esperado);
+        if (!pDiv.length) notas.push('FALLO [C10]: la compra dividida a cuotas del ' + f + ' no creo ningun plan');
+        else if (malDiv.length) {
+          notas.push('FALLO [C10/COHERENCIA]: compra DIVIDIDA del ' + f + ' -> su plan arranca en ' +
+            malDiv[0].cuerpo.fecha_primer_corte + ' y su ciclo cierra el ' + esperado +
+            ' -> la primera cuota no se facturaria en el extracto donde aparece la compra');
+        }
+
+        const uni = montar({ valorCop: '90000', numCuotas: 3, fecha: f }, null, responder);
+        await enviarForm(uni.arbol);
+        const pUni = uni.red.peticiones.filter(x => x.url.indexOf('/diferidas') !== -1);
+        if (!pUni.length) notas.push('FALLO [C10]: la compra individual a cuotas del ' + f + ' no creo su plan');
+        else if (pUni[0].cuerpo.fecha_primer_corte !== esperado) {
+          notas.push('FALLO [C10/COHERENCIA]: compra INDIVIDUAL del ' + f + ' -> su plan arranca en ' +
+            pUni[0].cuerpo.fecha_primer_corte + ' y deberia arrancar el ' + esperado);
+        }
+        comprobadas++;
+      }
+
+      // Tercer camino: DiferidaForm (standalone) llevaba el mismo bloque por tercera vez.
+      const red = espiaRed(() => ({}));
+      const semDf = [];
+      semDf[4] = '2029-06-30';                       // fechaCompra: el dia del corte, el caso que fallaba
+      const cdf = montarConEstado(raiz, semDf, { fetch: red.fetch });
+      cdf.DiferidaForm({ item: null, tarjeta: tarjeta, onSave: () => {}, onCancel: () => {} });
+      const ordenDf = cdf.__hooks || [];
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(ordenDf[4])) || ordenDf[5] !== '') {
+        notas.push('FALLO de sanidad: las ranuras de DiferidaForm se movieron (4=fechaCompra, 5=fechaPrimerCorte); el fixture mediria otra variable');
+      } else {
+        correrEfectos(cdf);
+        const puesto = cdf.__setState.filter(x => x.ranura === 5).pop();
+        const esperadoDf = corteCanonico('2029-06-30');
+        if (!puesto || puesto.valor !== esperadoDf) {
+          notas.push('FALLO [C10/COHERENCIA]: DiferidaForm propone arrancar el plan en ' + (puesto ? puesto.valor : 'NADA') +
+            ' para una compra del dia del corte, y le corresponde ' + esperadoDf);
+        }
+      }
+      cifras.coherenciaCorte = comprobadas;
+    }
+
     return resultado(notas.length === 0, cifras, notas);
   },
   defecto: 'cada parte de una compra dividida a cuotas amortiza el TOTAL en vez de su propia parte',
