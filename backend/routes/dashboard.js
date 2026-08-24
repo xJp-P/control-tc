@@ -229,7 +229,10 @@ module.exports = function(db) {
       }
     });
 
-    const now = new Date();
+    // Se deriva de hoyLocal() y no de new Date() para que el reloj se pueda congelar en las
+    // pruebas: en produccion es la misma fecha local, y los diasFaltan de abajo salen identicos
+    // (el Math.ceil contra una medianoche local da el mismo entero a cualquier hora del dia).
+    const now = new Date(hoyLocal() + 'T00:00:00');
     let proximoCorteDate;
     if (now.getDate() < diaCorte) {
       proximoCorteDate = new Date(now.getFullYear(), now.getMonth(), diaCorte);

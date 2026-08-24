@@ -27,7 +27,8 @@ module.exports = function(db) {
     const diferidasActivas = db.prepare("SELECT * FROM diferidas WHERE estado='activo'" + tjFilter).all(...tjParams);
 
     for (let m = 0; m < meses; m++) {
-      const d = new Date();
+      // Misma razon que en dashboard.js: el mes base sale de hoyLocal() para que sea congelable.
+      const d = new Date(hoyLocal() + 'T00:00:00');
       d.setMonth(d.getMonth() + m);
       const mesStr = d.toISOString().slice(0, 7);
       const fechaCorte = `${mesStr}-${String(diaCorte).padStart(2, '0')}`;
