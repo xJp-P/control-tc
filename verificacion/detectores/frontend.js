@@ -1286,7 +1286,7 @@ function sembrarTerceros(db) {
   cruce.run(sf, cParc, 60000, F11_FECHA);
   cruce.run(sf, cTot, 80000, F11_FECHA);
 
-  return { tarjeta_id: tj, persona_id: per };
+  return { tarjeta_id: tj, persona_id: per, compra_dif: cDif, compra_parcial: cParc, credito: sf };
 }
 
 // Recolector propio: botonesDe() solo mira `disabled`, y el boton ATENUADO de un cruce al 100% NO
@@ -1611,6 +1611,129 @@ const F11 = {
         }
       });
     } catch (e) { notas.push('FALLO ejecutando los escenarios E4/E5: ' + e.message); }
+
+    // ══ E6 — el modal "Dinero a favor" ofrece CUOTAS, y su tope es el que el backend acepta ══
+    //
+    // Va sobre su PROPIA siembra porque APLICA un cruce: mover dinero dentro del escenario de E1-E5
+    // haria que las afirmaciones anteriores midieran otra cosa (mismo criterio que la Fase 2).
+    //
+    // El tope del modal es un ESPEJO del cap del servidor, y v5.6.0 dejo escrito lo que pasa cuando se
+    // tocan por separado: el modal ofrece un maximo que el backend rechaza con 400 y el usuario ve un
+    // "no" sin motivo. Asi que aqui el modal no se compara consigo mismo — se lee lo que OFRECE y se
+    // manda ESE monto al endpoint REAL, que es el oraculo de F10.
+    try {
+      await conApp(raiz, 'F11c', async (port, db) => {
+        const ids = sembrarTerceros(db);
+        const tarjetaC = Object.assign({ id: ids.tarjeta_id }, TARJETA_F11);
+        const compras = (await pedir(port, 'GET', '/api/terceros?tarjeta_id=' + ids.tarjeta_id)).j || [];
+        const saldos = (await pedir(port, 'GET', '/api/saldos-favor')).j || {};
+        const cred = (saldos.creditos || []).filter(c => c.persona_id === ids.persona_id)[0];
+        if (!cred) { notas.push('FALLO de sanidad [E6]: no llego el credito sembrado'); return; }
+
+        const dibujarModal = (aplicarSel) => {
+          const semilla = [];
+          semilla[iCompras] = compras;
+          semilla[iSaldos] = saldos;
+          semilla[3] = { persona_id: ids.persona_id, nombre: 'F11 DEUDOR', color: '#888888' };
+          semilla[4] = aplicarSel;
+          const c = montarConEstado(raiz, semilla);
+          return c.Terceros({ tarjeta: tarjetaC });
+        };
+
+        const arbol = dibujarModal({ creditoId: cred.id, compra_destino_id: '', cuota_num: null, monto: '' });
+        const sel = buscarNodo(arbol, n => n.type === 'select');
+        if (!sel) {
+          notas.push('FALLO de sanidad [E6]: no se dibujo el selector de deudas -> las ranuras de favorModal/aplicarSel se movieron y el fixture mide otra cosa');
+          return;
+        }
+        const opciones = (sel.hijos[0] || []).map(o => ({ valor: String(o.props.value), texto: textoDe(o).trim() }));
+        // La diferida entra por CUOTAS: la 1 aun debe 60.000 (100.000 menos los 40.000 reembolsados) y
+        // la 2 esta cubierta del todo, asi que no se ofrece.
+        const deCuota = opciones.filter(o => o.valor.indexOf(':') !== -1);
+        if (deCuota.length !== 1) {
+          notas.push('FALLO [E6]: se esperaba UNA cuota ofrecida (la que aun debe) y se ofrecen ' + deCuota.length + ' -> ' + JSON.stringify(opciones));
+          return;
+        }
+        if (montosDe(deCuota[0].texto).indexOf(60000) === -1) {
+          notas.push('FALLO [E6]: la cuota se ofrece con una deuda distinta de $60.000: "' + deCuota[0].texto + '"');
+        }
+        if (!/cuota/i.test(deCuota[0].texto)) notas.push('FALLO [E6]: la opcion no dice que es una cuota: "' + deCuota[0].texto + '"');
+        if (opciones.some(o => o.valor === ids.compra_dif + ':2')) notas.push('FALLO [E6]: se ofrece una cuota ya reembolsada del todo');
+        // Y la compra a cuotas NO puede ofrecerse entera: cruzar contra ella sin decir la cuota es lo
+        // que el backend rechaza.
+        if (opciones.some(o => o.valor === String(ids.compra_dif))) {
+          notas.push('FALLO [E6]: la diferida se ofrece como compra entera, sin cuota -> el backend rechazaria ese cruce');
+        }
+
+        // ── PARIDAD: el maximo que anuncia el modal es exactamente el que el backend acepta ──
+        const partes = deCuota[0].valor.split(':');
+        const dest = { compra_destino_id: parseInt(partes[0], 10), cuota_num: parseInt(partes[1], 10) };
+        const arbol2 = dibujarModal({ creditoId: cred.id, compra_destino_id: partes[0], cuota_num: dest.cuota_num, monto: '' });
+        const m = /M.ximo aqu.:\s*\$\s*([\d.,]+)/.exec(textoDe(arbol2));
+        const maxOfrecido = m ? numeroDe(m[1]) : null;
+        if (maxOfrecido == null) {
+          notas.push('FALLO de sanidad [E6]: el modal no anuncia un "Maximo aqui" con la cuota elegida');
+          return;
+        }
+        if (maxOfrecido !== 60000) notas.push('FALLO [E6]: el maximo ofrecido para esa cuota es ' + maxOfrecido + ' y deberia ser 60000');
+        const rMas = await pedir(port, 'POST', '/api/saldos-favor/' + cred.id + '/aplicar', Object.assign({ monto: maxOfrecido + 1 }, dest));
+        if (!(rMas.j && rMas.j.error)) {
+          notas.push('FALLO [E6/PARIDAD]: el backend acepto ' + (maxOfrecido + 1) + ', un peso POR ENCIMA del maximo que anuncia el modal -> el modal se queda corto y el usuario no puede cruzar todo lo que podria');
+        }
+        const rExacto = await pedir(port, 'POST', '/api/saldos-favor/' + cred.id + '/aplicar', Object.assign({ monto: maxOfrecido }, dest));
+        if (!(rExacto.j && rExacto.j.ok)) {
+          notas.push('FALLO [E6/PARIDAD]: el modal ofrece hasta ' + maxOfrecido + ' y el backend lo rechaza (' + JSON.stringify(rExacto.j) + ') -> el usuario ve un "no" sin motivo, que es la leccion de v5.6.0');
+        } else {
+          const tras = (await pedir(port, 'GET', '/api/terceros?tarjeta_id=' + ids.tarjeta_id)).j || [];
+          const difTras = tras.filter(x => x.descripcion === 'F11 DIFERIDA')[0];
+          const q1 = difTras && difTras.cuotas[0];
+          if (!q1 || q1.monto_bolsillo_cuota !== 100000) {
+            notas.push('FALLO [E6]: tras cruzar el maximo, la cuota 1 deberia quedar reembolsada del todo (100000) y quedo en ' + (q1 && q1.monto_bolsillo_cuota));
+          }
+          if (difTras && difTras.valor_pendiente !== 0) {
+            notas.push('FALLO [E6]: con las dos cuotas reembolsadas la deuda deberia ser 0 y es ' + difTras.valor_pendiente);
+          }
+        }
+
+        // ── Y el POST que construye el MODAL, no el que arma el detector: el `cuota_num` viaja en
+        //    `aplicarSaldo`, asi que comprobar solo el endpoint prueba el backend y no el camino real
+        //    (la leccion de F12/F9). Se pulsa el boton con un espia de fetch y se lee el cuerpo.
+        {
+          const enviados = [];
+          const espia = (url, opts) => {
+            let cuerpo = null;
+            try { cuerpo = opts && opts.body ? JSON.parse(opts.body) : null; } catch (e) { cuerpo = opts && opts.body; }
+            enviados.push({ url: String(url), cuerpo: cuerpo });
+            return Promise.resolve({ ok: true, json: () => Promise.resolve({ ok: true }) });
+          };
+          const semilla = [];
+          semilla[iCompras] = compras;
+          semilla[iSaldos] = saldos;
+          semilla[3] = { persona_id: ids.persona_id, nombre: 'F11 DEUDOR', color: '#888888' };
+          semilla[4] = { creditoId: cred.id, compra_destino_id: partes[0], cuota_num: dest.cuota_num, monto: '25000' };
+          const cE = montarConEstado(raiz, semilla, { fetch: espia });
+          const arbolE = cE.Terceros({ tarjeta: tarjetaC });
+          const btn = buscarNodo(arbolE, n => n.type === 'button' && /Aplicar cruce/.test(textoDe(n)));
+          if (!btn) notas.push('FALLO de sanidad [E6]: no se encontro el boton "Aplicar cruce" en el modal');
+          else {
+            await btn.props.onClick();
+            const post = enviados.filter(x => x.url.indexOf('/aplicar') !== -1)[0];
+            if (!post) notas.push('FALLO [E6/PAYLOAD]: pulsar "Aplicar cruce" no envio nada');
+            else {
+              if (post.cuerpo.cuota_num !== dest.cuota_num) {
+                notas.push('FALLO [E6/PAYLOAD]: el modal manda cuota_num=' + JSON.stringify(post.cuerpo.cuota_num) + ' en vez de ' + dest.cuota_num +
+                  ' -> el backend rechaza el cruce a una diferida porque no sabe a que cuota va');
+              }
+              if (post.cuerpo.compra_destino_id !== dest.compra_destino_id) {
+                notas.push('FALLO [E6/PAYLOAD]: el modal manda la compra ' + post.cuerpo.compra_destino_id + ' en vez de ' + dest.compra_destino_id);
+              }
+              if (Math.round(post.cuerpo.monto) !== 25000) notas.push('FALLO [E6/PAYLOAD]: el monto no viaja como se escribio (' + post.cuerpo.monto + ')');
+            }
+          }
+        }
+        cifras.maxOfrecido = maxOfrecido;
+      });
+    } catch (e) { notas.push('FALLO ejecutando el escenario E6: ' + e.message); }
 
     return resultado(notas.length === 0, cifras, notas);
   },

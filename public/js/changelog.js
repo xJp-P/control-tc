@@ -12,6 +12,13 @@
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '6.3.0': [
+    'YA PUEDES APLICAR UN SALDO A FAVOR A UNA COMPRA A CUOTAS. El dinero que queda a favor de una persona (por ejemplo cuando el banco reversa una compra que ella ya te habia reembolsado) solo se podia cruzar contra compras de una sola cuota. Si su deuda estaba en un plan de cuotas no habia donde aplicarlo, y la unica salida era devolverle el efectivo.',
+    'Ahora eliges TU a que cuota se aplica. El desplegable de "Dinero a favor" lista las cuotas que todavia deben, con lo que falta en cada una. El programa no reparte ese dinero por su cuenta: es plata de la otra persona y decides tu donde va.',
+    'El maximo que te ofrece es exactamente lo que falta en esa cuota, ni mas ni menos, asi que ya no puede pasar que escribas un monto y el programa lo rechace sin decirte por que.',
+    'Deshacerlo funciona igual que siempre: el movimiento queda anotado con su cuota, asi que al deshacerlo el dinero sale de esa misma cuota y vuelve a quedar disponible. Ni se pierde ni se cuenta dos veces.',
+    'Los cruces que ya tenias registrados no cambian en nada.',
+  ],
   '6.2.0': [
     'SI COMPRAS A CUOTAS EL MISMO DIA DEL CORTE, EL PLAN YA ARRANCA EN ESE EXTRACTO. La compra quedaba registrada en el mes que estaba cerrando, pero su plan de cuotas empezaba un mes despues: la primera cuota no aparecia en el mismo extracto donde salia la compra. Ahora las dos cosas van juntas.',
     'Solo cambia el caso de las compras hechas exactamente el dia del corte; el resto de los dias ya funcionaba bien. Y solo aplica a los planes que crees de ahora en adelante: los que ya tienes registrados no se tocan.',

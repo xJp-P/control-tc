@@ -59,7 +59,9 @@ function Terceros({ tarjeta }) {
     if (!aplicarSel || !aplicarSel.compra_destino_id) { toastErr('Elige una deuda destino.'); return; }
     const monto = parseFloat(aplicarSel.monto) || 0;
     if (monto <= 0) { toastErr('Ingresa un monto válido.'); return; }
-    const resp = await api('/saldos-favor/' + aplicarSel.creditoId + '/aplicar', { method: 'POST', body: { compra_destino_id: Number(aplicarSel.compra_destino_id), monto } });
+    // cuota_num viaja SIEMPRE que el destino sea una cuota: sin el, el backend rechaza el cruce a una
+    // diferida (no adivina a que cuota va) y el deshacer no sabria de donde restar.
+    const resp = await api('/saldos-favor/' + aplicarSel.creditoId + '/aplicar', { method: 'POST', body: { compra_destino_id: Number(aplicarSel.compra_destino_id), monto, cuota_num: aplicarSel.cuota_num || null } });
     if (resp && resp.error) { toastErr(resp.error); return; }
     setAplicarSel(null);
     toast('Saldo a favor aplicado a la deuda.');
@@ -470,11 +472,35 @@ function Terceros({ tarjeta }) {
       const creditos = (saldosFavor.creditos || [])
         .filter(cr => String(cr.persona_id) === String(pid))
         .sort((a, b) => (a.estado === 'activo' ? 0 : 1) - (b.estado === 'activo' ? 0 : 1));
-      // OJO: capital pelado A PROPÓSITO — espejo EXACTO del guard del backend (saldosFavor.js:
-      // deudaTercero = valor_cop - monto_bolsillo). El cruce de un saldo a favor sigue topeado al
-      // CAPITAL desde v4.8.2 (el interés se cubre con el bolsillo). Si aquí se suma el interés, el modal
-      // ofrece un máximo que el backend rechaza con 400. NO usar objetivoTerceroCop aquí.
-      const deudas = compras.filter(c => String(c.persona_id) === String(pid) && !c.es_diferida && (c.valor_cop - (c.monto_bolsillo || 0)) > 0);
+      // DESTINOS del cruce: una compra de 1 cuota, o una CUOTA concreta de una diferida. En una
+      // diferida el reembolso vive por cuota, asi que el usuario elige a cual va — el sistema no lo
+      // reparte solo (regla de v5.6.0: esa plata es del deudor).
+      //
+      // OJO con los topes: son ESPEJO EXACTO del backend y cada rama tiene el suyo.
+      //  · 1 cuota  -> capital pelado (valor_cop - monto_bolsillo). El cruce sigue topeado al CAPITAL
+      //    desde v4.8.2; el interes se cubre con el bolsillo. NO usar objetivoTerceroCop aqui.
+      //  · cuota    -> total de la cuota - lo ya reembolsado en ELLA, que es lo que devuelve
+      //    targetBolsillo(c,'COP',n) en el backend menos bolsilloDeCuota.
+      // Si el modal ofrece un maximo distinto al del servidor, este responde 400 y el usuario ve un
+      // rechazo sin motivo aparente: es la leccion de v5.6.0.
+      const misCompras = compras.filter(c => String(c.persona_id) === String(pid));
+      const deudas = [];
+      misCompras.forEach(c => {
+        if (c.es_diferida) {
+          (c.cuotas || []).forEach(q => {
+            const falta = Math.round(q.total - (q.monto_bolsillo_cuota || 0));
+            if (falta > 0) deudas.push({
+              key: c.id + ':' + q.num, id: c.id, cuota_num: q.num, max: falta,
+              etiqueta: c.descripcion + ' — cuota ' + badgeCuotaLabel(q.num, c.cuotas.length, c.reprog_total),
+            });
+          });
+        } else {
+          const falta = Math.round((c.valor_cop || 0) - (c.monto_bolsillo || 0));
+          if (falta > 0) deudas.push({ key: String(c.id), id: c.id, cuota_num: null, max: falta, etiqueta: c.descripcion });
+        }
+      });
+      const claveDestino = (sel) => sel ? (sel.compra_destino_id + (sel.cuota_num ? ':' + sel.cuota_num : '')) : '';
+      const leerDestino = (k) => { const p = String(k).split(':'); return { compra_destino_id: p[0], cuota_num: p[1] ? parseInt(p[1], 10) : null }; };
       return e('div', { className: 'modal-overlay', onClick: () => { setFavorModal(null); setAplicarSel(null); } },
         e('div', { className: 'modal', onClick: ev => ev.stopPropagation() },
           e('div', { className: 'modal-header' },
@@ -490,9 +516,9 @@ function Terceros({ tarjeta }) {
               : creditos.map(cr => {
                   const disp = Math.round(cr.disponible);
                   const abierto = !!(aplicarSel && aplicarSel.creditoId === cr.id);
-                  const dSel = deudas.find(x => String(x.id) === String(aplicarSel && aplicarSel.compra_destino_id));
-                  // Capital pelado: espejo del cap del backend (saldosFavor.js). Ver nota en `deudas`.
-                  const maxCruce = dSel ? Math.min(disp, Math.round(dSel.valor_cop - (dSel.monto_bolsillo || 0))) : disp;
+                  const dSel = deudas.find(x => x.key === claveDestino(aplicarSel));
+                  // El tope de cada destino ya viene calculado como espejo del backend (ver `deudas`).
+                  const maxCruce = dSel ? Math.min(disp, dSel.max) : disp;
                   const aps = cr.aplicaciones || [];
                   const estadoLabel = cr.estado === 'liquidado' ? 'Liquidado' : (disp > 0 ? 'Disponible' : 'Consumido');
                   return e('div', { key: cr.id, style: { border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px', marginBottom: 10, background: 'var(--bg-input)' } },
@@ -507,7 +533,7 @@ function Terceros({ tarjeta }) {
                       )
                     ),
                     disp > 0 && e('div', { style: { display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' } },
-                      e('button', { type: 'button', className: 'btn btn-sm btn-primary', onClick: () => setAplicarSel(abierto ? null : { creditoId: cr.id, compra_destino_id: (deudas[0] ? String(deudas[0].id) : ''), monto: '' }) }, abierto ? 'Cerrar' : 'Aplicar a una deuda'),
+                      e('button', { type: 'button', className: 'btn btn-sm btn-primary', onClick: () => setAplicarSel(abierto ? null : Object.assign({ creditoId: cr.id, monto: '' }, leerDestino(deudas[0] ? deudas[0].key : ''))) }, abierto ? 'Cerrar' : 'Aplicar a una deuda'),
                       e('button', { type: 'button', className: 'btn btn-sm', onClick: () => liquidarSaldo(cr.id) }, 'Liquidar (efectivo)')
                     ),
                     abierto && e('div', { style: { marginTop: 10, paddingTop: 10, borderTop: '1px dashed var(--border)' } },
@@ -516,8 +542,8 @@ function Terceros({ tarjeta }) {
                         : e('div', null,
                             e('div', { className: 'form-group', style: { marginBottom: 8 } },
                               e('label', { className: 'form-label' }, 'Aplicar a la deuda'),
-                              e('select', { className: 'form-select', value: aplicarSel.compra_destino_id, onChange: ev => setAplicarSel(prev => ({ ...prev, compra_destino_id: ev.target.value })) },
-                                deudas.map(d => e('option', { key: d.id, value: String(d.id) }, d.descripcion + ' — debe ' + fmtCOP(objetivoTerceroCop(d) - (d.monto_bolsillo || 0)))))
+                              e('select', { className: 'form-select', value: claveDestino(aplicarSel), onChange: ev => setAplicarSel(prev => Object.assign({}, prev, leerDestino(ev.target.value))) },
+                                deudas.map(d => e('option', { key: d.key, value: d.key }, d.etiqueta + ' — debe ' + fmtCOP(d.max))))
                             ),
                             e('div', { className: 'form-group', style: { marginBottom: 6 } },
                               e('label', { className: 'form-label' }, 'Monto a cruzar'),
@@ -533,7 +559,7 @@ function Terceros({ tarjeta }) {
                       aps.map(ap => e('div', { key: ap.id, style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '4px 0' } },
                         e('div', { style: { fontSize: 12 } },
                           e('span', { style: { fontFamily: 'monospace', fontWeight: 600 } }, fmtCOP(Math.round(ap.monto))),
-                          e('span', { style: { color: 'var(--text-muted)' } }, ' · ' + (ap.tipo === 'liquidacion' ? 'Liquidación (efectivo)' : ('cruce a ' + (ap.compra_desc || ('compra #' + ap.compra_destino_id))))),
+                          e('span', { style: { color: 'var(--text-muted)' } }, ' · ' + (ap.tipo === 'liquidacion' ? 'Liquidación (efectivo)' : ('cruce a ' + (ap.compra_desc || ('compra #' + ap.compra_destino_id)) + (ap.cuota_num ? ' (cuota ' + ap.cuota_num + ')' : '')))),
                           // De qué mes es la compra: distingue un cruce del ciclo en curso de uno viejo
                           // (útil ahora que ambos se pueden deshacer).
                           ap.tipo !== 'liquidacion' && ap.compra_ciclo && e('span', { style: { color: 'var(--text-muted)', opacity: 0.7 } }, ' · ' + fmtCicloLabel(ap.compra_ciclo))

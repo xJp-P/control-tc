@@ -228,7 +228,7 @@
     {
       "nombre": "CHANGELOG",
       "tipo": "const",
-      "lineas": 810,
+      "lineas": 817,
       "pieza": "js/changelog.js"
     },
     {
@@ -342,7 +342,7 @@
     {
       "nombre": "Terceros",
       "tipo": "function",
-      "lineas": 555,
+      "lineas": 581,
       "pieza": "js/terceros.js"
     },
     {
