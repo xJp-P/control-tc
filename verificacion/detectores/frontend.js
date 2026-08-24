@@ -1513,6 +1513,106 @@ const F11 = {
       }
     } catch (e) { notas.push('FALLO dibujando los escenarios E2/E3: ' + e.message); }
 
+    // ══ E4 y E5 (Fase 2) — necesitan filas en `extractos`, asi que van sobre su PROPIA siembra ══
+    //
+    // Se monta aparte para no alterar el escenario de E1/E2/E3: sellar un extracto cambia la regla de
+    // visibilidad de las compras de ese ciclo, y con la siembra compartida las afirmaciones anteriores
+    // pasarian a medir otra cosa.
+    //
+    // ⚠️ CORRECCION de lo que se anoto al cerrar la Fase 1: se dijo que sin fila en `extractos` el
+    // predicado de `gestionables` quedaba en NULL y el cruce no contaba. Es FALSO — la consulta usa
+    // COALESCE(e.estado, '') <> 'pagado', asi que sin extracto el cruce SI sostiene el chip. Lo que
+    // hay que sembrar para cerrar el libro es un extracto PAGADO.
+    try {
+      await conApp(raiz, 'F11b', async (port, db) => {
+        const ids = sembrarTerceros(db);
+        const tj = ids.tarjeta_id;
+        const tarjetaB = Object.assign({ id: tj }, TARJETA_F11);
+        const traerCompras = async () => (await pedir(port, 'GET', '/api/terceros?tarjeta_id=' + tj)).j || [];
+        const traerSaldos = async () => (await pedir(port, 'GET', '/api/saldos-favor')).j || {};
+        const dib = (items, saldos) => {
+          const semilla = [];
+          semilla[iCompras] = items;
+          semilla[iSaldos] = saldos;
+          const c = montarConEstado(raiz, semilla);
+          return c.Terceros({ tarjeta: tarjetaB });
+        };
+        const chipDe = (arbol) => buscarNodo(arbol, n => n.props && n.props.className === 'badge-clickable' && /Dinero a favor/.test(textoDe(n)));
+
+        // ── E4: la cuota 2 cae en 2029-07. Sellado ese extracto y ya reembolsada, el dinero
+        //    apartado se consumio al pagar: no hay bolsillo que tocar, solo historia.
+        db.prepare("INSERT INTO extractos (tarjeta_id, ciclo, fecha_corte, fecha_pago, pago_minimo, pago_total, estado, monto_pagado) VALUES (?,?,?,?,?,?, 'pagado', ?)")
+          .run(tj, '2029-07', '2029-07-30', '2029-08-15', 100000, 200000, 100000);
+        const compras = await traerCompras();
+        const dif = compras.filter(c => c.descripcion === 'F11 DIFERIDA')[0];
+        if (!dif || !dif.cuotas || !dif.cuotas[1] || !dif.cuotas[1].ciclo_pagado || dif.cuotas[0].ciclo_pagado) {
+          notas.push('FALLO de sanidad [E4]: se esperaba la cuota 2 con ciclo_pagado y la 1 sin el, y llegaron ' +
+            JSON.stringify((dif && dif.cuotas || []).map(q => q.ciclo_pagado)) + ' -> el escenario no quedo montado');
+        } else {
+          const arbol = dib([dif], await traerSaldos());
+          const f1 = filaConTexto(arbol, 'Cuota 1/2');
+          const f2 = filaConTexto(arbol, 'Cuota 2/2');
+          if (!f1 || !f2) notas.push('FALLO de sanidad [E4]: no se dibujaron las dos cuotas');
+          else {
+            const accion2 = textoDe(celdaAccion(f2));
+            if (!/Saldada/.test(accion2)) {
+              notas.push('FALLO [E4]: la cuota de un mes YA PAGADO y ya reembolsada deberia quedar como "Saldada" y dice "' + accion2.trim() + '"');
+            }
+            if (botonesConEstilo(celdaAccion(f2)).length !== 0) {
+              notas.push('FALLO [E4]: esa cuota sigue ofreciendo un boton -> invita a mover un bolsillo que ya se consumio al pagar el extracto');
+            }
+            // El PAR: la cuota del mes NO pagado conserva su boton. Sin esto, ocultar el boton
+            // SIEMPRE tambien pasaria la comprobacion de arriba.
+            const b1 = botonesConEstilo(celdaAccion(f1));
+            if (b1.length !== 1 || b1[0].texto !== 'Bolsillo' || b1[0].atenuado) {
+              notas.push('FALLO [E4]: la cuota del mes aun ABIERTO perdio su boton Bolsillo (' + JSON.stringify(b1) + ')');
+            }
+          }
+        }
+
+        // ── E5: el chip "Dinero a favor" solo aparece si hay algo que hacer (regla de v5.6.1) ──
+        // (a) queda dinero sin repartir -> chip VERDE con el monto.
+        {
+          const arbol = dib(await traerCompras(), await traerSaldos());
+          const chip = chipDe(arbol);
+          if (!chip) notas.push('FALLO [E5a]: con dinero a favor sin repartir el chip no aparece');
+          else {
+            const t = textoDe(chip);
+            if (montosDe(t).indexOf(160000) === -1) notas.push('FALLO [E5a]: el chip no muestra el disponible ($160.000): "' + t.trim() + '"');
+            if (/Ver historial/.test(t)) notas.push('FALLO [E5a]: con dinero disponible el chip se dibuja como historial');
+          }
+        }
+        // (b) sin disponible, pero con cruces sobre un ciclo ABIERTO -> chip GRIS, "Ver historial".
+        db.prepare('UPDATE saldos_favor_tercero SET monto_aplicado = monto WHERE persona_id=?').run(ids.persona_id);
+        {
+          const saldos = await traerSaldos();
+          const arbol = dib(await traerCompras(), saldos);
+          const chip = chipDe(arbol);
+          if (!chip) {
+            notas.push('FALLO [E5b]: sin saldo disponible pero con cruces sobre un mes ABIERTO el chip desaparecio -> no hay forma de deshacer un cruce mal aplicado');
+          } else if (!/Ver historial/.test(textoDe(chip))) {
+            notas.push('FALLO [E5b]: el chip deberia ofrecer "Ver historial" y dice "' + textoDe(chip).trim() + '"');
+          }
+        }
+        // (c) sin disponible y con TODOS los cruces en meses ya PAGADOS -> el libro esta cerrado y el
+        //     chip DESAPARECE. Es la mitad de la regla que de verdad cuesta: es la que borra ruido.
+        db.prepare("INSERT INTO extractos (tarjeta_id, ciclo, fecha_corte, fecha_pago, pago_minimo, pago_total, estado, monto_pagado) VALUES (?,?,?,?,?,?, 'pagado', ?)")
+          .run(tj, F11_CICLO, F11_CICLO + '-30', '2029-07-15', 100000, 200000, 100000);
+        {
+          const saldos = await traerSaldos();
+          const comprasC = await traerCompras();
+          const arbol = dib(comprasC, saldos);
+          // Sanidad: la persona tiene que seguir en pantalla (si no, el chip faltaria por otra razon).
+          if (!buscarNodo(arbol, n => n.props && n.props.className === 'persona-card-header')) {
+            notas.push('FALLO de sanidad [E5c]: la persona ya no se dibuja, asi que la ausencia del chip no prueba nada');
+          } else if (chipDe(arbol)) {
+            notas.push('FALLO [E5c]: con el saldo agotado y todos los cruces en meses ya pagados el chip sigue ahi -> ofrece entrar a deshacer pagos de meses cerrados');
+          }
+          cifras.comprasVisiblesE5c = comprasC.length;
+        }
+      });
+    } catch (e) { notas.push('FALLO ejecutando los escenarios E4/E5: ' + e.message); }
+
     return resultado(notas.length === 0, cifras, notas);
   },
   defecto: 'objetivoTerceroCop vuelve a derivar la deuda del tercero contra valor_cop pelado (el defecto EXACTO de v4.8.2)',
