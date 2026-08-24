@@ -12,6 +12,13 @@
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '6.2.0': [
+    'SI COMPRAS A CUOTAS EL MISMO DIA DEL CORTE, EL PLAN YA ARRANCA EN ESE EXTRACTO. La compra quedaba registrada en el mes que estaba cerrando, pero su plan de cuotas empezaba un mes despues: la primera cuota no aparecia en el mismo extracto donde salia la compra. Ahora las dos cosas van juntas.',
+    'Solo cambia el caso de las compras hechas exactamente el dia del corte; el resto de los dias ya funcionaba bien. Y solo aplica a los planes que crees de ahora en adelante: los que ya tienes registrados no se tocan.',
+    'AHORA UN ABONO PARCIAL DE UNA CUOTA SI CUENTA. Cuando un responsable te devolvia solo una parte de una cuota, el total que te debia seguia mostrando la cuota completa, como si no hubiera abonado nada, aunque la fila de esa misma cuota si mostraba el abono: la pantalla se contradecia consigo misma.',
+    'Ahora lo que ya te devolvieron se descuenta de lo que te deben y se suma en "Recibido". Por ejemplo, una cuota de $100.000 con $40.000 abonados pasa a contar como $60.000 pendientes y $40.000 recibidos, en vez de $100.000 pendientes.',
+    'Ninguna cifra actual se mueve con este cambio: hoy no tienes ninguna cuota con abono parcial registrada. Se empieza a notar la proxima vez que registres uno.',
+  ],
   '6.1.3': [
     'EL DINERO APARTADO PARA UNA CUOTA AHORA SE CUENTA EN EL MES DE ESA CUOTA. Cuando apartabas dinero para una compra a cuotas, la tarjeta "Saldo en Bolsillo" sumaba TODO lo apartado del plan al mes de la compra, aunque una parte fuera para cuotas de meses siguientes. Eso inflaba el mes viejo y dejaba el mes que viene sin ver ese dinero.',
     'Ahora cada cuota cuenta en el mes en que el banco la cobra. En un caso real de la aplicacion, junio mostraba dinero que en realidad era de la cuota de julio, y julio no lo veia: eran mas de cien mil pesos apareciendo en el mes equivocado.',
