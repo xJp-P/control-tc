@@ -6,9 +6,14 @@
 const { Router } = require('express');
 const { hoyLocal } = require('../helpers/dates');
 const { objetivoBolsilloCop, cicloYaPagado } = require('../helpers/bolsillo');
+// targetBolsillo es la MISMA funcion con la que el boton Bolsillo capa una cuota. Reusarla (en vez
+// de recalcular la amortizacion aqui) es lo que evita que el cruce y el cap se separen, que es
+// exactamente el defecto que costo v4.8.2.
+const crearCompartidoCompras = require('./compras/_compartido');
 
 module.exports = function(db, { logAction }) {
   const router = Router();
+  const { targetBolsillo } = crearCompartidoCompras(db, logAction, () => '');
   const fmt = (n) => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(Math.round(n));
   const r2 = (n) => Math.round((n || 0) * 100) / 100;
 
@@ -40,6 +45,30 @@ module.exports = function(db, { logAction }) {
     db.prepare('UPDATE compras SET monto_bolsillo=?, estado=?, tercero_pagado=? WHERE id=?')
       .run(nuevoBolsillo, estadoFinal, terceroPagado, destino.id);
     return { estadoFinal, estadoDerivado, terceroPagado };
+  }
+
+  // Cruce (o su deshacer) sobre UNA cuota de una diferida. Escribe bolsillo_cuotas y RECALCULA el
+  // cache monto_bolsillo desde la suma: el cache NUNCA se escribe a mano, porque es un valor
+  // derivado y cualquier escritura per-cuota posterior lo recalcularia, evaporando el cambio.
+  // No toca `estado` ni `tercero_pagado`, igual que la rama per-cuota del boton Bolsillo: en una
+  // diferida el estado es 'diferida' y el toggle 'Recibido' es de la compra COMPLETA, no de una cuota.
+  function aplicarBolsilloACuota(destino, cuotaNum, nuevoMontoCuota) {
+    if (nuevoMontoCuota > 0) {
+      db.prepare("INSERT INTO bolsillo_cuotas (compra_id, cuota_num, monto, moneda) VALUES (?,?,?, 'COP') ON CONFLICT(compra_id, cuota_num) DO UPDATE SET monto=?, moneda='COP'")
+        .run(destino.id, cuotaNum, nuevoMontoCuota, nuevoMontoCuota);
+    } else {
+      db.prepare('DELETE FROM bolsillo_cuotas WHERE compra_id=? AND cuota_num=?').run(destino.id, cuotaNum);
+    }
+    const sumCop = db.prepare("SELECT COALESCE(SUM(monto),0) t FROM bolsillo_cuotas WHERE compra_id=? AND COALESCE(moneda,'COP')='COP'").get(destino.id);
+    const sumUsd = db.prepare("SELECT COALESCE(SUM(monto),0) t FROM bolsillo_cuotas WHERE compra_id=? AND moneda='USD'").get(destino.id);
+    db.prepare('UPDATE compras SET monto_bolsillo=?, monto_bolsillo_usd=? WHERE id=?').run(sumCop.t, sumUsd.t, destino.id);
+    return sumCop.t;
+  }
+
+  // Reembolso que YA tiene una cuota concreta (COP).
+  function bolsilloDeCuota(compraId, cuotaNum) {
+    const r = db.prepare("SELECT COALESCE(monto,0) m FROM bolsillo_cuotas WHERE compra_id=? AND cuota_num=? AND COALESCE(moneda,'COP')='COP'").get(compraId, cuotaNum);
+    return r ? r2(r.m) : 0;
   }
 
   // Re-deriva el estado de una compra de 1 cuota tras cambiar su monto_bolsillo (reembolso del tercero).
@@ -140,7 +169,7 @@ module.exports = function(db, { logAction }) {
 
   // POST /:id/aplicar — CRUCE DE CUENTAS: aplica $monto del crédito a una deuda 1-cuota del MISMO tercero.
   router.post('/:id/aplicar', (req, res) => {
-    const { compra_destino_id, monto, fecha, notas } = req.body;
+    const { compra_destino_id, monto, fecha, notas, cuota_num } = req.body;
     const credito = db.prepare('SELECT * FROM saldos_favor_tercero WHERE id=?').get(req.params.id);
     if (!credito) return res.status(404).json({ error: 'Credito no encontrado' });
     const disponible = r2(credito.monto - credito.monto_aplicado);
@@ -150,24 +179,45 @@ module.exports = function(db, { logAction }) {
     const destino = db.prepare('SELECT * FROM compras WHERE id=?').get(compra_destino_id);
     if (!destino) return res.status(404).json({ error: 'Compra destino no encontrada' });
     if (destino.persona_id !== credito.persona_id) return res.status(400).json({ error: 'La compra no pertenece al mismo tercero del credito (no se cruza entre personas).' });
-    if (destino.estado === 'diferida') return res.status(400).json({ error: 'Por ahora el cruce solo aplica a compras de 1 cuota (las diferidas quedan para una siguiente version).' });
-    const deudaTercero = r2(destino.valor_cop - (destino.monto_bolsillo || 0));
-    if (deudaTercero <= 0) return res.status(400).json({ error: 'Esa compra ya no tiene deuda del tercero.' });
-    if (m > deudaTercero + 0.01) return res.status(400).json({ error: 'La deuda del tercero en esa compra es ' + fmt(deudaTercero) + '.' });
+    // En una DIFERIDA el reembolso vive por cuota, asi que el cruce apunta a una cuota concreta y la
+    // elige el USUARIO: repartirlo solo entre cuotas seria el sistema decidiendo a que deuda va la
+    // plata del deudor, que es justo lo que se descarto en v5.6.0. Ademas haria ambiguo el deshacer.
+    const esDiferida = destino.estado === 'diferida';
+    let cuotaNum = null;
+    let yaPuesto = 0;
+    let deudaTercero;
+    if (esDiferida) {
+      cuotaNum = parseInt(cuota_num, 10);
+      if (!(cuotaNum > 0)) return res.status(400).json({ error: 'En una compra a cuotas hay que indicar a que cuota se aplica el saldo.' });
+      // El tope es el de la CUOTA, con la misma funcion que usa el boton Bolsillo.
+      const topeCuota = targetBolsillo(destino, 'COP', cuotaNum);
+      if (topeCuota == null) return res.status(400).json({ error: 'No se pudo calcular el valor de esa cuota.' });
+      yaPuesto = bolsilloDeCuota(destino.id, cuotaNum);
+      deudaTercero = r2(topeCuota - yaPuesto);
+      if (deudaTercero <= 0) return res.status(400).json({ error: 'Esa cuota ya esta reembolsada por completo.' });
+      if (m > deudaTercero + 0.01) return res.status(400).json({ error: 'La deuda del tercero en esa cuota es ' + fmt(deudaTercero) + '.' });
+    } else {
+      // 1 cuota: el cruce se topea al CAPITAL a proposito (v5.6.0); el recargo intl se completa con
+      // efectivo desde el boton Bolsillo (v4.8.1). No se cambia aqui.
+      deudaTercero = r2(destino.valor_cop - (destino.monto_bolsillo || 0));
+      if (deudaTercero <= 0) return res.status(400).json({ error: 'Esa compra ya no tiene deuda del tercero.' });
+      if (m > deudaTercero + 0.01) return res.status(400).json({ error: 'La deuda del tercero en esa compra es ' + fmt(deudaTercero) + '.' });
+    }
 
-    const nuevoBolsillo = r2((destino.monto_bolsillo || 0) + m);
+    const nuevoBolsillo = r2((destino.monto_bolsillo || 0) + m);   // solo para la rama de 1 cuota
     const nuevoAplicado = r2(credito.monto_aplicado + m);
     const nuevoEstadoCredito = nuevoAplicado >= r2(credito.monto) - 0.01 ? 'consumido' : 'activo';
     db.transaction(() => {
-      db.prepare(`INSERT INTO aplicaciones_saldo_favor (saldo_favor_id, compra_destino_id, tipo, monto, fecha, notas)
-                  VALUES (?,?,?,?,?,?)`).run(credito.id, compra_destino_id, 'cruce', m, fecha || hoyLocal(), notas || null);
+      db.prepare(`INSERT INTO aplicaciones_saldo_favor (saldo_favor_id, compra_destino_id, tipo, monto, fecha, notas, cuota_num)
+                  VALUES (?,?,?,?,?,?,?)`).run(credito.id, compra_destino_id, 'cruce', m, fecha || hoyLocal(), notas || null, cuotaNum);
       db.prepare('UPDATE saldos_favor_tercero SET monto_aplicado=?, estado=? WHERE id=?').run(nuevoAplicado, nuevoEstadoCredito, credito.id);
       // Los dos libros por separado (v5.6.1): el estado con el BANCO se congela si el ciclo ya se pagó
       // (antes se pisaba 'pagado' → 'bolsillo'); el reembolso del tercero se aplica siempre.
-      aplicarBolsilloATercero(destino, nuevoBolsillo, { conservarTerceroPagado: true });
+      if (esDiferida) aplicarBolsilloACuota(destino, cuotaNum, r2(yaPuesto + m));
+      else aplicarBolsilloATercero(destino, nuevoBolsillo, { conservarTerceroPagado: true });
     })();
 
-    logAction('editar', 'Saldo a favor aplicado: ' + fmt(m) + ' a "' + destino.descripcion + '"');
+    logAction('editar', 'Saldo a favor aplicado: ' + fmt(m) + ' a "' + destino.descripcion + '"' + (esDiferida ? ' (cuota ' + cuotaNum + ')' : ''));
     res.json({ ok: true, disponible: r2(disponible - m) });
   });
 
@@ -220,8 +270,17 @@ module.exports = function(db, { logAction }) {
       if (apl.tipo === 'cruce' && apl.compra_destino_id) {
         const destino = db.prepare('SELECT * FROM compras WHERE id=?').get(apl.compra_destino_id);
         if (destino) {
-          const nuevoBolsillo = Math.max(0, r2((destino.monto_bolsillo || 0) - apl.monto));
-          aplicarBolsilloATercero(destino, nuevoBolsillo);
+          if (apl.cuota_num != null) {
+            // El cruce fue a una CUOTA concreta: se retira de ESA cuota y el cache se recalcula desde
+            // la suma. Restarlo del cache -lo unico que se podia hacer sin cuota_num- no serviria: la
+            // siguiente escritura per-cuota lo recalcula y el reembolso resucita, dejando el credito
+            // disponible Y el dinero en el bolsillo. Esa es la firma del doble conteo.
+            const actual = bolsilloDeCuota(destino.id, apl.cuota_num);
+            aplicarBolsilloACuota(destino, apl.cuota_num, Math.max(0, r2(actual - apl.monto)));
+          } else {
+            const nuevoBolsillo = Math.max(0, r2((destino.monto_bolsillo || 0) - apl.monto));
+            aplicarBolsilloATercero(destino, nuevoBolsillo);
+          }
         }
       }
       db.prepare('DELETE FROM aplicaciones_saldo_favor WHERE id=?').run(apl.id);

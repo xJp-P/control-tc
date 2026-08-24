@@ -23,7 +23,14 @@ module.exports = function(router, ctx) {
     // efectivo para completar un cruce PARCIAL) pero NUNCA bajar de lo ya cruzado — reducirlo descuadraría
     // el crédito del tercero (para eso se deshace el cruce desde "Dinero a favor"). El piso se valida abajo,
     // tras aplicar el cap a nuevoMonto.
-    const cruceCubierto = db.prepare("SELECT COALESCE(SUM(monto),0) as s FROM aplicaciones_saldo_favor WHERE compra_destino_id=? AND tipo='cruce'").get(req.params.id).s || 0;
+    // El piso se mide en la MISMA unidad que la escritura. Con una diferida la escritura es de UNA
+    // cuota, asi que compararla contra el total de cruces de toda la compra bloquearia ediciones
+    // legitimas o dejaria borrar un cruce; se filtra por cuota. Para 1 cuota los cruces tienen
+    // cuota_num NULL, asi que la suma es la de siempre -> sin regresion.
+    const escrituraPorCuota = (cuota_num != null && c.estado === 'diferida');
+    const cruceCubierto = (escrituraPorCuota
+      ? db.prepare("SELECT COALESCE(SUM(monto),0) as s FROM aplicaciones_saldo_favor WHERE compra_destino_id=? AND tipo='cruce' AND cuota_num=?").get(req.params.id, cuota_num)
+      : db.prepare("SELECT COALESCE(SUM(monto),0) as s FROM aplicaciones_saldo_favor WHERE compra_destino_id=? AND tipo='cruce'").get(req.params.id)).s || 0;
     // Inferir moneda: explícita > heurística (compra USD pura).
     const compraEsUsd = (c.valor_usd && c.valor_usd > 0) && !c.valor_cop;
     const monedaPago = moneda === 'USD' ? 'USD' : (moneda === 'COP' ? 'COP' : (compraEsUsd ? 'USD' : 'COP'));

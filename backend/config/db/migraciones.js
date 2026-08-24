@@ -260,6 +260,15 @@ function aplicarMigraciones(db) {
   try { db.prepare('SELECT orden_dia FROM compras LIMIT 1').get(); }
   catch (e) { db.exec('ALTER TABLE compras ADD COLUMN orden_dia INTEGER'); }
 
+  // A que CUOTA se adjudico un cruce de saldo a favor. NULL = compra de 1 cuota (la semantica de
+  // v4.8.0), asi que el historico no se toca. Hace falta porque en una diferida el reembolso vive
+  // por cuota en bolsillo_cuotas y `compras.monto_bolsillo` es solo un cache = SUM: sin saber la
+  // cuota, deshacer un cruce tendria que restar del cache, y cualquier escritura per-cuota
+  // posterior lo recalcula y resucita el reembolso -> el credito vuelve a estar disponible
+  // mientras el bolsillo conserva el dinero, o sea la misma plata contada dos veces.
+  try { db.prepare('SELECT cuota_num FROM aplicaciones_saldo_favor LIMIT 1').get(); }
+  catch (e) { db.exec('ALTER TABLE aplicaciones_saldo_favor ADD COLUMN cuota_num INTEGER'); }
+
   // Limpieza de la tabla 'log' legacy (reemplazada por 'historial', creada arriba).
   try { db.exec('DROP TABLE IF EXISTS log'); } catch (e) {}
 }

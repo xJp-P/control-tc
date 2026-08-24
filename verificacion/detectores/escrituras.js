@@ -234,4 +234,133 @@ const R6 = {
   },
 };
 
-module.exports = [R6];
+// ─── R9: el saldo a favor cruzado a una CUOTA ni se duplica ni se pierde ────
+//
+// POR QUE EXISTE: hasta v6.2.0 un credito de reverso NO se podia cruzar contra una diferida, y el
+// motivo de fondo no era falta de ganas sino que el ledger no podia expresarlo: en una diferida el
+// reembolso vive POR CUOTA en bolsillo_cuotas y `compras.monto_bolsillo` es solo un cache = SUM,
+// mientras `aplicaciones_saldo_favor` solo guardaba la compra. Al abrirlo hay DOS formas de perder
+// o duplicar plata del tercero, y las dos son silenciosas:
+//   · deshacer restando del CACHE en vez de la cuota -> la siguiente escritura per-cuota lo recalcula
+//     y el reembolso resucita, con el credito ya devuelto: la misma plata dos veces.
+//   · medir el piso del cruce contra el total de la compra cuando la escritura es de UNA cuota ->
+//     o bloquea ediciones legitimas o deja borrar un cruce.
+// Ninguna de las dos rompe nada visible en el momento: aparecen despues, cuando alguien vuelve a
+// tocar el bolsillo. Por eso el invariante se audita contra la BD y no en pantalla (eso es F11).
+//
+// El escenario se SIEMBRA entero (criterio de R6/R8): tarjeta, persona, diferida de 2 cuotas con
+// tasa 0 -asi cada cuota vale monto/2 EXACTO y ninguna afirmacion depende del motor- y un credito.
+const R9 = {
+  id: 'R9',
+  nombre: 'Saldo a favor cruzado a una cuota: aplicar y deshacer es inverso fiel',
+  async medir(raiz) {
+    const notas = [];
+    const cifras = {};
+    const A = (cond, msg) => { if (!cond) notas.push('FALLO ' + msg); };
+
+    try {
+      await conApp(raiz, 'R9', async (port, db) => {
+        // ── Siembra ──
+        const tj = db.prepare("INSERT INTO tarjetas (nombre, banco, franquicia, dia_corte, cupo_total, tasa_mv_avances, estado) VALUES ('R9 TARJETA','Bancolombia','Visa',30,10000000,0.02,'activa')").run().lastInsertRowid;
+        const per = db.prepare("INSERT INTO personas (nombre, color) VALUES ('R9 DEUDOR','#333333')").run().lastInsertRowid;
+        const dif = db.prepare("INSERT INTO diferidas (tarjeta_id, etiqueta, monto, tasa_mv, num_cuotas, fecha_compra, fecha_primer_corte, estado, notas) VALUES (?,?,?,0,2,?,?, 'activo','R9')")
+          .run(tj, 'R9 DIFERIDA', 200000, '2029-05-31', '2029-06-30').lastInsertRowid;
+        const compra = db.prepare("INSERT INTO compras (tarjeta_id, fecha, descripcion, valor_cop, estado, ciclo, persona_id, diferida_id, notas, monto_bolsillo) VALUES (?,?,?,?, 'diferida', ?,?,?, 'Diferida a 2 cuotas', 0)")
+          .run(tj, '2029-05-31', 'R9 DIFERIDA', 200000, '2029-06', per, dif).lastInsertRowid;
+        const cred = db.prepare("INSERT INTO saldos_favor_tercero (persona_id, monto, monto_aplicado, origen_tipo, tarjeta_id, descripcion, fecha, estado) VALUES (?,?,0, 'reverso', ?, 'R9 REVERSO', '2029-05-31', 'activo')")
+          .run(per, 200000, tj).lastInsertRowid;
+
+        const bolCuota = (n) => { const r = db.prepare("SELECT COALESCE(monto,0) m FROM bolsillo_cuotas WHERE compra_id=? AND cuota_num=?").get(compra, n); return r ? Math.round(r.m) : 0; };
+        const cache = () => Math.round(db.prepare('SELECT COALESCE(monto_bolsillo,0) m FROM compras WHERE id=?').get(compra).m);
+        const sumaCuotas = () => Math.round(db.prepare("SELECT COALESCE(SUM(monto),0) t FROM bolsillo_cuotas WHERE compra_id=? AND COALESCE(moneda,'COP')='COP'").get(compra).t);
+        const credito = () => db.prepare('SELECT monto, monto_aplicado, estado FROM saldos_favor_tercero WHERE id=?').get(cred);
+        const cruces = () => db.prepare("SELECT COALESCE(SUM(monto),0) t FROM aplicaciones_saldo_favor WHERE saldo_favor_id=? AND tipo='cruce'").get(cred).t;
+        // INVARIANTE MADRE: lo que el credito dice haber repartido y lo que el ledger tiene vivo son
+        // lo mismo, y el cache es SIEMPRE la suma de las cuotas (nunca un valor escrito a mano).
+        const invariantes = (etapa) => {
+          const c = credito();
+          A(Math.round(c.monto_aplicado) === Math.round(cruces()), '[' + etapa + '/LEDGER]: el credito dice haber repartido ' + c.monto_aplicado + ' y sus cruces vivos suman ' + cruces());
+          A(cache() === sumaCuotas(), '[' + etapa + '/CACHE]: monto_bolsillo (' + cache() + ') dejo de ser la suma de las cuotas (' + sumaCuotas() + ') -> el proximo guardado per-cuota lo recalcula y el cambio se evapora');
+        };
+
+        // ── 1. Cruce de 40.000 a la CUOTA 1 ──
+        const r1 = await pedir(port, 'POST', '/api/saldos-favor/' + cred + '/aplicar', { compra_destino_id: compra, monto: 40000, cuota_num: 1 });
+        A(r1.j && r1.j.ok, '[APLICAR]: el cruce a una cuota fue rechazado: ' + JSON.stringify(r1.j));
+        A(bolCuota(1) === 40000, '[APLICAR]: la cuota 1 deberia tener 40000 reembolsados y tiene ' + bolCuota(1));
+        A(bolCuota(2) === 0, '[APLICAR]: el cruce toco una cuota que no era (cuota 2 = ' + bolCuota(2) + ')');
+        const fila = db.prepare("SELECT cuota_num FROM aplicaciones_saldo_favor WHERE saldo_favor_id=? AND tipo='cruce'").get(cred);
+        A(fila && fila.cuota_num === 1, '[APLICAR/LEDGER]: el movimiento no anoto a que cuota fue (cuota_num=' + (fila && fila.cuota_num) + ') -> deshacerlo no sabria de donde restar');
+        invariantes('APLICAR');
+        cifras.trasCruce = bolCuota(1);
+
+        // ── 2. Sin cuota no se puede cruzar a una diferida (la elige el usuario, no el sistema) ──
+        const rSin = await pedir(port, 'POST', '/api/saldos-favor/' + cred + '/aplicar', { compra_destino_id: compra, monto: 10000 });
+        A(rSin.j && rSin.j.error, '[APLICAR]: se acepto un cruce a una diferida sin decir la cuota');
+
+        // ── 3. El tope es el de LA CUOTA, no el de la compra ──
+        const rTope = await pedir(port, 'POST', '/api/saldos-favor/' + cred + '/aplicar', { compra_destino_id: compra, monto: 90000, cuota_num: 1 });
+        A(rTope.j && rTope.j.error, '[TOPE]: se acepto cruzar 90000 a una cuota que solo debe 60000');
+
+        // ── 4. El piso, medido en la MISMA unidad que la escritura ──
+        //    (a) subir con efectivo esta permitido (completar un cruce parcial, v4.8.1)
+        const rSube = await pedir(port, 'PUT', '/api/compras/' + compra + '/bolsillo', { monto_bolsillo: 100000, cuota_num: 1, moneda: 'COP', desde_terceros: true });
+        A(rSube.j && !rSube.j.error, '[PISO]: no se pudo completar la cuota con efectivo por encima del cruce: ' + JSON.stringify(rSube.j));
+        A(bolCuota(1) === 100000, '[PISO]: la cuota 1 deberia quedar en 100000 y quedo en ' + bolCuota(1));
+        //    (b) bajar por debajo de lo cruzado NO
+        const rBaja = await pedir(port, 'PUT', '/api/compras/' + compra + '/bolsillo', { monto_bolsillo: 20000, cuota_num: 1, moneda: 'COP', desde_terceros: true });
+        A(rBaja.j && rBaja.j.error, '[PISO]: se dejo bajar la cuota por debajo del saldo cruzado -> el credito queda descuadrado');
+        A(bolCuota(1) === 100000, '[PISO]: el intento de bajar modifico la cuota igualmente (' + bolCuota(1) + ')');
+        //    (c) y el piso de la cuota 1 NO puede bloquear a la cuota 2: es el fallo de unidades.
+        //    El monto va POR DEBAJO del total cruzado en la compra (40.000) A PROPOSITO: por encima,
+        //    un piso mal medido tampoco bloquearia y el aserto pasaria en vacio.
+        const rOtra = await pedir(port, 'PUT', '/api/compras/' + compra + '/bolsillo', { monto_bolsillo: 30000, cuota_num: 2, moneda: 'COP', desde_terceros: true });
+        A(rOtra.j && !rOtra.j.error, '[PISO/UNIDAD]: el cruce de la cuota 1 bloqueo una edicion de la cuota 2 -> el piso se esta midiendo contra el total de la compra');
+        A(bolCuota(2) === 30000, '[PISO/UNIDAD]: la cuota 2 no quedo en 30000 (' + bolCuota(2) + ')');
+        invariantes('PISO');
+
+        // ── 5. Deshacer: retira de SU cuota y devuelve el credito ──
+        const apl = db.prepare("SELECT id FROM aplicaciones_saldo_favor WHERE saldo_favor_id=? AND tipo='cruce'").get(cred);
+        const rDes = await pedir(port, 'DELETE', '/api/saldos-favor/aplicaciones/' + apl.id, null);
+        A(rDes.j && rDes.j.ok, '[DESHACER]: fue rechazado: ' + JSON.stringify(rDes.j));
+        A(bolCuota(1) === 60000, '[DESHACER]: la cuota 1 deberia quedar con los 60000 de efectivo y quedo en ' + bolCuota(1) +
+          (bolCuota(1) === 100000 ? ' -> el credito se devolvio pero el dinero sigue en el bolsillo: la misma plata dos veces' : ''));
+        A(bolCuota(2) === 30000, '[DESHACER]: deshacer toco una cuota ajena (cuota 2 = ' + bolCuota(2) + ')');
+        A(Math.round(credito().monto_aplicado) === 0, '[DESHACER]: el credito no quedo disponible otra vez (aplicado=' + credito().monto_aplicado + ')');
+        invariantes('DESHACER');
+        cifras.trasDeshacer = bolCuota(1);
+
+        // ── 6. INVERSO FIEL: aplicar y deshacer devuelve las filas a como estaban ──
+        const foto = () => JSON.stringify({
+          cuotas: db.prepare('SELECT cuota_num, monto, moneda FROM bolsillo_cuotas WHERE compra_id=? ORDER BY cuota_num').all(compra),
+          compra: db.prepare('SELECT monto_bolsillo, monto_bolsillo_usd, estado, tercero_pagado FROM compras WHERE id=?').get(compra),
+          credito: credito(),
+        });
+        const antes = foto();
+        const rA = await pedir(port, 'POST', '/api/saldos-favor/' + cred + '/aplicar', { compra_destino_id: compra, monto: 25000, cuota_num: 2 });
+        A(rA.j && rA.j.ok, '[INVERSO]: no se pudo aplicar el segundo cruce: ' + JSON.stringify(rA.j));
+        const apl2 = db.prepare("SELECT id FROM aplicaciones_saldo_favor WHERE saldo_favor_id=? AND tipo='cruce' ORDER BY id DESC").get(cred);
+        await pedir(port, 'DELETE', '/api/saldos-favor/aplicaciones/' + apl2.id, null);
+        const despues = foto();
+        A(antes === despues, '[INVERSO]: aplicar y deshacer no dejo las filas como estaban.' +
+          '\n           antes:   ' + antes + '\n           despues: ' + despues);
+        cifras.inversoFiel = antes === despues ? 'si' : 'no';
+      });
+    } catch (e) {
+      return resultado(false, cifras, ['FALLO ejecutando el escenario: ' + e.message]);
+    }
+    return resultado(notas.length === 0, cifras, notas);
+  },
+  defecto: 'deshacer un cruce resta del CACHE en vez de la cuota (el dinero del tercero se cuenta dos veces)',
+  mutar(raiz) {
+    // Es la unica forma de deshacer que existia antes de tener cuota_num, y es silenciosa: no falla
+    // nada en el momento. El cache deja de ser la suma de las cuotas, asi que el credito vuelve a
+    // estar disponible mientras el reembolso sigue vivo en bolsillo_cuotas.
+    const p = path.join(raiz, 'backend', 'routes', 'saldosFavor.js');
+    const src = fs.readFileSync(p, 'utf8');
+    const aguja = 'aplicarBolsilloACuota(destino, apl.cuota_num, Math.max(0, r2(actual - apl.monto)));';
+    if (src.indexOf(aguja) === -1) throw new Error('no se encontro el deshacer per-cuota en saldosFavor.js');
+    fs.writeFileSync(p, src.replace(aguja, 'aplicarBolsilloATercero(destino, Math.max(0, r2((destino.monto_bolsillo || 0) - apl.monto)));'), 'utf8');
+  },
+};
+
+module.exports = [R6, R9];
