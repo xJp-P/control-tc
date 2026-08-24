@@ -1206,7 +1206,308 @@ const F10 = {
   },
 };
 
-module.exports = [F1, F2, F3, F4, F5, F6, F7, F8, F9, F10];
+// ─── Andamiaje de F11: escenario de TERCEROS sembrado y servido por el backend REAL ──
+//
+// ORACULO HIBRIDO, y no por comodidad: los defectos de esta pantalla dependen de campos que CALCULA
+// el backend (valor_pendiente, cubierta_bolsillo, monto_bolsillo_cuota y las aplicaciones de saldo a
+// favor). Inventar ese `data` a mano es lo que produjo media docena de fallos de andamiaje en
+// v6.1.0/v6.1.1: obliga a adivinar campos, y entonces el fixture revienta por lo que falta y no por
+// lo que se mide. Aqui el escenario se SIEMBRA en la copia (criterio de R6/R8), se le preguntan los
+// DOS GET que la pestaña consume de verdad, y con ESAS respuestas se dibuja.
+//
+// Se siembran tarjeta y persona PROPIAS: la respuesta trae solo el escenario, asi que las cifras son
+// exactas y no dependen de que la BD del usuario tenga hoy una cuota con reembolso parcial ni de que
+// no la complete mañana.
+//
+// tasa_mv = 0 a proposito: con interes cero cada cuota vale monto/num_cuotas EXACTO, asi que ninguna
+// afirmacion de F11 depende del motor de amortizacion ni de las reglas por banco.
+const F11_CICLO = '2029-06';              // lejano: sin extracto, asi que la visibilidad no oculta nada
+const F11_DIA_CORTE = 30;
+const F11_FECHA = '2029-05-31';           // 30 dias EXACTOS antes del corte -> intl = valor x tasa x 1
+
+// Bancolombia + Visa es la unica combinacion donde aplicaIntl es true, que es la condicion de E2.
+const TARJETA_F11 = { nombre: 'F11 TARJETA', banco: 'Bancolombia', franquicia: 'Visa',
+  dia_corte: F11_DIA_CORTE, tasa_mv_avances: 0.02, cupo_total: 10000000, estado: 'activa' };
+
+function sembrarTerceros(db) {
+  const tj = db.prepare("INSERT INTO tarjetas (nombre, banco, franquicia, dia_corte, cupo_total, tasa_mv_avances, estado) VALUES (?,?,?,?,?,?, 'activa')")
+    .run(TARJETA_F11.nombre, TARJETA_F11.banco, TARJETA_F11.franquicia, F11_DIA_CORTE, 10000000, 0.02).lastInsertRowid;
+  const per = db.prepare("INSERT INTO personas (nombre, color) VALUES ('F11 DEUDOR', '#888888')").run().lastInsertRowid;
+
+  // E1 — diferida de tercero con UNA cuota reembolsada del todo y otra a MEDIAS. Las dos ramas del
+  // agregado (cubierta / no cubierta) quedan ejercitadas, y las dos cifras del encabezado salen > 0
+  // (la de "Recibido" solo se dibuja si lo es).
+  const dif = db.prepare("INSERT INTO diferidas (tarjeta_id, etiqueta, monto, tasa_mv, num_cuotas, fecha_compra, fecha_primer_corte, estado, notas) VALUES (?,?,?,0,2,?,?, 'activo','F11')")
+    .run(tj, 'F11 DIFERIDA', 200000, F11_FECHA, F11_CICLO + '-' + F11_DIA_CORTE).lastInsertRowid;
+  const cDif = db.prepare("INSERT INTO compras (tarjeta_id, fecha, descripcion, valor_cop, estado, ciclo, persona_id, diferida_id, monto_bolsillo, notas) VALUES (?,?,?,?, 'diferida', ?,?,?,?, 'Diferida a 2 cuotas')")
+    .run(tj, F11_FECHA, 'F11 DIFERIDA', 200000, F11_CICLO, per, dif, 140000).lastInsertRowid;
+  db.prepare("INSERT INTO bolsillo_cuotas (compra_id, cuota_num, monto, moneda) VALUES (?,1,?, 'COP')").run(cDif, 40000);
+  db.prepare("INSERT INTO bolsillo_cuotas (compra_id, cuota_num, monto, moneda) VALUES (?,2,?, 'COP')").run(cDif, 100000);
+
+  // E2 — compra INTERNACIONAL cuyo cruce cubre EXACTAMENTE el capital y deja el recargo intl fuera.
+  // Es el defecto de v4.8.2: derivar "saldado" contra valor_cop en vez de contra el objetivo.
+  const cIntl = db.prepare("INSERT INTO compras (tarjeta_id, fecha, descripcion, valor_cop, estado, ciclo, persona_id, es_internacional, tasa_intl, monto_bolsillo) VALUES (?,?,?,?, 'bolsillo', ?,?,1,?,?)")
+    .run(tj, F11_FECHA, 'F11 INTL', 100000, F11_CICLO, per, 0.01, 100000).lastInsertRowid;
+
+  // E3 — dos compras NACIONALES con cruce: una PARCIAL (el boton tiene que seguir vivo para completar
+  // en efectivo) y otra al 100% (ahi si va atenuado). El PAR es lo que fija "solo al 100%" = v4.8.1;
+  // con una sola de las dos, invertir la condicion seguiria pareciendo correcto.
+  const cParc = db.prepare("INSERT INTO compras (tarjeta_id, fecha, descripcion, valor_cop, estado, ciclo, persona_id, monto_bolsillo) VALUES (?,?,?,?, 'bolsillo_parcial', ?,?,?)")
+    .run(tj, F11_FECHA, 'F11 PARCIAL', 100000, F11_CICLO, per, 60000).lastInsertRowid;
+  const cTot = db.prepare("INSERT INTO compras (tarjeta_id, fecha, descripcion, valor_cop, estado, ciclo, persona_id, monto_bolsillo) VALUES (?,?,?,?, 'bolsillo', ?,?,?)")
+    .run(tj, F11_FECHA, 'F11 TOTAL', 80000, F11_CICLO, per, 80000).lastInsertRowid;
+
+  // Un credito de reverso y sus TRES cruces: es lo unico que alimenta compraIdsConCruce.
+  const sf = db.prepare("INSERT INTO saldos_favor_tercero (persona_id, monto, monto_aplicado, origen_tipo, tarjeta_id, descripcion, fecha, estado) VALUES (?,?,?, 'reverso', ?, 'F11 REVERSO', ?, 'activo')")
+    .run(per, 400000, 240000, tj, F11_FECHA).lastInsertRowid;
+  const cruce = db.prepare("INSERT INTO aplicaciones_saldo_favor (saldo_favor_id, compra_destino_id, tipo, monto, fecha) VALUES (?,?, 'cruce', ?, ?)");
+  cruce.run(sf, cIntl, 100000, F11_FECHA);
+  cruce.run(sf, cParc, 60000, F11_FECHA);
+  cruce.run(sf, cTot, 80000, F11_FECHA);
+
+  return { tarjeta_id: tj, persona_id: per };
+}
+
+// Recolector propio: botonesDe() solo mira `disabled`, y el boton ATENUADO de un cruce al 100% NO
+// esta disabled — lleva opacity 0.5 + cursor not-allowed y ADEMAS un onClick que abre el chip.
+// Distinguirlos por `disabled` daria los dos como iguales, que es justo el defecto de v4.8.1.
+function botonesConEstilo(nodo) {
+  const out = [];
+  recorrerArbol(nodo, n => {
+    if (n.type !== 'button') return;
+    const st = n.props.style || {};
+    out.push({
+      texto: textoDe(n).trim(),
+      atenuado: st.cursor === 'not-allowed' || Number(st.opacity) === 0.5,
+      onClick: typeof n.props.onClick === 'function',
+      title: n.props.title || '',
+    });
+  });
+  return out;
+}
+function filaConTexto(arbol, texto) {
+  let hallada = null;
+  recorrerArbol(arbol, n => {
+    if (!hallada && n.type === 'tr' && textoDe(n).indexOf(texto) !== -1) hallada = n;
+  });
+  return hallada;
+}
+// Las dos ultimas celdas de toda fila son Dinero y la accion, con o sin las columnas intl.
+function celdasDe(fila) { return (fila.hijos || []).filter(h => h && h.type === 'td'); }
+function celdaDinero(fila) { const c = celdasDe(fila); return c[c.length - 2] || null; }
+function celdaAccion(fila) { const c = celdasDe(fila); return c[c.length - 1] || null; }
+
+function numeroDe(s) { const d = String(s).replace(/[^\d]/g, ''); return d ? parseInt(d, 10) : null; }
+function montosDe(texto) {
+  const out = [];
+  const re = /\$\s*([\d.,]+)/g;
+  let m;
+  while ((m = re.exec(texto)) !== null) out.push(numeroDe(m[1]));
+  return out;
+}
+function montoTras(texto, etiqueta) {
+  const m = new RegExp(etiqueta.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*\\$\\s*([\\d.,]+)').exec(texto);
+  return m ? numeroDe(m[1]) : null;
+}
+
+// ─── F11: RENDER real de la pestaña Terceros (la plata del deudor no se oculta ni se bloquea) ──
+//
+// POR QUE EXISTE: es la unica pantalla que lleva DOS libros a la vez -lo que debo al banco y lo que
+// me deben a mi- y calcula el segundo POR SU CUENTA en el frontend: objetivoTerceroCop duplica a
+// proposito la formula de "Me Deben" del backend. Cada vez que esa duplicacion derivo aparecio un
+// defecto, y ninguna prueba dibujaba esta vista. Los tres escenarios son defectos REALES:
+//   E1  reembolso PARCIAL de una cuota de diferida (la mina del todo-o-nada).
+//   E2  v4.8.2: un cruce que cubre solo el capital marcaba la compra "Pagado" y atenuaba el boton,
+//       dejando el recargo intl imposible de completar.
+//   E3  v4.8.1: el candado del cruce era ciego y atenuaba el boton con CUALQUIER cruce, asi que un
+//       cruce parcial no se podia terminar de pagar por ninguna via de la UI.
+//
+// DEUDA TECNICA DELIBERADA — TEST DE CARACTERIZACION (decision del PO, 24-ago-2026).
+// Los asertos marcados [CARACTERIZACION] fijan la conducta ACTUAL del agregado, que se sabe
+// INCORRECTA: con un reembolso parcial, el total de la persona cuenta la cuota ENTERA como pendiente
+// e ignora lo ya recibido (sobrestima la deuda), mientras la fila de esa misma cuota si declara el
+// abono. La app se contradice consigo misma en la misma pantalla. NO se arregla aqui a proposito: el
+// arreglo obliga a migrar LOS DOS LADOS a la vez (pendiente y recibido), porque hoy se reparten el
+// mismo balde binario y tocar solo uno produce DOBLE CONTEO. Cuando se desarme esa mina F11 se
+// pondra roja: eso es lo que se busca, que el cambio sea consciente y no pase inadvertido.
+// Lo que F11 NO negocia es lo otro: la fila siempre tiene que declarar el dinero que ya entro.
+const F11 = {
+  id: 'F11',
+  nombre: 'Render de Terceros: el dinero del deudor no se oculta ni se bloquea',
+  async medir(raiz) {
+    const notas = [];
+    const cifras = {};
+
+    // ── ETAPA 1: sembrar y preguntarle al backend REAL ──
+    let esc;
+    try {
+      esc = await conApp(raiz, 'F11', async (port, db) => {
+        const ids = sembrarTerceros(db);
+        const t = await pedir(port, 'GET', '/api/terceros?tarjeta_id=' + ids.tarjeta_id);
+        const s = await pedir(port, 'GET', '/api/saldos-favor');
+        return { ids: ids, compras: t.j, saldos: s.j };
+      });
+    } catch (e) { return resultado(false, cifras, ['FALLO montando el escenario sembrado: ' + e.message]); }
+
+    if (!Array.isArray(esc.compras)) return resultado(false, cifras, ['FALLO: /api/terceros no devolvio una lista']);
+    cifras.comprasEnRespuesta = esc.compras.length;
+
+    // ── Sanidad del escenario: corta ANTES de medir nada. Si lo sembrado no llego tal como se
+    //    espera, el detector lo dice en vez de seguir y salir verde midiendo la nada.
+    const porNombre = (n) => esc.compras.filter(c => c.descripcion === n)[0];
+    const dif = porNombre('F11 DIFERIDA'), intl = porNombre('F11 INTL');
+    const parc = porNombre('F11 PARCIAL'), tot = porNombre('F11 TOTAL');
+    if (!dif || !intl || !parc || !tot) {
+      return resultado(false, cifras, ['FALLO de sanidad: la respuesta no trae las 4 compras sembradas (llegaron: ' +
+        esc.compras.map(c => c.descripcion).join(', ') + ')']);
+    }
+    const qs = dif.cuotas || [];
+    if (qs.length !== 2 || qs[0].total !== 100000 || qs[1].total !== 100000) {
+      return resultado(false, cifras, ['FALLO de sanidad: se esperaban 2 cuotas de 100000 y llegaron ' +
+        JSON.stringify(qs.map(q => q.total)) + ' -> con tasa_mv=0 la cuota debe ser monto/num_cuotas exacto']);
+    }
+    if (qs[0].monto_bolsillo_cuota !== 40000 || qs[0].cubierta_bolsillo || qs[1].monto_bolsillo_cuota !== 100000 || !qs[1].cubierta_bolsillo) {
+      return resultado(false, cifras, ['FALLO de sanidad: el reembolso per-cuota no llego como se sembro (cuota1=' +
+        qs[0].monto_bolsillo_cuota + '/cubierta=' + qs[0].cubierta_bolsillo + ', cuota2=' + qs[1].monto_bolsillo_cuota + '/cubierta=' + qs[1].cubierta_bolsillo + ')']);
+    }
+    const cruzadas = [];
+    ((esc.saldos && esc.saldos.creditos) || []).forEach(cr => (cr.aplicaciones || []).forEach(ap => {
+      if (ap.tipo === 'cruce' && ap.compra_destino_id != null) cruzadas.push(ap.compra_destino_id);
+    }));
+    for (const c of [intl, parc, tot]) {
+      if (cruzadas.indexOf(c.id) === -1) {
+        return resultado(false, cifras, ['FALLO de sanidad: el cruce de "' + c.descripcion + '" no llego en /api/saldos-favor -> compraIdsConCruce saldria vacio y E2/E3 medirian otra cosa']);
+      }
+    }
+    cifras.cuotaParcial = qs[0].monto_bolsillo_cuota;
+    cifras.valorPendienteBackend = dif.valor_pendiente;
+
+    // ── ETAPA 2: dibujar con esas respuestas ──
+    const tarjeta = Object.assign({ id: esc.ids.tarjeta_id }, TARJETA_F11);
+    // Las ranuras se localizan por el TIPO del valor inicial, no por un indice escrito a mano: si
+    // alguien reordena los useState, esto grita en vez de sembrar en otra variable y dar por bueno
+    // un render que no es el que se cree. Hace falta un render de descubrimiento porque los useState
+    // solo se ejecutan al invocar el componente.
+    let iCompras = -1, iSaldos = -1;
+    try {
+      const disc = montarConEstado(raiz, []);
+      disc.Terceros({ tarjeta: tarjeta });
+      const orden = disc.__hooks || [];
+      iCompras = orden.findIndex(v => Array.isArray(v));
+      iSaldos = orden.findIndex(v => v && typeof v === 'object' && !Array.isArray(v) && 'creditos' in v);
+    } catch (e) { return resultado(false, cifras, ['FALLO en el render de descubrimiento de ranuras: ' + e.message]); }
+    if (iCompras < 0 || iSaldos < 0) {
+      return resultado(false, cifras, ['FALLO: no se localizaron las ranuras de Terceros por el tipo de su valor inicial (compras=' +
+        iCompras + ', saldosFavor=' + iSaldos + ') -> los useState cambiaron de forma']);
+    }
+    cifras.ranuras = iCompras + '/' + iSaldos;
+
+    const dibujar = (items) => {
+      const semilla = [];
+      semilla[iCompras] = items;
+      semilla[iSaldos] = esc.saldos;
+      const c = montarConEstado(raiz, semilla);
+      return c.Terceros({ tarjeta: tarjeta });
+    };
+
+    // ══ E1: la diferida, SOLA, para que el agregado de la persona sea exactamente el suyo ══
+    try {
+      const arbol = dibujar([dif]);
+      const f1 = filaConTexto(arbol, 'Cuota 1/2');
+      const f2 = filaConTexto(arbol, 'Cuota 2/2');
+      if (!f1 || !f2) {
+        notas.push('FALLO de sanidad: lo sembrado no aparece en el dibujo (no se hallaron las filas "Cuota 1/2"/"Cuota 2/2")');
+      } else {
+        // La cuota a medias NO puede leerse como saldada, y tiene que declarar las DOS cifras: lo
+        // que ya entro y lo que falta. Es lo que F11 no negocia.
+        const dinero1 = textoDe(celdaDinero(f1));
+        if (/Pagado/.test(dinero1)) notas.push('FALLO [E1]: la cuota con reembolso PARCIAL se lee "Pagado" -> se da por saldada plata que el deudor no ha puesto');
+        const falta = montoTras(dinero1, 'Falta:');
+        if (falta !== 60000) notas.push('FALLO [E1]: la cuota parcial deberia declarar "Falta: $60.000" y declara ' + (falta === null ? 'NADA -> el dinero que falta queda oculto' : '$' + falta));
+        if (montosDe(dinero1).indexOf(40000) === -1) notas.push('FALLO [E1]: la fila no muestra los $40.000 ya reembolsados (' + dinero1.trim() + ') -> el abono del deudor queda invisible');
+        // Y el boton tiene que seguir vivo: si no, no hay forma de completar el resto.
+        const b1 = botonesConEstilo(celdaAccion(f1));
+        if (b1.length !== 1 || b1[0].texto !== 'Bolsillo' || !b1[0].onClick || b1[0].atenuado) {
+          notas.push('FALLO [E1]: la cuota parcial no ofrece un boton Bolsillo utilizable (' + JSON.stringify(b1) + ')');
+        }
+        // La cuota cubierta si va como saldada.
+        if (!/Pagado/.test(textoDe(celdaDinero(f2)))) notas.push('FALLO [E1]: la cuota REEMBOLSADA del todo no se lee "Pagado"');
+      }
+      // Agregado de la persona.
+      const cab = buscarNodo(arbol, n => n.props && n.props.className === 'persona-card-header');
+      if (!cab) notas.push('FALLO de sanidad: no se dibujo el encabezado de la persona');
+      else {
+        const txt = textoDe(cab);
+        const pend = montoTras(txt, 'Pendiente'), reci = montoTras(txt, 'Recibido');
+        // [CARACTERIZACION] Ver la advertencia de deuda tecnica de arriba. Estos dos numeros son la
+        // conducta ACTUAL, no la correcta: el pendiente cuenta la cuota parcial ENTERA (100.000) y
+        // el recibido ignora sus 40.000. Lo REALMENTE recibido son 140.000.
+        if (pend !== 100000) notas.push('FALLO [E1/CARACTERIZACION]: el "Pendiente" de la persona cambio de 100000 a ' + pend +
+          ' -> si es porque se desarmo la mina del todo-o-nada, hay que migrar TAMBIEN el "Recibido" (si no, doble conteo) y actualizar este aserto a proposito');
+        if (reci !== 100000) notas.push('FALLO [E1/CARACTERIZACION]: el "Recibido" de la persona cambio de 100000 a ' + reci +
+          ' -> mismo caso: los dos lados se reparten el mismo balde binario y se migran juntos');
+        // INVARIANTE DE PARTICION: pendiente y recibido parten el coste del plan sin solaparse. Es
+        // lo que se rompe si alguien vuelve proporcional un solo lado.
+        const costePlan = qs.reduce((s, q) => s + q.total, 0);
+        if (pend !== null && reci !== null && pend + reci !== costePlan) {
+          notas.push('FALLO [E1/PARTICION]: Pendiente(' + pend + ') + Recibido(' + reci + ') = ' + (pend + reci) +
+            ' y el coste del plan es ' + costePlan + ' -> hay doble conteo o plata perdida entre los dos lados');
+        }
+        cifras.pendientePersona = pend;
+        cifras.recibidoPersona = reci;
+      }
+    } catch (e) { notas.push('FALLO dibujando el escenario E1: ' + e.message); }
+
+    // ══ E2 y E3: las tres compras simples con cruce ══
+    try {
+      const arbol = dibujar([intl, parc, tot]);
+      const fIntl = filaConTexto(arbol, 'F11 INTL');
+      const fParc = filaConTexto(arbol, 'F11 PARCIAL');
+      const fTot = filaConTexto(arbol, 'F11 TOTAL');
+      if (!fIntl || !fParc || !fTot) {
+        notas.push('FALLO de sanidad: no se dibujaron las tres filas simples sembradas');
+      } else {
+        // E2 — el cruce cubre el capital pero NO el recargo intl (100.000 de 101.000).
+        const dIntl = textoDe(celdaDinero(fIntl));
+        if (/Pagado/.test(dIntl)) notas.push('FALLO [E2]: la compra internacional se lee "Pagado" con el cruce cubriendo solo el capital -> el recargo intl desaparece de la deuda (defecto de v4.8.2)');
+        const faltaIntl = montoTras(dIntl, 'Falta:');
+        if (faltaIntl !== 1000) notas.push('FALLO [E2]: deberia faltar el recargo intl ($1.000) y declara ' + (faltaIntl === null ? 'NADA' : '$' + faltaIntl) +
+          ' -> el objetivo del tercero no esta sumando el interes');
+        const bIntl = botonesConEstilo(celdaAccion(fIntl));
+        if (bIntl.length !== 1 || bIntl[0].atenuado) notas.push('FALLO [E2]: el boton queda atenuado con el cruce incompleto -> no hay forma de poner el resto en efectivo (' + JSON.stringify(bIntl) + ')');
+
+        // E3 — el par: parcial vivo, total atenuado.
+        const bParc = botonesConEstilo(celdaAccion(fParc));
+        if (bParc.length !== 1 || bParc[0].texto !== 'Bolsillo' || bParc[0].atenuado || !bParc[0].onClick) {
+          notas.push('FALLO [E3]: con un cruce PARCIAL el boton Bolsillo tiene que seguir activo y esta ' + JSON.stringify(bParc) + ' (defecto de v4.8.1)');
+        }
+        const bTot = botonesConEstilo(celdaAccion(fTot));
+        if (bTot.length !== 1 || !bTot[0].atenuado) {
+          notas.push('FALLO [E3]: con el cruce al 100% el boton tiene que ir atenuado y protegido, y esta ' + JSON.stringify(bTot) +
+            ' -> se podria bajar el bolsillo por la via directa y descuadrar el credito');
+        } else if (!/Dinero a favor/.test(bTot[0].title)) {
+          notas.push('FALLO [E3]: el boton atenuado no dice donde gestionarlo (title="' + bTot[0].title + '")');
+        }
+        cifras.escenarios = 3;
+      }
+    } catch (e) { notas.push('FALLO dibujando los escenarios E2/E3: ' + e.message); }
+
+    return resultado(notas.length === 0, cifras, notas);
+  },
+  defecto: 'objetivoTerceroCop vuelve a derivar la deuda del tercero contra valor_cop pelado (el defecto EXACTO de v4.8.2)',
+  mutar(raiz) {
+    // Con el objetivo en capital pelado, la compra internacional cuyo cruce cubre valor_cop pasa a
+    // "Pagado" y su boton se atenua: la plata del recargo intl desaparece de la vista y no hay forma
+    // de completarla. F1/F5 no lo ven -es una expresion valida y el simbolo casi no cambia de tamaño-
+    // y F8 tampoco, porque siembra su propio `data` y no dibuja esta pestaña.
+    const aguja = 'const objetivoTerceroCop = (c) => (c.valor_cop || 0) + Math.round(c.interes_sellado || 0) + calcInteresIntlTercero(c);';
+    if (!mutarEnAlgunaPieza(raiz, aguja, 'const objetivoTerceroCop = (c) => (c.valor_cop || 0);')) {
+      throw new Error('no se encontro objetivoTerceroCop en la pestaña Terceros');
+    }
+  },
+};
+
+module.exports = [F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11];
 module.exports.medirSimbolos = medirSimbolos;
 module.exports.piezasEnOrden = piezasEnOrden;
 module.exports.RUTA_SIMBOLOS = RUTA_SIMBOLOS;
