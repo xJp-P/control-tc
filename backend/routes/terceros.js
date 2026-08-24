@@ -106,7 +106,12 @@ module.exports = function(db, { logAction, tjNombre }) {
       // (cubierta_bolsillo). NO se excluye por `pagada` (corte vencido): que el banco ya haya facturado
       // la cuota no significa que el deudor te la haya pagado — si se excluyera, las cuotas vencidas e
       // impagas desaparecerían silenciosamente de lo que el tercero debe.
-      const pendiente = cuotas.filter(q => !q.cubierta_bolsillo).reduce((s, q) => s + q.total, 0);
+      // PROPORCIONAL (24-ago-2026): antes era TODO-O-NADA -una cuota con reembolso parcial contaba
+      // ENTERA como pendiente e ignoraba lo ya recibido-, asi que la deuda del tercero se sobrestimaba
+      // y esta vista se contradecia con su propia fila, que si mostraba el abono. Se capa a [0, total]:
+      // un reembolso de mas no genera deuda negativa. Para cuotas cubiertas del todo o sin nada, da
+      // EXACTAMENTE lo mismo que antes; solo cambia en las parciales. Espejo: dashboard.js Me Deben.
+      const pendiente = cuotas.reduce((s, q) => s + Math.max(0, q.total - Math.min(q.monto_bolsillo_cuota, q.total)), 0);
       // USD: prorrateo del valor_usd entre cuotas pendientes (mismo plazo que COP)
       const pendientesCount = cuotas.filter(q => !q.cubierta_bolsillo).length;
       const valor_usd_pendiente = (c.valor_usd && c.valor_usd > 0)

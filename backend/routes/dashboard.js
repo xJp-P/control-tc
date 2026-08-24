@@ -126,11 +126,15 @@ module.exports = function(db) {
         bolCuotasDash.forEach(b => { bolMapDash[b.cuota_num] = Math.round(b.monto); });
         cuotasArr = cuotasBase.map((q, i) => ({
           ...q,
+          monto_bolsillo_cuota: (bolMapDash[i + 1] || 0),
           cubierta_bolsillo: (bolMapDash[i + 1] || 0) >= q.total
         }));
         // Deuda del tercero: cuenta como pendiente mientras NO esté reembolsada (cubierta_bolsillo);
         // no se excluye por corte vencido (mismo criterio que routes/terceros.js).
-        pendiente = cuotasArr.filter(q => !q.cubierta_bolsillo).reduce((s, q) => s + q.total, 0);
+        // PROPORCIONAL (24-ago-2026), espejo de routes/terceros.js: lo ya reembolsado de una cuota
+        // deja de contar como deuda. Capado a [0, total]. Identico a la formula vieja salvo en las
+        // cuotas con reembolso PARCIAL, que es donde la deuda se sobrestimaba.
+        pendiente = cuotasArr.reduce((s, q) => s + Math.max(0, q.total - Math.min(q.monto_bolsillo_cuota, q.total)), 0);
         // USD: prorrateo del valor USD entre cuotas pendientes (asume mismo plazo).
         if (c.valor_usd && c.valor_usd > 0) {
           const cuotaUsd = c.valor_usd / dif.num_cuotas;

@@ -111,6 +111,15 @@ function Terceros({ tarjeta }) {
   // ellos ni sumaban el intl). Todo consumidor debe llamar aquí — es el espejo de objetivoBolsilloCop.
   const objetivoTerceroCop = (c) => (c.valor_cop || 0) + Math.round(c.interes_sellado || 0) + calcInteresIntlTercero(c);
 
+  // Reparto de UNA cuota de diferida entre lo ya reembolsado y lo que sigue debiendo. PROPORCIONAL
+  // desde el 24-ago-2026: antes era TODO-O-NADA y una cuota a medias contaba ENTERA como pendiente
+  // mientras su propia fila mostraba el abono -la vista se contradecia consigo misma-.
+  // Los DOS se calculan aqui y no en cada sitio a proposito: se reparten el MISMO coste, asi que
+  // migrar uno solo produce doble conteo o plata perdida. El tope a `q.total` mantiene la particion
+  // aunque el tercero haya puesto de mas: reembolso + pendiente == q.total SIEMPRE.
+  const reembolsoCuota = (q) => Math.min(Math.max(0, q.monto_bolsillo_cuota || 0), q.total);
+  const pendienteCuota = (q) => q.total - reembolsoCuota(q);
+
   // Columna DINERO unificada (compras 1-cuota y cuotas de diferida): "Pagado" (verde) si el tercero
   // saldó — sea por el toggle "Recibido" o porque el bolsillo/reembolso cubre el total —; "Pendiente"
   // (rojo) si aún debe. En parcial conserva el detalle "$apartado / $total · Falta" (sigue pendiente).
@@ -140,10 +149,10 @@ function Terceros({ tarjeta }) {
       grouped[key].totalRecibido += c.valor_cop;
       if (c.valor_usd && c.valor_usd > 0) grouped[key].totalRecibidoUsd += c.valor_usd;
     } else if (c.es_diferida) {
-      const cubiertas = (c.cuotas || []).filter(q => q.cubierta_bolsillo).reduce((s, q) => s + q.total, 0);
+      const reembolsado = (c.cuotas || []).reduce((s, q) => s + reembolsoCuota(q), 0);
       grouped[key].totalPendiente += c.valor_pendiente || 0;
       grouped[key].totalPendienteUsd += c.valor_usd_pendiente || 0;
-      grouped[key].totalRecibido += cubiertas;
+      grouped[key].totalRecibido += reembolsado;
     } else {
       const bol = c.monto_bolsillo || 0;
       grouped[key].totalPendiente += objetivoTerceroCop(c) - bol;
@@ -156,7 +165,7 @@ function Terceros({ tarjeta }) {
   const totalPendienteUsd = compras.filter(c => !c.tercero_pagado).reduce((s, c) => s + (c.es_diferida ? (c.valor_usd_pendiente || 0) : (c.valor_usd || 0)), 0);
   const totalRecibido = compras.reduce((s, c) => {
     if (c.tercero_pagado) return s + c.valor_cop;
-    if (c.es_diferida) return s + (c.cuotas || []).filter(q => q.cubierta_bolsillo).reduce((a, q) => a + q.total, 0);
+    if (c.es_diferida) return s + (c.cuotas || []).reduce((a, q) => a + reembolsoCuota(q), 0);
     return s + (c.monto_bolsillo || 0);
   }, 0);
   const fmtUsd = (n) => 'USD $' + new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n || 0);
@@ -251,11 +260,11 @@ function Terceros({ tarjeta }) {
               ciclos.map(cic => {
                 const rows = ciclosMap[cic];
                 const subPendiente = rows.reduce((s, { _compra: c, _cuota: q }) => {
-                  if (q) return s + (c.tercero_pagado || q.cubierta_bolsillo ? 0 : q.total);
+                  if (q) return s + (c.tercero_pagado ? 0 : pendienteCuota(q));
                   return s + (c.tercero_pagado ? 0 : objetivoTerceroCop(c) - (c.monto_bolsillo || 0));
                 }, 0);
                 const subRecibido = rows.reduce((s, { _compra: c, _cuota: q }) => {
-                  if (q) return s + (c.tercero_pagado || q.cubierta_bolsillo ? q.total : 0);
+                  if (q) return s + (c.tercero_pagado ? q.total : reembolsoCuota(q));
                   return s + (c.tercero_pagado ? c.valor_cop : (c.monto_bolsillo || 0));
                 }, 0);
                 return e('div', { key: cic, style: { marginBottom: 12 } },

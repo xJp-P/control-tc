@@ -1343,15 +1343,14 @@ function montoTras(texto, etiqueta) {
 //   E3  v4.8.1: el candado del cruce era ciego y atenuaba el boton con CUALQUIER cruce, asi que un
 //       cruce parcial no se podia terminar de pagar por ninguna via de la UI.
 //
-// DEUDA TECNICA DELIBERADA — TEST DE CARACTERIZACION (decision del PO, 24-ago-2026).
-// Los asertos marcados [CARACTERIZACION] fijan la conducta ACTUAL del agregado, que se sabe
-// INCORRECTA: con un reembolso parcial, el total de la persona cuenta la cuota ENTERA como pendiente
-// e ignora lo ya recibido (sobrestima la deuda), mientras la fila de esa misma cuota si declara el
-// abono. La app se contradice consigo misma en la misma pantalla. NO se arregla aqui a proposito: el
-// arreglo obliga a migrar LOS DOS LADOS a la vez (pendiente y recibido), porque hoy se reparten el
-// mismo balde binario y tocar solo uno produce DOBLE CONTEO. Cuando se desarme esa mina F11 se
-// pondra roja: eso es lo que se busca, que el cambio sea consciente y no pase inadvertido.
-// Lo que F11 NO negocia es lo otro: la fila siempre tiene que declarar el dinero que ya entro.
+// MINA DESARMADA el 24-ago-2026 (decision del PO). Hasta entonces el agregado era TODO-O-NADA: con
+// un reembolso parcial contaba la cuota ENTERA como pendiente e ignoraba lo ya recibido, mientras la
+// fila de esa misma cuota si declaraba el abono — la app se contradecia consigo misma en la misma
+// pantalla. Ahora es PROPORCIONAL en los seis sitios, migrando LOS DOS LADOS a la vez: se reparten el
+// mismo coste, asi que tocar solo uno habria producido doble conteo o plata perdida.
+// El cable trampa que vigilaba aquella deuda cumplio su funcion: al hacer la cirugia se puso rojo y
+// obligo a actualizar los dos asertos a la vez. Los de abajo fijan ya la conducta CORRECTA, y el
+// invariante de particion sigue siendo el que impide volver a migrar un solo lado.
 const F11 = {
   id: 'F11',
   nombre: 'Render de Terceros: el dinero del deudor no se oculta ni se bloquea',
@@ -1460,13 +1459,13 @@ const F11 = {
       else {
         const txt = textoDe(cab);
         const pend = montoTras(txt, 'Pendiente'), reci = montoTras(txt, 'Recibido');
-        // [CARACTERIZACION] Ver la advertencia de deuda tecnica de arriba. Estos dos numeros son la
-        // conducta ACTUAL, no la correcta: el pendiente cuenta la cuota parcial ENTERA (100.000) y
-        // el recibido ignora sus 40.000. Lo REALMENTE recibido son 140.000.
-        if (pend !== 100000) notas.push('FALLO [E1/CARACTERIZACION]: el "Pendiente" de la persona cambio de 100000 a ' + pend +
-          ' -> si es porque se desarmo la mina del todo-o-nada, hay que migrar TAMBIEN el "Recibido" (si no, doble conteo) y actualizar este aserto a proposito');
-        if (reci !== 100000) notas.push('FALLO [E1/CARACTERIZACION]: el "Recibido" de la persona cambio de 100000 a ' + reci +
-          ' -> mismo caso: los dos lados se reparten el mismo balde binario y se migran juntos');
+        // El escenario: cuota 1 cuesta 100.000 y el tercero puso 40.000; la cuota 2 esta reembolsada
+        // del todo. Lo que debe es 60.000 y lo que ha puesto son 140.000. Con el viejo todo-o-nada
+        // salian 100.000 y 100.000: la cuota a medias contaba entera y sus 40.000 no aparecian.
+        if (pend !== 60000) notas.push('FALLO [E1/DEUDA]: el "Pendiente" de la persona deberia ser 60000 (100000 de la cuota a medias menos los 40000 que ya puso) y es ' + pend +
+          (pend === 100000 ? ' -> volvio el todo-o-nada: la cuota parcial cuenta ENTERA y se le cobra de mas al tercero' : ''));
+        if (reci !== 140000) notas.push('FALLO [E1/DEUDA]: el "Recibido" de la persona deberia ser 140000 (los 40000 parciales mas la cuota cubierta) y es ' + reci +
+          (reci === 100000 ? ' -> el reembolso parcial no se esta contando como recibido' : ''));
         // INVARIANTE DE PARTICION: pendiente y recibido parten el coste del plan sin solaparse. Es
         // lo que se rompe si alguien vuelve proporcional un solo lado.
         const costePlan = qs.reduce((s, q) => s + q.total, 0);
