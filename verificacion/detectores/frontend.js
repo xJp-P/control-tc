@@ -491,10 +491,12 @@ const F6 = {
 // `semilla` permite fijar el valor inicial de un useState por su posicion; `ctx.__hooks` devuelve los
 // valores iniciales EN ORDEN DE LLAMADA, que es lo que permite localizar una ranura sin escribir su
 // indice a mano y sin quedarse callado si alguien reordena los hooks.
-function montarConEstado(raiz, semilla) {
+function montarConEstado(raiz, semilla, opts) {
   const store = (semilla || []).slice();
   const orden = [];
   const llamadas = [];
+  const efectos = [];
+  const refs = [];
   let idx = 0;
   const React = {
     createElement: (t, props, ...hijos) => ({ type: t, props: props || {}, hijos }),
@@ -512,15 +514,24 @@ function montarConEstado(raiz, semilla) {
       // iguales") aplicando su updater al valor actual, sin tener que montar un React de verdad.
       return [store[i], (v) => { llamadas.push({ ranura: i, valor: v }); }];
     },
-    useEffect: () => {}, useCallback: (f) => f, useRef: () => ({ current: null }),
+    // Los efectos NO se ejecutan al montar (igual que antes): se RECOGEN, para que el detector
+    // decida cuales corre y cuando. Ejecutarlos aqui dispararia peticiones y setState en todos los
+    // detectores que ya usan este sandbox, que es justo lo que no debe cambiar.
+    useEffect: (fn, deps) => { efectos.push({ fn: fn, deps: deps }); },
+    useCallback: (f) => f,
+    // useRef respeta su valor inicial (React lo hace) y ademas queda accesible: el seguro anti-bucle
+    // de la cadena USD vive en un ref, y sin poder leerlo no hay forma de comprobar que se armo.
+    useRef: (init) => { const r = { current: init === undefined ? null : init }; refs.push(r); return r; },
     // useLayoutEffect NO esta desestructurado en core.js: se usa via React.* (el FLIP del
     // reordenamiento de v6.0.0). Sin el, CardResumen revienta antes de dibujar una sola fila.
     useLayoutEffect: () => {},
     useMemo: (f) => (typeof f === 'function' ? f() : undefined), Fragment: 'Fragment',
   };
-  const { ctx } = cargarFrontend(raiz, { React });
+  const { ctx } = cargarFrontend(raiz, { React, fetch: opts && opts.fetch });
   ctx.__hooks = orden;
   ctx.__setState = llamadas;
+  ctx.__efectos = efectos;
+  ctx.__refs = refs;
   return ctx;
 }
 
@@ -1912,7 +1923,260 @@ const F12 = {
   },
 };
 
-module.exports = [F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12];
+// ─── Andamiaje de F13: efectos ejecutados y red espiada ─────────────────────
+//
+// F12 mide lo que CompraForm decide de forma SINCRONA (el payload). Lo que queda vive en el ciclo de
+// vida y en la red: la cadena USD, la TRM por fecha, el aislamiento del autocompletado y la rama de
+// division CON cuotas, que hace `await api(...)` ANTES del POST. Es otro oraculo y otro andamiaje,
+// asi que es otro detector — y de paso gana su propio control negativo en la suite, en vez de
+// compartir el de F12.
+//
+// Los efectos se RECOGEN al montar y se ejecutan aqui a proposito: asi el detector elige cuando
+// corren y puede leer que setter se llamo y con que. La red se sirve con un doble que registra cada
+// peticion (metodo, url y cuerpo ya deserializado) y responde lo que el escenario necesite.
+function espiaRed(responder) {
+  const peticiones = [];
+  const fetchDoble = (url, opts) => {
+    let cuerpo = null;
+    try { cuerpo = opts && opts.body ? JSON.parse(opts.body) : null; } catch (e) { cuerpo = opts.body; }
+    peticiones.push({ url: String(url), metodo: (opts && opts.method) || 'GET', cuerpo: cuerpo });
+    const data = responder ? responder(String(url), cuerpo) : {};
+    return Promise.resolve({ ok: true, json: () => Promise.resolve(data) });
+  };
+  return { fetch: fetchDoble, peticiones: peticiones };
+}
+function correrEfectos(c) {
+  const errores = [];
+  (c.__efectos || []).forEach((ef, i) => { try { ef.fn(); } catch (e) { errores.push('efecto ' + i + ': ' + e.message); } });
+  return errores;
+}
+// Deja que se resuelvan las cadenas de promesas que arrancan los efectos (el fallback de la TRM
+// encadena un segundo api()). El setTimeout del sandbox es un stub, asi que se usa el de Node.
+function vaciarCola() { return new Promise(r => setTimeout(r, 0)); }
+
+// Los tres campos de la cadena USD se localizan por su contrato visible, no por su posicion.
+const SEL_USD = (n) => n.type === 'input' && n.props.placeholder === 'Ej: 9.99';
+const SEL_TASA = (n) => n.props && n.props.placeholder === 'Ej: 4.150';
+function refDe(c, valor) { return (c.__refs || []).filter(r => r.current === valor)[0] || null; }
+
+// ─── F13: CompraForm en su ciclo de vida y en la red ────────────────────────
+//
+//   C6  cadena USD↔tasa↔COP (v4.5.4), sus cuatro ramas, el seguro anti-bucle que vive en un ref y
+//       la excepcion de las tarjetas duales (donde auto-calcular COP pisaria el 0 esperado).
+//   C7  la TRM se pide por la FECHA DE LA COMPRA, no por la de hoy (v5.8.0). El desfase medido
+//       entonces entre una y otra fue ~6%: pedir la de hoy no falla, solo miente.
+//   C8  el autocompletado se pide por tarjeta (v4.9.0): sin el parametro, la Visa sugiere comercios
+//       de la RappiCard.
+//   C9  division CON cuotas: cada parte crea SU diferida antes del POST. El invariante es que cada
+//       una lleve el monto de SU parte y no el total — si no, la proyeccion de intereses se infla
+//       por cada persona y nadie lo ve hasta que llega el extracto.
+const F13 = {
+  id: 'F13',
+  nombre: 'CompraForm: efectos y red (cadena USD, TRM por fecha, division con cuotas)',
+  async medir(raiz) {
+    const notas = [];
+    const cifras = {};
+    const cortes = require(path.join(raiz, 'backend', 'helpers', 'cortes'));
+    const tarjeta = Object.assign({}, TARJETA_F12, { id: 4242, tasa_mv_diferidas: 0.02 });
+
+    const montar = (campos, props, responder) => {
+      const red = espiaRed(responder);
+      const c = montarConEstado(raiz, semillaF12(campos), { fetch: red.fetch });
+      const avisos = [];
+      const guardado = [];
+      c.window.__addToast = (msg, tipo) => avisos.push({ msg: String(msg), tipo: tipo });
+      const arbol = c.CompraForm(Object.assign({
+        item: null, personas: [{ id: 7, nombre: 'F13 UNO' }, { id: 8, nombre: 'F13 DOS' }],
+        ciclo: F12_CICLO, tarjeta: tarjeta, onSave: (p) => guardado.push(p), onCancel: () => {},
+      }, props || {}));
+      return { c: c, arbol: arbol, red: red, avisos: avisos, guardado: guardado };
+    };
+
+    // ══ C6 — cadena USD ↔ tasa ↔ COP ══
+    {
+      // (a) Edita USD teniendo tasa -> deriva COP.
+      const a = montar({ esInternacional: true, valorUsd: '100', tasaUsd: '4000', valorCop: '' });
+      const inpUsd = buscarNodo(a.arbol, SEL_USD);
+      if (!inpUsd) notas.push('FALLO [C6]: no se encontro el campo Valor USD');
+      else {
+        inpUsd.props.onChange({ target: { value: '100' } });   // wiring real: esto arma el ref
+        if (!refDe(a.c, 'usd')) notas.push('FALLO [C6]: editar Valor USD no deja constancia de cual fue el ultimo campo tocado');
+        correrEfectos(a.c);
+        const puesto = a.c.__setState.filter(x => x.ranura === IDX.valorCop).pop();
+        if (!puesto || puesto.valor !== 400000) {
+          notas.push('FALLO [C6/USD->COP]: con 100 USD a 4000 el COP deberia quedar en 400000 y quedo en ' + (puesto ? puesto.valor : 'NADA'));
+        }
+      }
+
+      // (b) Edita COP teniendo USD -> deriva la tasa.
+      const b = montar({ esInternacional: true, valorUsd: '100', tasaUsd: '', valorCop: '400000' });
+      const inpCop = buscarNodo(b.arbol, (n) => n.props && n.props.required === true && typeof n.props.onChange === 'function' && n.props.value === '400000');
+      if (!inpCop) notas.push('FALLO [C6]: no se encontro el campo Valor COP');
+      else {
+        inpCop.props.onChange('400000');
+        correrEfectos(b.c);
+        const puesto = b.c.__setState.filter(x => x.ranura === IDX.tasaUsd).pop();
+        if (!puesto || puesto.valor !== 4000) {
+          notas.push('FALLO [C6/COP->TASA]: 400000 COP por 100 USD deberia dar una tasa de 4000 y dio ' + (puesto ? puesto.valor : 'NADA'));
+        }
+      }
+
+      // (c) Edita USD SIN tasa pero con COP -> deriva la tasa Y arma el seguro anti-bucle. Sin el,
+      //     la siguiente pasada recalcularia COP y pisaria el valor que el usuario escribio.
+      const cc = montar({ esInternacional: true, valorUsd: '100', tasaUsd: '', valorCop: '400000' });
+      const inpUsd2 = buscarNodo(cc.arbol, SEL_USD);
+      if (inpUsd2) {
+        inpUsd2.props.onChange({ target: { value: '100' } });
+        correrEfectos(cc.c);
+        const puesto = cc.c.__setState.filter(x => x.ranura === IDX.tasaUsd).pop();
+        if (!puesto || puesto.valor !== 4000) {
+          notas.push('FALLO [C6/USD-SIN-TASA]: deberia derivar la tasa (4000) y derivo ' + (puesto ? puesto.valor : 'NADA'));
+        }
+        if (!refDe(cc.c, 'cop')) {
+          notas.push('FALLO [C6/BUCLE]: tras derivar la tasa, el seguro anti-bucle no quedo armado -> la siguiente pasada recalcularia COP y pisaria lo que escribio el usuario');
+        }
+        // Y la comprobacion de verdad: una segunda pasada no puede tocar el COP.
+        const antes = cc.c.__setState.filter(x => x.ranura === IDX.valorCop).length;
+        correrEfectos(cc.c);
+        const despues = cc.c.__setState.filter(x => x.ranura === IDX.valorCop).length;
+        if (despues !== antes) notas.push('FALLO [C6/BUCLE]: una segunda pasada del efecto volvio a escribir el Valor COP (' + antes + ' -> ' + despues + ')');
+      }
+
+      // (d) Edita la tasa -> recalcula COP.
+      const d = montar({ esInternacional: true, valorUsd: '100', tasaUsd: '4200', valorCop: '400000' });
+      const inpTasa = buscarNodo(d.arbol, SEL_TASA);
+      if (!inpTasa) notas.push('FALLO [C6]: no se encontro el campo Tasa USD');
+      else {
+        inpTasa.props.onChange('4200');
+        correrEfectos(d.c);
+        const puesto = d.c.__setState.filter(x => x.ranura === IDX.valorCop).pop();
+        if (!puesto || puesto.valor !== 420000) {
+          notas.push('FALLO [C6/TASA->COP]: 100 USD a 4200 deberia dar 420000 y dio ' + (puesto ? puesto.valor : 'NADA'));
+        }
+      }
+
+      // (e) Tarjeta DUAL: nada de auto-calculo reciproco (el COP en 0 es un valor esperado, no un hueco).
+      const dual = Object.assign({}, tarjeta, { franquicia: 'Mastercard' });
+      const e5 = montar({ esInternacional: true, valorUsd: '100', tasaUsd: '4000', valorCop: '' }, { tarjeta: dual });
+      const inpUsd3 = buscarNodo(e5.arbol, SEL_USD);
+      if (inpUsd3) {
+        inpUsd3.props.onChange({ target: { value: '100' } });
+        correrEfectos(e5.c);
+        if (e5.c.__setState.some(x => x.ranura === IDX.valorCop)) {
+          notas.push('FALLO [C6/DUAL]: en una tarjeta dual el efecto auto-calculo el Valor COP -> pisa el 0 que la moneda nativa USD deja a proposito');
+        }
+      }
+      cifras.ramasUsd = 5;
+    }
+
+    // ══ C7 — la TRM se pide por la FECHA DE LA COMPRA ══
+    {
+      const fechaCompra = '2029-06-15';
+      const r = montar({ fecha: fechaCompra }, null, (url) => (url.indexOf('/trm-fecha') !== -1 ? { ok: true, trm: 3900 } : { trm: 3100 }));
+      correrEfectos(r.c);
+      await vaciarCola();
+      const porFecha = r.red.peticiones.filter(p => p.url.indexOf('/trm-fecha') !== -1);
+      if (porFecha.length === 0) {
+        notas.push('FALLO [C7]: no se pidio la TRM por fecha -> se usaria la de hoy para una compra de otro dia');
+      } else if (porFecha[0].url.indexOf('fecha=' + fechaCompra) === -1) {
+        notas.push('FALLO [C7/FECHA]: la TRM se pidio con "' + porFecha[0].url + '" en vez de la fecha de la compra (' + fechaCompra + ')');
+      }
+      // Fallback: si no hay TRM para esa fecha, cae a la actual. Es lo que evita quedarse sin dato.
+      const r2 = montar({ fecha: fechaCompra }, null, (url) => (url.indexOf('/trm-fecha') !== -1 ? { ok: false } : { trm: 3100 }));
+      correrEfectos(r2.c);
+      await vaciarCola();
+      if (!r2.red.peticiones.some(p => p.url.indexOf('/trm-actual') !== -1)) {
+        notas.push('FALLO [C7/FALLBACK]: sin TRM para esa fecha no se recurrio a la actual -> el formulario se queda sin tasa');
+      }
+      cifras.trm = porFecha.length;
+    }
+
+    // ══ C8 — el autocompletado se pide POR TARJETA ══
+    {
+      const r = montar({});
+      correrEfectos(r.c);
+      await vaciarCola();
+      const nombres = r.red.peticiones.filter(p => p.url.indexOf('nombres-unicos') !== -1);
+      if (nombres.length === 0) notas.push('FALLO [C8]: no se pidieron los nombres para el autocompletado');
+      else if (nombres[0].url.indexOf('tarjeta_id=' + tarjeta.id) === -1) {
+        notas.push('FALLO [C8/AISLAMIENTO]: los nombres se piden con "' + nombres[0].url + '", sin acotar a la tarjeta -> una tarjeta sugiere comercios de otra');
+      }
+      const otra = Object.assign({}, tarjeta, { id: 9999 });
+      const r2 = montar({}, { tarjeta: otra });
+      correrEfectos(r2.c);
+      await vaciarCola();
+      const nombres2 = r2.red.peticiones.filter(p => p.url.indexOf('nombres-unicos') !== -1);
+      if (nombres2.length && nombres2[0].url.indexOf('tarjeta_id=9999') === -1) {
+        notas.push('FALLO [C8/AISLAMIENTO]: al cambiar de tarjeta la peticion no cambio de tarjeta_id (' + nombres2[0].url + ')');
+      }
+      cifras.autocompletado = nombres.length;
+    }
+
+    // ══ C9 — division CON cuotas: una diferida por parte, ANTES del POST ══
+    {
+      let seq = 0;
+      const responder = (url) => (url.indexOf('/diferidas') !== -1 ? { id: ++seq } : {});
+      const splits = [{ persona_id: '7', monto: '60000' }, { persona_id: 'personal', monto: '30000' }];
+      const r = montar({ valorCop: '90000', dividir: true, numCuotas: 3, splits: splits, facturaSiguienteCorte: true, fecha: '2029-06-15' }, null, responder);
+      await enviarForm(r.arbol);
+
+      const difs = r.red.peticiones.filter(p => p.url.indexOf('/diferidas') !== -1);
+      if (difs.length !== 2) {
+        notas.push('FALLO [C9]: se esperaba una diferida por parte (2) y se crearon ' + difs.length);
+      } else {
+        const montos = difs.map(d => d.cuerpo.monto).sort((x, y) => x - y);
+        if (montos[0] !== 30000 || montos[1] !== 60000) {
+          notas.push('FALLO [C9/CONSERVACION]: cada parte debe amortizar SU monto (30000 y 60000) y se pidieron ' + JSON.stringify(montos) +
+            (montos.some(m => m === 90000) ? ' -> se le paso el TOTAL a una parte: su proyeccion de intereses queda inflada' : ''));
+        }
+        if (montos[0] + montos[1] !== 90000) notas.push('FALLO [C9/CONSERVACION]: los montos de las diferidas suman ' + (montos[0] + montos[1]) + ' y el total es 90000');
+        if (difs.some(d => d.cuerpo.num_cuotas !== 3)) notas.push('FALLO [C9]: alguna diferida no se creo a 3 cuotas');
+        // Spillover Fase 2 (v5.0.0): cada plan arranca en el corte del ciclo DESTINO, no en el natural.
+        const destino = cortes.siguienteCiclo(cortes.cicloConCorte('2029-06-15', 30, {}));
+        const corteEsperado = cortes.corteDeCiclo(destino, 30);
+        const malCorte = difs.filter(d => d.cuerpo.fecha_primer_corte !== corteEsperado);
+        if (malCorte.length) {
+          notas.push('FALLO [C9/SPILLOVER]: con "canje retrasado" el plan debe arrancar en el corte de ' + destino + ' (' + corteEsperado +
+            ') y arranca en ' + JSON.stringify(malCorte.map(d => d.cuerpo.fecha_primer_corte)));
+        }
+        // La fecha REAL de la compra se conserva: es lo que evita que syncData paso 11 reajuste el corte.
+        if (difs.some(d => d.cuerpo.fecha_compra !== '2029-06-15')) {
+          notas.push('FALLO [C9]: la diferida no conserva la fecha real de la compra -> syncData reajustaria su primer corte');
+        }
+      }
+      // Y el payload: cada parte vinculada a SU diferida, ninguna compartiendo plan.
+      const partes = r.guardado[0];
+      if (!Array.isArray(partes) || partes.length !== 2) {
+        notas.push('FALLO [C9]: no se guardaron las dos partes (' + JSON.stringify(r.avisos) + ')');
+      } else {
+        const ids = partes.map(p => p.diferida_id);
+        if (ids.some(x => !x) || ids[0] === ids[1]) {
+          notas.push('FALLO [C9/VINCULO]: las partes no quedaron vinculadas a diferidas distintas (' + JSON.stringify(ids) + ')');
+        }
+        if (partes.reduce((s, p) => s + p.valor_cop, 0) !== 90000) notas.push('FALLO [C9/CONSERVACION]: las partes guardadas no suman el total');
+        if (partes.some(p => p.ciclo !== destinoDe(cortes, '2029-06-15') || p.ciclo_manual !== 1)) {
+          notas.push('FALLO [C9/SPILLOVER]: alguna parte no viaja al ciclo destino con ciclo_manual=1');
+        }
+      }
+      cifras.diferidasPorParte = difs.length;
+    }
+
+    return resultado(notas.length === 0, cifras, notas);
+  },
+  defecto: 'cada parte de una compra dividida a cuotas amortiza el TOTAL en vez de su propia parte',
+  mutar(raiz) {
+    // Defecto silencioso y caro: la compra se guarda bien (las partes suman el total) pero CADA plan
+    // de cuotas proyecta el total, asi que los intereses se multiplican por el numero de personas y
+    // no se ve hasta que llega el extracto. Nada sincrono lo detecta: hay que mirar la peticion.
+    const aguja = 'tarjeta_id: tarjeta.id, etiqueta: descripcion, monto: part.monto,';
+    if (!mutarEnAlgunaPieza(raiz, aguja, 'tarjeta_id: tarjeta.id, etiqueta: descripcion, monto: Math.round(totalCop),')) {
+      throw new Error('no se encontro la creacion de diferidas por parte en CompraForm');
+    }
+  },
+};
+function destinoDe(cortes, fecha) { return cortes.siguienteCiclo(cortes.cicloConCorte(fecha, 30, {})); }
+
+module.exports = [F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12, F13];
 module.exports.medirSimbolos = medirSimbolos;
 module.exports.piezasEnOrden = piezasEnOrden;
 module.exports.RUTA_SIMBOLOS = RUTA_SIMBOLOS;
