@@ -276,7 +276,7 @@
     {
       "nombre": "CompraForm",
       "tipo": "function",
-      "lineas": 743,
+      "lineas": 737,
       "pieza": "js/formularios.js"
     },
     {
@@ -294,7 +294,7 @@
     {
       "nombre": "DiferidaForm",
       "tipo": "function",
-      "lineas": 94,
+      "lineas": 90,
       "pieza": "js/formularios.js"
     },
     {
