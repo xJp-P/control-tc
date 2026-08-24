@@ -2,7 +2,7 @@
   "generado": "2026-08-01",
   "nota": "Hash por respuesta de los GET inocuos, con el reloj congelado y ciclos explicitos. Si el refactor solo mueve codigo, ninguno puede cambiar. NO regenerar sin una razon aprobada.",
   "total": 76,
-  "datos": "2f9d6f1ad3509da1f03f2f4100eb109df5eb9553b0e57cd13f42b3259b5a25ef",
+  "datos": "de751a5165d6571c65f5597737dd256e6223ab12fbf787f5f2710073f24b992e",
   "claves": {
     "4|2026-06|/api/config": "3ed4bacbae1364e98c474d83e3155d058f9026154dcab407aaa68a1eabbea443",
     "4|2026-06|/api/tarjetas": "3e594fd56512c2fba7a97a7490f0ba2f8d9ed360608240617256585b3844f95e",
@@ -22,7 +22,7 @@
     "4|2026-06|/api/dashboard": "405b25abdc53678d95c27dde2e97903fedb6ecc980f36ad2c51c80c99ccb5e54",
     "4|2026-06|/api/proyecciones?tarjeta_id=4&meses=6": "a793300027f8d5138eedc03f633e9fc518d8a75c876979e90004096aa0fdf2c3",
     "4|2026-06|/api/abono-capital/preview?tarjeta_id=4&monto=100000&fecha=2026-08-01": "2d1d6a4549bdfa0ccc404f410e4eca01833ccc8b57ac4887a81e2e79c58b4186",
-    "4|2026-06|/api/log?limit=5": "6b7e95cbc2a699974a2098ea74401eb5360564aaaca63a566c1d12b27cb4bb00",
+    "4|2026-06|/api/log?limit=5": "bac10d81611e23f305954b0f3edf30bcb44851e56098f3f1357c4732585e3736",
     "4|2026-07|/api/config": "3ed4bacbae1364e98c474d83e3155d058f9026154dcab407aaa68a1eabbea443",
     "4|2026-07|/api/tarjetas": "3e594fd56512c2fba7a97a7490f0ba2f8d9ed360608240617256585b3844f95e",
     "4|2026-07|/api/tarjetas/pendientes-config": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
@@ -41,7 +41,7 @@
     "4|2026-07|/api/dashboard": "405b25abdc53678d95c27dde2e97903fedb6ecc980f36ad2c51c80c99ccb5e54",
     "4|2026-07|/api/proyecciones?tarjeta_id=4&meses=6": "a793300027f8d5138eedc03f633e9fc518d8a75c876979e90004096aa0fdf2c3",
     "4|2026-07|/api/abono-capital/preview?tarjeta_id=4&monto=100000&fecha=2026-08-01": "2d1d6a4549bdfa0ccc404f410e4eca01833ccc8b57ac4887a81e2e79c58b4186",
-    "4|2026-07|/api/log?limit=5": "6b7e95cbc2a699974a2098ea74401eb5360564aaaca63a566c1d12b27cb4bb00",
+    "4|2026-07|/api/log?limit=5": "bac10d81611e23f305954b0f3edf30bcb44851e56098f3f1357c4732585e3736",
     "5|2026-06|/api/config": "3ed4bacbae1364e98c474d83e3155d058f9026154dcab407aaa68a1eabbea443",
     "5|2026-06|/api/tarjetas": "3e594fd56512c2fba7a97a7490f0ba2f8d9ed360608240617256585b3844f95e",
     "5|2026-06|/api/tarjetas/pendientes-config": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
@@ -60,7 +60,7 @@
     "5|2026-06|/api/dashboard": "405b25abdc53678d95c27dde2e97903fedb6ecc980f36ad2c51c80c99ccb5e54",
     "5|2026-06|/api/proyecciones?tarjeta_id=5&meses=6": "d0f18bbf53a7bbe88d7304d8f58ab829187cb13da0c2ac5a44b7e1bcadfe7619",
     "5|2026-06|/api/abono-capital/preview?tarjeta_id=5&monto=100000&fecha=2026-08-01": "89e70d8c35aaf8a88684b519be5d4a2cc39d107f7afbce6f063a89152a76cc95",
-    "5|2026-06|/api/log?limit=5": "6b7e95cbc2a699974a2098ea74401eb5360564aaaca63a566c1d12b27cb4bb00",
+    "5|2026-06|/api/log?limit=5": "bac10d81611e23f305954b0f3edf30bcb44851e56098f3f1357c4732585e3736",
     "5|2026-07|/api/config": "3ed4bacbae1364e98c474d83e3155d058f9026154dcab407aaa68a1eabbea443",
     "5|2026-07|/api/tarjetas": "3e594fd56512c2fba7a97a7490f0ba2f8d9ed360608240617256585b3844f95e",
     "5|2026-07|/api/tarjetas/pendientes-config": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
@@ -79,6 +79,6 @@
     "5|2026-07|/api/dashboard": "405b25abdc53678d95c27dde2e97903fedb6ecc980f36ad2c51c80c99ccb5e54",
     "5|2026-07|/api/proyecciones?tarjeta_id=5&meses=6": "d0f18bbf53a7bbe88d7304d8f58ab829187cb13da0c2ac5a44b7e1bcadfe7619",
     "5|2026-07|/api/abono-capital/preview?tarjeta_id=5&monto=100000&fecha=2026-08-01": "89e70d8c35aaf8a88684b519be5d4a2cc39d107f7afbce6f063a89152a76cc95",
-    "5|2026-07|/api/log?limit=5": "6b7e95cbc2a699974a2098ea74401eb5360564aaaca63a566c1d12b27cb4bb00"
+    "5|2026-07|/api/log?limit=5": "bac10d81611e23f305954b0f3edf30bcb44851e56098f3f1357c4732585e3736"
   }
 }

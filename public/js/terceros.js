@@ -22,7 +22,10 @@ function Terceros({ tarjeta }) {
   useEffect(() => { loadData(); }, [loadData]);
 
   async function togglePagado(id) {
-    await api('/terceros/' + id + '/toggle', { method: 'PUT' });
+    // api() NO lanza en un 4xx con cuerpo JSON: lo devuelve como {error} (contrato de v6.1.1). Sin
+    // esta comprobacion, un rechazo del backend se traga en silencio o -peor- se anuncia como exito.
+    const rT = await api('/terceros/' + id + '/toggle', { method: 'PUT' });
+    if (rT && rT.error) { toastErr(rT.error); return; }
     loadData();
   }
 
@@ -48,6 +51,8 @@ function Terceros({ tarjeta }) {
     const bodyT = { monto_bolsillo: monto, desde_terceros: true };
     if (compra._cuota_num != null) bodyT.cuota_num = compra._cuota_num;
     const resp = await api('/compras/' + compra.id + '/bolsillo', { method: 'PUT', body: bodyT });
+    // Se corta ANTES de cerrar el modal: el usuario ve el motivo y conserva lo que habia escrito.
+    if (resp && resp.error) { toastErr(resp.error); return; }
     setBolsilloModal(null);
     loadData();
     if (resp && resp.capped) toast('Se apartó el máximo de la compra: ' + fmtCOP(resp.tope));
@@ -421,7 +426,7 @@ function Terceros({ tarjeta }) {
                 var bodyApartar = { monto_bolsillo: target, desde_terceros: true };
                 if (compra._cuota_num != null) bodyApartar.cuota_num = compra._cuota_num;
                 api('/compras/' + compra.id + '/bolsillo', { method: 'PUT', body: bodyApartar })
-                  .then(() => { setBolsilloModal(null); loadData(); toast('Apartado en bolsillo'); });
+                  .then(r => { if (r && r.error) { toastErr(r.error); return; } setBolsilloModal(null); loadData(); toast('Apartado en bolsillo'); });
               } }, 'Apartar todo (' + fmtCOP(target) + ')'),
               e('div', { style: { textAlign: 'center', fontSize: 13, color: 'var(--text-muted)', marginBottom: 12 } }, 'o apartar un monto parcial:')
             ),
@@ -432,7 +437,7 @@ function Terceros({ tarjeta }) {
                 var bodyRest = { monto_bolsillo: target, desde_terceros: true };
                 if (compra._cuota_num != null) bodyRest.cuota_num = compra._cuota_num;
                 api('/compras/' + compra.id + '/bolsillo', { method: 'PUT', body: bodyRest })
-                  .then(() => { setBolsilloModal(null); loadData(); toast('Apartado en bolsillo'); });
+                  .then(r => { if (r && r.error) { toastErr(r.error); return; } setBolsilloModal(null); loadData(); toast('Apartado en bolsillo'); });
               } }, 'Apartar restante (' + fmtCOP(target - actualMb) + ')'),
             e('div', { className: 'form-group' },
               e('label', { className: 'form-label' }, bState === 'bolsillo_parcial' ? 'Monto a agregar' : 'Monto apartado'),
@@ -456,7 +461,7 @@ function Terceros({ tarjeta }) {
                 var bodyQuitar = { monto_bolsillo: 0, desde_terceros: true };
                 if (compra._cuota_num != null) bodyQuitar.cuota_num = compra._cuota_num;
                 api('/compras/' + compra.id + '/bolsillo', { method: 'PUT', body: bodyQuitar })
-                  .then(() => { setBolsilloModal(null); loadData(); toast('Bolsillo quitado'); });
+                  .then(r => { if (r && r.error) { toastErr(r.error); return; } setBolsilloModal(null); loadData(); toast('Bolsillo quitado'); });
               } }, 'Quitar de bolsillo'),
               e('button', { type: 'button', className: 'btn', onClick: () => setBolsilloModal(null) }, 'Cancelar'),
               e('button', { type: 'button', className: 'btn btn-primary', onClick: saveBolsilloTercero }, 'Guardar')

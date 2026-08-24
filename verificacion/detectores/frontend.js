@@ -1732,6 +1732,50 @@ const F11 = {
           }
         }
         cifras.maxOfrecido = maxOfrecido;
+
+        // ── E7: una escritura RECHAZADA no puede anunciarse como exito ──
+        // Lo encontro el PO en el QA de v6.3.0: 'Quitar de bolsillo' sobre una cuota con un cruce
+        // devolvia el 409 del piso y la UI mostraba el aviso VERDE de siempre; el dinero no se movia
+        // y el usuario creia que si. Es la clase exacta de defecto de v5.7.1 en Pagos: api() NO lanza
+        // en un 4xx con cuerpo JSON -lo devuelve como {error}, contrato de v6.1.1-, asi que un
+        // .then(() => toast('...')) canta victoria pase lo que pase. Cinco escrituras de esta pantalla
+        // lo tenian, mientras las tres de saldo a favor ya lo comprobaban: la asimetria era el olor.
+        //
+        // ORACULO HIBRIDO: el rechazo NO se inventa. Se le pide al backend REAL y ESA respuesta es la
+        // que sirve el espia de red, para que el detector siga al contrato y no a una copia suya.
+        {
+          const rechazo = (await pedir(port, 'PUT', '/api/compras/' + dest.compra_destino_id + '/bolsillo',
+            { monto_bolsillo: 0, cuota_num: dest.cuota_num, desde_terceros: true })).j;
+          if (!(rechazo && rechazo.error)) {
+            notas.push('FALLO de sanidad [E7]: el backend deberia rechazar quitar el bolsillo de una cuota con cruce y respondio ' + JSON.stringify(rechazo));
+          } else {
+            const avisos = [];
+            const espia = () => Promise.resolve({ ok: true, json: () => Promise.resolve(rechazo) });
+            const semilla = [];
+            semilla[iCompras] = compras;
+            semilla[iSaldos] = saldos;
+            semilla[1] = { compra: { id: dest.compra_destino_id, descripcion: 'F11 DIFERIDA', es_diferida: true, monto_bolsillo: 100000, _cuota_num: dest.cuota_num }, target: 100000, monto: '' };
+            const cQ = montarConEstado(raiz, semilla, { fetch: espia });
+            cQ.window.__addToast = (msg, tipo) => avisos.push({ msg: String(msg), tipo: tipo });
+            const arbolQ = cQ.Terceros({ tarjeta: tarjetaC });
+            const btnQ = buscarNodo(arbolQ, n => n.type === 'button' && /Quitar de bolsillo/.test(textoDe(n)));
+            if (!btnQ) {
+              notas.push('FALLO de sanidad [E7]: no se dibujo el boton "Quitar de bolsillo" -> la ranura de bolsilloModal se movio');
+            } else {
+              await btnQ.props.onClick();
+              await new Promise(r => setTimeout(r, 0));
+              const exito = avisos.filter(a => /Bolsillo quitado/.test(a.msg));
+              const error = avisos.filter(a => a.tipo === 'error');
+              if (exito.length) {
+                notas.push('FALLO [E7]: el backend rechazo la escritura y la UI anuncio "Bolsillo quitado" -> el usuario cree que movio dinero que sigue donde estaba');
+              }
+              if (!error.length) {
+                notas.push('FALLO [E7]: la escritura fue rechazada y no se le dijo nada al usuario (avisos: ' + JSON.stringify(avisos) + ')');
+              }
+            }
+            cifras.rechazoAvisado = 'si';
+          }
+        }
       });
     } catch (e) { notas.push('FALLO ejecutando el escenario E6: ' + e.message); }
 
