@@ -494,14 +494,23 @@ const F6 = {
 function montarConEstado(raiz, semilla) {
   const store = (semilla || []).slice();
   const orden = [];
+  const llamadas = [];
   let idx = 0;
   const React = {
     createElement: (t, props, ...hijos) => ({ type: t, props: props || {}, hijos }),
     useState: (init) => {
       const i = idx++;
-      orden[i] = init;
-      if (!(i in store) || store[i] === undefined) store[i] = init;
-      return [store[i], () => {}];
+      // React INVOCA el inicializador lazy (useState(() => ...)) y guarda su RESULTADO. El doble
+      // guardaba la funcion tal cual, asi que un estado lazy -como los `splits` de CompraForm-
+      // llegaba al render como funcion y reventaba en el primer .map. Es la trampa que ya mordio
+      // en v6.1.0: aqui el doble se alinea con React en vez de obligar a esquivarla.
+      const valor = typeof init === 'function' ? init() : init;
+      orden[i] = valor;
+      if (!(i in store) || store[i] === undefined) store[i] = valor;
+      // Los setters siguen SIN re-renderizar, pero ahora dejan constancia de con que se les llamo.
+      // Eso permite auditar la aritmetica de un onClick que actualiza estado (el "repartir en partes
+      // iguales") aplicando su updater al valor actual, sin tener que montar un React de verdad.
+      return [store[i], (v) => { llamadas.push({ ranura: i, valor: v }); }];
     },
     useEffect: () => {}, useCallback: (f) => f, useRef: () => ({ current: null }),
     // useLayoutEffect NO esta desestructurado en core.js: se usa via React.* (el FLIP del
@@ -511,6 +520,7 @@ function montarConEstado(raiz, semilla) {
   };
   const { ctx } = cargarFrontend(raiz, { React });
   ctx.__hooks = orden;
+  ctx.__setState = llamadas;
   return ctx;
 }
 
@@ -1507,7 +1517,402 @@ const F11 = {
   },
 };
 
-module.exports = [F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11];
+// ─── Andamiaje de F12: CompraForm medido por el PAYLOAD que construye ───────
+//
+// POR QUE ES DISTINTO DE F8/F11: aquellas vigilan pantallas que MUESTRAN dinero. CompraForm
+// CONSTRUYE el objeto que lo crea. Todo su trabajo termina en una linea -onSave(payload)- y onSave
+// es un PROP, asi que se le puede inyectar un espia y quedarse con exactamente lo que el formulario
+// decidio. Ese es el oraculo: no "se dibujo bien" sino "que va a guardar". Cuando hace falta cerrar
+// el circulo, ese mismo payload se manda a los endpoints REALES y se audita la BD.
+//
+// El otro espia es el de los avisos: toast() lee window.__addToast en el momento de llamarse, asi
+// que basta publicarlo en el sandbox para saber no solo QUE se bloqueo, sino que se le dijo al
+// usuario. Un bloqueo mudo y uno que explica no son lo mismo.
+const F12_CICLO = '2029-06';
+const TARJETA_F12 = { id: null, nombre: 'F12 TARJETA', banco: 'Bancolombia', franquicia: 'Visa',
+  dia_corte: 30, tasa_mv_avances: 0.02, cupo_total: 10000000, ciclo_vigente: F12_CICLO, cortes_custom: {} };
+
+// Huella de las ranuras de useState. Con 20 estados y tipos repetidos, localizar "por el tipo" es
+// ambiguo, asi que se fija la huella COMPLETA y se comprueba tras el render de descubrimiento: si
+// alguien reordena, añade o quita un hook, esto dice EXACTAMENTE que ranura se movio en vez de
+// sembrar en otra variable y dar por bueno un render que no es el que se cree.
+// OJO con la ranura 0: su valor inicial es todayISO(), o sea la fecha REAL. Se comprueba su FORMA,
+// nunca su valor — fijar el valor haria que F12 caducara cada dia, que es el defecto que se acaba
+// de sellar en R4.
+const RANURAS_F12 = [
+  { n: 'fecha', t: 'string', re: /^\d{4}-\d{2}-\d{2}$/ },
+  { n: 'descripcion', t: 'string', v: '' },
+  { n: 'notaPersonal', t: 'string', v: '' },
+  { n: 'tasaIntl', t: 'string', v: '' },
+  { n: 'valorCop', t: 'string', v: '' },
+  { n: 'valorUsd', t: 'string', v: '' },
+  { n: 'tasaUsd', t: 'string', v: '' },
+  { n: 'personaId', t: 'string', v: '' },
+  { n: 'notas', t: 'string', v: '' },
+  { n: 'cicloManualVal', t: 'string', v: '' },
+  { n: 'facturaSiguienteCorte', t: 'boolean', v: false },
+  { n: 'esInternacional', t: 'boolean', v: false },
+  { n: 'numCuotas', t: 'number', v: 1 },
+  { n: 'cobrarIntereses', t: 'boolean', v: true },
+  { n: 'dividir', t: 'boolean', v: false },
+  { n: 'splits', t: 'splits' },
+  { n: 'intlDescripciones', t: 'array' },
+  { n: 'nombresUnicos', t: 'array' },
+  { n: 'descSugAbierto', t: 'boolean', v: false },
+  { n: 'trmInfo', t: 'null' },
+];
+const IDX = {};
+RANURAS_F12.forEach((r, i) => { IDX[r.n] = i; });
+
+function huellaRanuraOk(esp, val) {
+  if (esp.t === 'null') return val === null;
+  if (esp.t === 'array') return Array.isArray(val);
+  if (esp.t === 'splits') return Array.isArray(val) && val.length === 1 && val[0] && 'persona_id' in val[0] && 'monto' in val[0];
+  if (esp.t === 'string') return typeof val === 'string' && (esp.re ? esp.re.test(val) : val === esp.v);
+  if (esp.t === 'boolean') return val === esp.v;
+  if (esp.t === 'number') return val === esp.v;
+  return false;
+}
+
+function semillaF12(campos) {
+  const s = [];
+  Object.keys(campos || {}).forEach(k => {
+    if (!(k in IDX)) throw new Error('ranura desconocida en el fixture: ' + k);
+    s[IDX[k]] = campos[k];
+  });
+  return s;
+}
+
+// Envia el formulario invocando el onSubmit REAL del <form>. submit(ev) tolera ev undefined (lo
+// re-disparaba el modal de confirmacion de v4.7.5), asi que no hace falta fabricar un evento.
+async function enviarForm(arbol) {
+  const form = buscarNodo(arbol, n => n.type === 'form' && typeof n.props.onSubmit === 'function');
+  if (!form) throw new Error('no se encontro el <form> con onSubmit');
+  await form.props.onSubmit(undefined);
+}
+// El campo Cuotas se localiza por su contrato de rango (min 1, max 60), no por su posicion.
+function inputCuotas(arbol) {
+  return buscarNodo(arbol, n => n.type === 'input' && n.props.type === 'number' && n.props.max === 60);
+}
+function opcionesAutocompletado(arbol) {
+  const out = [];
+  recorrerArbol(arbol, n => { if (n.props && n.props.className === 'autocomplete-option') out.push(textoDe(n).trim() || n.props.title); });
+  return out;
+}
+function botonPorTexto(arbol, aguja) {
+  return buscarNodo(arbol, n => n.type === 'button' && textoDe(n).indexOf(aguja) !== -1);
+}
+
+// ─── F12: el formulario de compras, medido por lo que va a guardar ──────────
+//
+// Cubre los cinco frentes donde un fallo aqui crea o pierde dinero:
+//   C1  DIVISION: la suma de las partes es EXACTAMENTE el Valor COP, y sin fila "Mi parte" el
+//       titular NO asume el faltante en silencio (regla de v4.5.1).
+//   C2  SPILLOVER: cicloConCorteFront es una copia declarada de helpers/cortes; aqui se enfrenta al
+//       ORIGINAL del backend. Y el ciclo destino viaja con ciclo_manual=1: sin el, syncData paso 5
+//       recalcula el ciclo y el desvio se revierte solo en el siguiente arranque, sin avisar.
+//   C3  GATE DE CUOTAS (v6.1.0), con su modo de fallo silencioso: cuotasFacturadas sale de un
+//       parseInt sobre un campo del backend; si ese campo deja de llegar da 0 y el candado se abre.
+//   C4  El aviso contextual ANUNCIA una de tres transiciones y el payload lleva su marca. Si se
+//       separan, el usuario lee una cosa y ocurre otra (el patron que cazo v5.7.2 en Pagos).
+//   C5  Asistente INTL y filtro del autocompletado.
+const F12 = {
+  id: 'F12',
+  nombre: 'CompraForm: el payload que construye (division, spillover, cuotas)',
+  async medir(raiz) {
+    const notas = [];
+    const cifras = {};
+    const cortes = require(path.join(raiz, 'backend', 'helpers', 'cortes'));
+    const { syncData } = require(path.join(raiz, 'backend', 'config', 'db', 'syncData'));
+
+    try {
+      await conApp(raiz, 'F12', async (port, db) => {
+        // ── Siembra: tarjeta y personas propias, para que los ids del payload existan de verdad
+        //    cuando se cierre el circulo contra la BD.
+        const tjId = db.prepare("INSERT INTO tarjetas (nombre, banco, franquicia, dia_corte, cupo_total, tasa_mv_avances, estado) VALUES (?,?,?,?,?,?, 'activa')")
+          .run(TARJETA_F12.nombre, TARJETA_F12.banco, TARJETA_F12.franquicia, 30, 10000000, 0.02).lastInsertRowid;
+        const pA = db.prepare("INSERT INTO personas (nombre, color) VALUES ('F12 UNO', '#111111')").run().lastInsertRowid;
+        const pB = db.prepare("INSERT INTO personas (nombre, color) VALUES ('F12 DOS', '#222222')").run().lastInsertRowid;
+        const tarjeta = Object.assign({}, TARJETA_F12, { id: tjId });
+        const personas = [{ id: pA, nombre: 'F12 UNO' }, { id: pB, nombre: 'F12 DOS' }];
+
+        const montar = (campos, props) => {
+          const c = montarConEstado(raiz, semillaF12(campos));
+          const avisos = [];
+          const guardado = [];
+          c.window.__addToast = (msg, tipo) => avisos.push({ msg: String(msg), tipo: tipo });
+          const arbol = c.CompraForm(Object.assign({
+            item: null, personas: personas, ciclo: F12_CICLO, tarjeta: tarjeta,
+            onSave: (p) => guardado.push(p), onCancel: () => {},
+          }, props || {}));
+          return { c: c, arbol: arbol, avisos: avisos, guardado: guardado };
+        };
+
+        // ── Huella de ranuras: corta antes que todo lo demas ──
+        const disc = montar({});
+        const orden = disc.c.__hooks || [];
+        if (orden.length !== RANURAS_F12.length) {
+          notas.push('FALLO de sanidad: CompraForm declara ' + orden.length + ' useState y la huella fija ' +
+            RANURAS_F12.length + ' -> se añadio o quito un hook; revisar RANURAS_F12 antes de fiarse de nada');
+          return;
+        }
+        const desalineadas = [];
+        RANURAS_F12.forEach((esp, i) => { if (!huellaRanuraOk(esp, orden[i])) desalineadas.push(i + ':' + esp.n + ' (llego ' + JSON.stringify(orden[i]) + ')'); });
+        if (desalineadas.length) {
+          notas.push('FALLO de sanidad: las ranuras de useState no coinciden con la huella -> el fixture sembraria otra variable. Desalineadas: ' + desalineadas.join(', '));
+          return;
+        }
+        cifras.ranuras = orden.length;
+
+        // ══ C1 — DIVISION: conservacion del dinero ══
+        const dividido = (splits, valor) => montar({ valorCop: valor || '100000', dividir: true, splits: splits });
+
+        // C1a: cuadre exacto -> el payload reparte el total sin perder ni inventar un peso.
+        {
+          const r = dividido([{ persona_id: String(pA), monto: '60000' }, { persona_id: 'personal', monto: '40000' }]);
+          await enviarForm(r.arbol);
+          if (r.guardado.length !== 1 || !Array.isArray(r.guardado[0])) {
+            notas.push('FALLO [C1a]: con el cuadre exacto no se guardo un array de compras (' + JSON.stringify(r.avisos) + ')');
+          } else {
+            const partes = r.guardado[0];
+            const suma = partes.reduce((s, p) => s + p.valor_cop, 0);
+            if (suma !== 100000) notas.push('FALLO [C1a/CONSERVACION]: las partes suman ' + suma + ' y el Valor COP es 100000 -> el reparto crea o pierde dinero');
+            const dePersona = partes.filter(p => p.persona_id === pA)[0];
+            const personal = partes.filter(p => p.persona_id === null)[0];
+            if (!dePersona || dePersona.valor_cop !== 60000) notas.push('FALLO [C1a]: la parte del tercero no llego como 60000 (' + JSON.stringify(dePersona) + ')');
+            if (!personal || personal.valor_cop !== 40000) notas.push('FALLO [C1a]: la fila "Mi parte" no viaja como parte personal de 40000 (' + JSON.stringify(personal) + ')');
+            // Cierre contra la BD: lo que el formulario construyo tiene que sobrevivir al backend.
+            for (const p of partes) await pedir(port, 'POST', '/api/compras', Object.assign({}, p, { tarjeta_id: tjId }));
+            const enBd = db.prepare('SELECT COALESCE(SUM(valor_cop),0) t, COUNT(*) n FROM compras WHERE grupo_id=?').get(partes[0].grupo_id);
+            if (enBd.n !== 2 || Math.round(enBd.t) !== 100000) {
+              notas.push('FALLO [C1a/BD]: tras guardar, el grupo tiene ' + enBd.n + ' partes que suman ' + enBd.t + ' (se esperaban 2 y 100000)');
+            }
+            cifras.grupoEnBd = enBd.t;
+          }
+        }
+
+        // C1b: SIN fila "Mi parte" y con faltante -> el titular NO lo asume. Bloquea y lo explica.
+        {
+          const r = dividido([{ persona_id: String(pA), monto: '60000' }]);
+          await enviarForm(r.arbol);
+          if (r.guardado.length !== 0) {
+            const p = r.guardado[0];
+            notas.push('FALLO [C1b/CONSERVACION]: faltaban 40000 y sin fila "Mi parte" el formulario guardo igual -> el titular asume el faltante en silencio (' +
+              (Array.isArray(p) ? JSON.stringify(p.map(x => [x.persona_id, x.valor_cop])) : JSON.stringify(p)) + ')');
+          } else if (!r.avisos.some(a => /Falta asignar/.test(a.msg))) {
+            notas.push('FALLO [C1b]: bloqueo sin decir que falta asignar (' + JSON.stringify(r.avisos) + ')');
+          } else if (!r.avisos.some(a => /Mi parte/.test(a.msg))) {
+            notas.push('FALLO [C1b]: el aviso no sugiere agregar la fila "Mi parte", que es la unica salida correcta');
+          }
+        }
+
+        // C1c: exceso -> tambien bloquea (la simetria importa: sobrar es tan corrupto como faltar).
+        {
+          const r = dividido([{ persona_id: String(pA), monto: '60000' }, { persona_id: String(pB), monto: '60000' }]);
+          await enviarForm(r.arbol);
+          if (r.guardado.length !== 0 || !r.avisos.some(a => /exceden/.test(a.msg))) {
+            notas.push('FALLO [C1c]: las partes exceden el total y no se bloqueo con ese motivo (guardo=' + r.guardado.length + ', avisos=' + JSON.stringify(r.avisos) + ')');
+          }
+        }
+
+        // C1d/C1e: filas sin responsable y responsables repetidos.
+        {
+          const r = dividido([{ persona_id: '', monto: '100000' }]);
+          await enviarForm(r.arbol);
+          if (r.guardado.length !== 0 || !r.avisos.some(a => /responsable/.test(a.msg))) {
+            notas.push('FALLO [C1d]: una fila sin responsable deberia bloquear (guardo=' + r.guardado.length + ')');
+          }
+          const r2 = dividido([{ persona_id: String(pA), monto: '50000' }, { persona_id: String(pA), monto: '50000' }]);
+          await enviarForm(r2.arbol);
+          if (r2.guardado.length !== 0 || !r2.avisos.some(a => /mismo responsable/.test(a.msg))) {
+            notas.push('FALLO [C1e]: el mismo responsable dos veces deberia bloquear (guardo=' + r2.guardado.length + ')');
+          }
+        }
+
+        // C1f: "repartir en partes iguales" cuadra POR CONSTRUCCION, incluso con totales que no
+        // dividen exacto. El boton actualiza estado, asi que se captura su updater y se aplica al
+        // valor actual: se audita su aritmetica sin montar un React de verdad.
+        {
+          let repartos = 0;
+          for (const total of ['100000', '100001', '99999']) {
+            for (let n = 2; n <= 7; n++) {
+              const filas = [];
+              for (let i = 0; i < n; i++) filas.push({ persona_id: i === 0 ? 'personal' : String(i === 1 ? pA : pB) + '_' + i, monto: '' });
+              const r = dividido(filas, total);
+              const boton = botonPorTexto(r.arbol, 'Repartir en partes iguales');
+              if (!boton) { notas.push('FALLO [C1f]: no se encontro el boton de repartir'); break; }
+              boton.props.onClick();
+              const ult = r.c.__setState[r.c.__setState.length - 1];
+              if (!ult || ult.ranura !== IDX.splits) { notas.push('FALLO [C1f]: el boton no actualizo la ranura de splits'); break; }
+              const nuevos = typeof ult.valor === 'function' ? ult.valor(filas) : ult.valor;
+              const suma = nuevos.reduce((s, x) => s + Math.round(parseFloat(x.monto) || 0), 0);
+              if (suma !== Math.round(parseFloat(total))) {
+                notas.push('FALLO [C1f/CONSERVACION]: repartir ' + total + ' entre ' + n + ' da ' + suma +
+                  ' -> el residuo del redondeo se pierde y el cuadre estricto bloqueara al usuario');
+              }
+              repartos++;
+            }
+          }
+          cifras.repartos = repartos;
+        }
+
+        // ══ C2 — SPILLOVER: el espejo del ciclo contra el ORIGINAL del backend ══
+        {
+          db.prepare("INSERT INTO cortes_custom (tarjeta_id, ciclo, fecha_corte) VALUES (?,?,?)").run(tjId, '2029-06', '2029-06-18');
+          const mapa = cortes.getCortesCustomMap(db, tjId);
+          const casos = [
+            { fecha: '2029-06-15', cortes: {} },
+            { fecha: '2029-06-30', cortes: {} },          // el dia del corte pertenece al ciclo que cierra
+            { fecha: '2029-05-31', cortes: {} },          // ultimo dia de mes
+            { fecha: '2029-12-31', cortes: {} },          // cruce de año
+            { fecha: '2029-06-20', cortes: mapa },        // ya paso el corte REAL adelantado (18)
+          ];
+          let comprobados = 0;
+          for (const caso of casos) {
+            const tj = Object.assign({}, tarjeta, { cortes_custom: caso.cortes });
+            const r = montar({ fecha: caso.fecha, valorCop: '50000', facturaSiguienteCorte: true }, { tarjeta: tj });
+            await enviarForm(r.arbol);
+            if (r.guardado.length !== 1) { notas.push('FALLO [C2]: no se guardo nada para ' + caso.fecha + ' (' + JSON.stringify(r.avisos) + ')'); continue; }
+            const p = r.guardado[0];
+            // ORACULO: el original del backend, no una copia de la formula en el detector.
+            const natural = cortes.cicloConCorte(caso.fecha, 30, caso.cortes);
+            const esperado = cortes.siguienteCiclo(natural);
+            if (p.ciclo !== esperado) {
+              notas.push('FALLO [C2/ESPEJO]: para ' + caso.fecha + ' el formulario manda la compra a ' + p.ciclo +
+                ' y el backend la facturaria en ' + natural + ', o sea el destino es ' + esperado + ' -> cicloConCorteFront se separo de helpers/cortes');
+            }
+            if (p.ciclo_manual !== 1) {
+              notas.push('FALLO [C2/CICLO_MANUAL]: el spillover de ' + caso.fecha + ' viaja con ciclo_manual=' + p.ciclo_manual +
+                ' -> syncData recalculara el ciclo por la fecha y el desvio se revertira solo en el proximo arranque');
+            }
+            if (p.fecha !== caso.fecha) notas.push('FALLO [C2]: el spillover movio la FECHA real de la compra (' + p.fecha + ' en vez de ' + caso.fecha + ')');
+            comprobados++;
+          }
+          cifras.spillover = comprobados;
+
+          // Y la prueba de fuego: guardarlo y dejar que syncData opine.
+          const r = montar({ fecha: '2029-06-15', valorCop: '50000', facturaSiguienteCorte: true });
+          await enviarForm(r.arbol);
+          if (r.guardado.length === 1) {
+            const p = r.guardado[0];
+            const resp = await pedir(port, 'POST', '/api/compras', Object.assign({}, p, { tarjeta_id: tjId, descripcion: 'F12 SPILLOVER' }));
+            const id = resp.j && resp.j.id;
+            const antes = id ? db.prepare('SELECT ciclo FROM compras WHERE id=?').get(id) : null;
+            syncData(db);
+            const despues = id ? db.prepare('SELECT ciclo FROM compras WHERE id=?').get(id) : null;
+            if (!antes || !despues) notas.push('FALLO [C2]: no se pudo releer la compra del spillover tras guardarla');
+            else if (antes.ciclo !== despues.ciclo) {
+              notas.push('FALLO [C2/SYNCDATA]: syncData movio la compra de ' + antes.ciclo + ' a ' + despues.ciclo +
+                ' -> el "canje retrasado" no sobrevive a un reinicio');
+            }
+            cifras.cicloTrasSync = despues ? despues.ciclo : null;
+          }
+        }
+
+        // ══ C3 — GATE DE CUOTAS, con su modo de fallo silencioso ══
+        {
+          const itemBase = { id: 999001, fecha: '2029-06-10', descripcion: 'F12 DIF', valor_cop: 300000,
+            estado: 'diferida', diferida_id: 555, cuotas_total: 3, ciclo: F12_CICLO, monto_abonado: 0 };
+          const libre = montar({}, { item: Object.assign({}, itemBase, { cuotas_facturadas: 0 }) });
+          const inpLibre = inputCuotas(libre.arbol);
+          if (!inpLibre) notas.push('FALLO [C3]: no se encontro el campo Cuotas (min 1 / max 60)');
+          else if (inpLibre.props.disabled) notas.push('FALLO [C3]: con 0 cuotas facturadas el campo Cuotas esta bloqueado -> se impide una operacion legitima');
+
+          const bloq = montar({}, { item: Object.assign({}, itemBase, { cuotas_facturadas: 2 }) });
+          const inpBloq = inputCuotas(bloq.arbol);
+          if (!inpBloq || !inpBloq.props.disabled) {
+            notas.push('FALLO [C3]: con 2 cuotas ya facturadas el campo Cuotas sigue editable -> rehacer el plan desde el origen borraria lo que el banco ya cobro');
+          }
+          if (!/Reprogramar saldo restante/.test(textoDe(bloq.arbol))) {
+            notas.push('FALLO [C3]: el bloqueo no desvia a "Reprogramar saldo restante" -> es un no sin salida');
+          }
+          // El campo del que depende el candado tiene que LLEGAR de verdad: si el backend deja de
+          // enviarlo, parseInt(undefined)||0 da 0 y el candado se abre sin que nada falle.
+          const difs = db.prepare("SELECT c.id FROM compras c JOIN diferidas d ON c.diferida_id=d.id LIMIT 1").get();
+          if (difs) {
+            const lista = (await pedir(port, 'GET', '/api/compras?tarjeta_id=' + (db.prepare('SELECT tarjeta_id FROM compras WHERE id=?').get(difs.id) || {}).tarjeta_id)).j || [];
+            const fila = lista.filter(x => x.id === difs.id)[0];
+            if (!fila || !('cuotas_facturadas' in fila)) {
+              notas.push('FALLO [C3/CONTRATO]: GET /api/compras ya no envia cuotas_facturadas -> el candado del formulario se abre en silencio');
+            }
+            cifras.contratoCuotas = fila && ('cuotas_facturadas' in fila) ? 'ok' : 'ausente';
+          }
+        }
+
+        // ══ C4 — el aviso ANUNCIA la transicion que el payload dispara ══
+        {
+          const base = { id: 999002, fecha: '2029-06-10', descripcion: 'F12 TRANS', valor_cop: 300000,
+            ciclo: F12_CICLO, monto_abonado: 0, cuotas_facturadas: 0 };
+          const casos = [
+            { nombre: 'convertir 1->3', item: Object.assign({}, base, { estado: 'pendiente' }), cuotas: 3,
+              anuncia: /se convertir. en diferida/i, marca: '_convertirCuotas' },
+            { nombre: 'reprogramar 3->5', item: Object.assign({}, base, { estado: 'diferida', diferida_id: 556, cuotas_total: 3 }), cuotas: 5,
+              anuncia: /Cambiar plan completo/i, marca: '_reprogramarCuotas' },
+            { nombre: 'revertir 3->1', item: Object.assign({}, base, { estado: 'diferida', diferida_id: 557, cuotas_total: 3 }), cuotas: 1,
+              anuncia: /volver. a ser de 1 cuota/i, marca: '_revertirCuotas' },
+          ];
+          for (const caso of casos) {
+            const r = montar({ numCuotas: caso.cuotas, valorCop: '300000' }, { item: caso.item });
+            const texto = textoDe(r.arbol);
+            const anuncia = caso.anuncia.test(texto);
+            await enviarForm(r.arbol);
+            const p = r.guardado[0];
+            const lleva = !!(p && p[caso.marca]);
+            if (!anuncia) notas.push('FALLO [C4]: en "' + caso.nombre + '" el formulario no anuncia la transicion que va a ocurrir');
+            if (!lleva) notas.push('FALLO [C4]: en "' + caso.nombre + '" el payload no lleva ' + caso.marca + ' (' + JSON.stringify(p && Object.keys(p).filter(k => k[0] === '_')) + ')');
+            if (anuncia !== lleva) {
+              notas.push('FALLO [C4/PARIDAD]: en "' + caso.nombre + '" lo que se anuncia y lo que se ejecuta no coinciden -> el usuario lee una cosa y ocurre otra');
+            }
+          }
+        }
+
+        // ══ C5 — asistente INTL y filtro del autocompletado ══
+        {
+          const conPista = montar({ descripcion: 'AMAZ', intlDescripciones: ['amazon com mktp'] });
+          if (!/inter.s internacional/i.test(textoDe(conPista.arbol))) {
+            notas.push('FALLO [C5]: el asistente INTL no avisa con un nombre que historicamente cobro interes internacional');
+          }
+          const yaMarcada = montar({ descripcion: 'AMAZ', intlDescripciones: ['amazon com mktp'], esInternacional: true });
+          if (/inter.s internacional. Considera/i.test(textoDe(yaMarcada.arbol))) {
+            notas.push('FALLO [C5]: el asistente INTL sigue avisando con el check ya marcado (aviso redundante)');
+          }
+          const corta = montar({ descripcion: 'AM', intlDescripciones: ['amazon com mktp'] });
+          if (/Considera marcar/i.test(textoDe(corta.arbol))) {
+            notas.push('FALLO [C5]: el asistente INTL dispara con menos de 3 caracteres -> falsos positivos');
+          }
+          // Autocompletado: substring, sin la coincidencia exacta, tope 8.
+          // DOCE candidatos que casan, no ocho: con exactamente 8 el tope nunca se ejercita y el
+          // aserto pasa aunque alguien lo suba. Lo destapo su propio control negativo.
+          const nombres = ['NETFLIX'];
+          for (let i = 2; i <= 13; i++) nombres.push('NETFLIX ' + i);
+          nombres.push('OTRO');
+          const auto = montar({ descripcion: 'netflix', nombresUnicos: nombres, descSugAbierto: true });
+          const ops = opcionesAutocompletado(auto.arbol);
+          if (ops.length !== 8) notas.push('FALLO [C5]: el autocompletado ofrece ' + ops.length + ' sugerencias y el tope es 8');
+          if (ops.indexOf('NETFLIX') !== -1) notas.push('FALLO [C5]: el autocompletado sugiere el nombre exacto que ya esta escrito');
+          if (ops.indexOf('OTRO') !== -1) notas.push('FALLO [C5]: el autocompletado sugiere un nombre que no contiene lo escrito');
+          cifras.sugerencias = ops.length;
+        }
+      });
+    } catch (e) {
+      return resultado(false, cifras, ['FALLO ejecutando el escenario: ' + e.message]);
+    }
+
+    return resultado(notas.length === 0, cifras, notas);
+  },
+  defecto: 'sin fila "Mi parte", el titular absorbe el faltante de una compra dividida en silencio',
+  mutar(raiz) {
+    // Deroga la regla de v4.5.1: el faltante deja de bloquear y se le carga al titular. Es el defecto
+    // mas caro de esta pantalla porque no falla ni avisa — solo aparece meses despues, cuando la
+    // deuda de alguien no cuadra. F1/F5 no lo ven: es codigo valido y el simbolo casi no cambia.
+    const aguja = 'const diff = Math.round(totalCop) - sumTerceros - miParteFinal;';
+    if (!mutarEnAlgunaPieza(raiz, aguja, 'if (!hayFilaPersonal) miParteFinal = Math.round(totalCop) - sumTerceros;\n      const diff = Math.round(totalCop) - sumTerceros - miParteFinal;')) {
+      throw new Error('no se encontro el cuadre del modo dividido en CompraForm');
+    }
+  },
+};
+
+module.exports = [F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12];
 module.exports.medirSimbolos = medirSimbolos;
 module.exports.piezasEnOrden = piezasEnOrden;
 module.exports.RUTA_SIMBOLOS = RUTA_SIMBOLOS;
