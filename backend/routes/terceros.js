@@ -33,7 +33,7 @@ module.exports = function(db, { logAction, tjNombre }) {
                c.diferida_id, c.tarjeta_id,
                p.nombre as persona_nombre, p.color as persona_color, p.id as persona_id
                FROM compras c JOIN personas p ON c.persona_id = p.id
-               WHERE c.persona_id IS NOT NULL
+               WHERE c.persona_id IS NOT NULL AND COALESCE(c.anulada,0)=0
                  AND NOT (
                    -- (a) Compra 1-cuota COP: extracto COP pagado Y (tercero pagó O bolsillo cubre total).
                    -- El objetivo incluye interes_sellado: una cuota sellada cuyo reembolso solo cubre el

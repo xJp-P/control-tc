@@ -252,7 +252,10 @@ function syncData(db) {
 
     console.log('[Sync] Redistribuyendo abono con orden de 4 grupos (intl cubiertas antes que nacionales)');
 
-    const comprasReset = db.prepare("SELECT id, ciclo, estado, monto_abonado, monto_bolsillo FROM compras WHERE tarjeta_id=? AND monto_abonado > 0").all(pago.tarjeta_id);
+    // Una compra ANULADA se neutraliza igual que un pago (estado=pagado + monto_abonado=valor), que
+    // es justo la forma que este bucle interpreta como "parte de un abono a capital". Sin excluirla,
+    // la anulacion se deshace en el siguiente arranque mientras el ciclo siga abierto.
+    const comprasReset = db.prepare("SELECT id, ciclo, estado, monto_abonado, monto_bolsillo FROM compras WHERE tarjeta_id=? AND monto_abonado > 0 AND COALESCE(anulada,0)=0").all(pago.tarjeta_id);
     comprasReset.forEach(c => {
       if (esCicloPagado(pago.tarjeta_id, c.ciclo)) return;
       let estadoOriginal = 'pendiente';

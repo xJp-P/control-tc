@@ -269,6 +269,12 @@ function aplicarMigraciones(db) {
   try { db.prepare('SELECT cuota_num FROM aplicaciones_saldo_favor LIMIT 1').get(); }
   catch (e) { db.exec('ALTER TABLE aplicaciones_saldo_favor ADD COLUMN cuota_num INTEGER'); }
 
+  // ANULACION (no es lo mismo que un reverso). El banco a veces carga y ANULA un movimiento el
+  // mismo dia con la MISMA autorizacion: nunca entra a la facturacion. La compra se conserva para
+  // auditoria pero queda inactiva: no suma a proyecciones, ni a la deuda del tercero, ni al extracto.
+  try { db.prepare('SELECT anulada FROM compras LIMIT 1').get(); }
+  catch (e) { db.exec('ALTER TABLE compras ADD COLUMN anulada INTEGER DEFAULT 0'); }
+
   // Limpieza de la tabla 'log' legacy (reemplazada por 'historial', creada arriba).
   try { db.exec('DROP TABLE IF EXISTS log'); } catch (e) {}
 }

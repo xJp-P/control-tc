@@ -120,6 +120,62 @@ module.exports = function(router, ctx) {
     res.json({ ok: true, diferida_id: difId, num_cuotas: n, bolsillo_trasladado: trasladado });
   });
 
+  // ── ANULAR PLAN: el banco cargo y ANULO el movimiento (misma autorizacion, mismo dia) ──
+  // POST /:id/anular-plan   (sin body)
+  //
+  // NO es un reverso. Un REVERSO (devolucion) tiene otra autorizacion o fecha y SI entra a la
+  // facturacion: el banco lo cobra y acredita aparte. Una ANULACION nunca entro al extracto — el
+  // banco la excluye de la cuota de transacciones—, asi que en la app no debe pesar en ningun lado.
+  // Observado en el extracto de agosto-2026: MERCADOPAGO 882.000 cargado y anulado el 05/08 con la
+  // MISMA autorizacion (040844) quedo fuera de la cuota de transacciones, mientras AMAZON 80.554
+  // (auth 094377 vs 094904) si se facturo.
+  //
+  // Reglas de negocio (dictadas por direccion):
+  //   1. RASTRO INACTIVO: nada de borrado fisico. La fila se conserva para auditoria con anulada=1
+  //      y se neutraliza -estado 'pagado' + monto_abonado = valor_cop, el mismo mecanismo probado de
+  //      `reversar`- para que su deuda sea CERO en toda consulta sin tocar ninguna de ellas. El plan
+  //      pasa a diferidas.estado='anulado', que ya queda fuera de los filtros estado='activo' que
+  //      usan extracto, dashboard y proyecciones. Y se excluye de la deuda de terceros.
+  //   2. FONDOS ADELANTADOS: si el tercero ya habia puesto dinero, NO se evapora — nace como
+  //      saldo a favor suyo, para cruzarlo contra otra deuda. Es plata del deudor.
+  router.post('/:id/anular-plan', (req, res) => {
+    const c = db.prepare('SELECT * FROM compras WHERE id=?').get(req.params.id);
+    if (!c) return res.status(404).json({ error: 'Compra no encontrada' });
+    if (c.anulada) return res.status(409).json({ error: 'Esta compra ya esta anulada.' });
+    if (c.reversada) return res.status(409).json({ error: 'Esta compra ya fue reversada; un reverso y una anulacion no se acumulan.' });
+    // Un mes ya pagado esta sellado: anular ahi reabriria un extracto cerrado.
+    if (esCicloPagado(c.tarjeta_id, c.ciclo)) {
+      return res.status(403).json({ error: 'El extracto de ' + c.ciclo + ' ya esta pagado; no se puede anular una compra de un mes cerrado.' });
+    }
+    const dif = c.diferida_id ? db.prepare('SELECT * FROM diferidas WHERE id=?').get(c.diferida_id) : null;
+    const bolCop = Math.round(c.monto_bolsillo || 0);
+    let saldoFavorCreado = 0;
+
+    db.transaction(() => {
+      // 1. El dinero que el tercero ya adelanto se transforma en credito a su nombre.
+      if (c.persona_id && bolCop > 0) {
+        db.prepare(`INSERT INTO saldos_favor_tercero
+            (persona_id, monto, monto_aplicado, origen_tipo, origen_compra_id, tarjeta_id, descripcion, fecha, estado, notas)
+            VALUES (?,?,0,'anulacion',?,?,?,?, 'activo', ?)`)
+          .run(c.persona_id, bolCop, c.id, c.tarjeta_id, 'Anulacion de ' + c.descripcion, hoyLocal(),
+               'El banco anulo la compra; lo que ya habias recibido queda a favor de esta persona.');
+        saldoFavorCreado = bolCop;
+      }
+      db.prepare('DELETE FROM bolsillo_cuotas WHERE compra_id=?').run(c.id);
+      // 2. El plan deja de proyectar (los consumidores filtran estado='activo').
+      if (dif) db.prepare("UPDATE diferidas SET estado='anulado' WHERE id=?").run(dif.id);
+      // 3. La compra queda con rastro pero sin peso: deuda = valor - abonado = 0.
+      const notas = (c.notas ? c.notas + ' | ' : '') + 'Anulada por el banco (no entro al extracto)';
+      db.prepare(`UPDATE compras SET anulada=1, estado='pagado', monto_abonado=valor_cop,
+                  monto_bolsillo=0, monto_bolsillo_usd=0, tercero_pagado=0, tercero_monto_abonado=0, notas=?
+                  WHERE id=?`).run(notas, c.id);
+    })();
+
+    logAction('editar', tjNombre(c.tarjeta_id) + 'Compra ANULADA (no entro al extracto): ' + c.descripcion +
+      (saldoFavorCreado ? ' — ' + saldoFavorCreado + ' quedan a favor del tercero' : ''));
+    res.json({ ok: true, anulada: true, plan_anulado: !!dif, saldo_favor_creado: saldoFavorCreado });
+  });
+
   // ── Revertir diferida → compra de 1 cuota (camino inverso de la conversión) ──
   // POST /:id/revertir-diferida  (sin body)
   // Destruye el plan de cuotas (fila en `diferidas`) y consolida el bolsillo per-cuota de vuelta en
