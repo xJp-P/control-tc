@@ -127,6 +127,9 @@ module.exports = function(router, ctx) {
     // sembrado antes de existir la columna reversada).
     const yaCredito = db.prepare("SELECT id FROM saldos_favor_tercero WHERE origen_tipo='reverso' AND origen_compra_id=?").get(c.id);
     if (c.reversada || yaCredito) return res.status(409).json({ error: 'Esta compra ya fue reversada.' });
+    // Anulacion y reverso NO se acumulan: son dos caminos distintos para el mismo negativo y la
+    // compra ya quedo neutralizada. Espejo del guard que anular-plan tiene contra las reversadas.
+    if (c.anulada) return res.status(409).json({ error: 'Esta compra esta anulada; una anulacion y un reverso no se acumulan.' });
     if (c.grupo_id) return res.status(400).json({ error: 'Para reversar una compra dividida, revierte primero la división o reversa cada parte por separado.' });
     if (c.estado === 'diferida' || c.diferida_id) return res.status(400).json({ error: 'El reverso de compras diferidas aún no está soportado (solo compras de 1 cuota).' });
     if ((c.valor_usd || 0) > 0 && !(c.valor_cop > 0)) return res.status(400).json({ error: 'El reverso de compras en dólares aún no está soportado (solo COP).' });

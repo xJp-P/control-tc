@@ -816,6 +816,10 @@ const COMPRAS_F8 = [
   { id: 902, fecha: '2026-08-04', descripcion: 'CUOTA SELLADA COMPRA F8', valor_cop: 11225, estado: 'pendiente', ciclo: '2026-08', notas: 'Cuota 1/3 sellada por reprogramacion de saldo (4->3)', monto_abonado: 0, monto_bolsillo: 0, persona_id: null },
   { id: 903, fecha: '2026-08-03', descripcion: 'SALDO RENACIDO F8', valor_cop: 33675, estado: 'diferida', ciclo: '2026-08', notas: 'Saldo reprogramado', sin_gracia_cuota1: 1, diferida_id: 801, cuota_num: 1, cuotas_total: 2, monto_abonado: 0, monto_bolsillo: 0, persona_id: null },
   { id: 904, fecha: '2026-08-02', descripcion: 'COMPRA TERCERO F8', valor_cop: 50000, estado: 'pendiente', ciclo: '2026-08', notas: null, monto_abonado: 0, monto_bolsillo: 0, persona_id: 7, persona_nombre: 'Tercero F8', persona_color: '#ff0000' },
+  // ANULADA por el banco: la neutralizacion la deja en 'pagado' con monto_abonado = valor (asi su
+  // deuda es CERO en toda consulta sin tocar ninguna), que es exactamente la forma que la tabla
+  // interpretaba como "Pagado". El cargo NUNCA entro a la facturacion: no es algo que se pagara.
+  { id: 905, fecha: '2026-08-01', descripcion: 'COMPRA ANULADA F8', valor_cop: 882000, estado: 'pagado', ciclo: '2026-08', notas: 'Anulada por el banco (no entro al extracto)', monto_abonado: 882000, monto_bolsillo: 0, persona_id: null, anulada: 1 },
 ];
 const DIFERIDAS_F8 = [
   { id: 801, etiqueta: 'PLAN LIBRE F8', monto: 300000, tasa_mv: 0.02, num_cuotas: 3, fecha_compra: '2026-08-01',
@@ -912,6 +916,31 @@ const F8 = {
     const deTercero = badges.filter(b => /Terceros/i.test(b.title));
     if (!deTercero.length) notas.push('FALLO: el badge de la compra de TERCERO no lleva el aviso de gestionarlo desde Terceros');
     if (deTercero.some(b => b.clickable)) notas.push('FALLO: el badge de un TERCERO quedo como badge-clickable -> deja editar un reembolso que no es plata propia');
+
+    // ── Una compra ANULADA no se lee "Pagado" ────────────────────────────────
+    // El endpoint de anular neutraliza la fila (estado 'pagado' + monto_abonado = valor) para que su
+    // deuda sea cero sin tocar ninguna consulta, y por esa puerta la tabla la anunciaba como pagada:
+    // el usuario leia que habia pagado 882.000 que el banco nunca le cobro. Anulacion y reverso son
+    // caminos distintos (misma autorizacion y fecha vs otra), asi que el badge tambien es propio.
+    let filaAnulada = null;
+    recorrerArbol(r1.arbol, n => { if (!filaAnulada && n.type === 'tr' && textoDe(n).indexOf('COMPRA ANULADA F8') !== -1) filaAnulada = n; });
+    if (!filaAnulada) {
+      notas.push('FALLO de sanidad [ANULADA]: la compra anulada sembrada no llego a la tabla -> los asertos de abajo medirian la nada');
+    } else {
+      const tA = textoDe(filaAnulada);
+      cifras.anulada = tA.trim().slice(0, 60);
+      if (tA.indexOf('Anulada') === -1) {
+        notas.push('FALLO [ANULADA]: la fila de una compra que el banco ANULO no dice "Anulada" (dice: "' + tA.trim().slice(0, 120) + '")');
+      }
+      if (tA.indexOf('Pagado') !== -1) {
+        notas.push('FALLO [ANULADA]: la fila anulada sigue mostrando el badge "Pagado" -> el cargo nunca entro a la facturacion, no es algo que el usuario haya pagado');
+      }
+      let btnRev = null;
+      recorrerArbol(filaAnulada, n => { if (!btnRev && n.type === 'button' && /Reversar/i.test(String((n.props && n.props.title) || ''))) btnRev = n; });
+      if (btnRev) {
+        notas.push('FALLO [ANULADA]: la fila anulada ofrece el boton "Reversar" -> una anulacion y un reverso no se acumulan y el backend lo rechaza con 409');
+      }
+    }
 
     // Tabla de Diferidas: el boton de reprogramar y el motivo del banco.
     const botones = botonesDe(r1.arbol);

@@ -144,7 +144,7 @@
     {
       "nombre": "ICONS",
       "tipo": "const",
-      "lineas": 33,
+      "lineas": 34,
       "pieza": "js/iconos.js"
     },
     {
@@ -234,7 +234,7 @@
     {
       "nombre": "CHANGELOG",
       "tipo": "const",
-      "lineas": 834,
+      "lineas": 836,
       "pieza": "js/changelog.js"
     },
     {
@@ -276,7 +276,7 @@
     {
       "nombre": "CardResumen",
       "tipo": "function",
-      "lineas": 2070,
+      "lineas": 2086,
       "pieza": "js/resumen.js"
     },
     {

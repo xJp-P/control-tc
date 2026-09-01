@@ -1198,7 +1198,18 @@ function CardResumen({ tarjeta, onDataChange }) {
               // el banco descontó—, pero para el usuario el estado de esa fila es uno solo. Antes se
               // veía el badge de "pendiente" en esta columna y otro de "Reversada" colgando de la de
               // acciones, que descuadraba el layout y contaba dos estados para la misma compra.
-              c.reversada
+              // ANULADA manda incluso sobre reversada (no se acumulan: el backend rechaza la segunda).
+              // La neutralizacion deja la compra en estado 'pagado' con monto_abonado = valor, que es
+              // lo que hace que su deuda sea CERO en toda consulta sin tocar ninguna; pero eso NO es
+              // algo que el usuario haya pagado -el cargo nunca entro a la facturacion-, y leerlo como
+              // "Pagado" cuenta la historia al reves. Badge propio, no el de reverso: son dos caminos
+              // distintos y confundirlos es justo lo que el modelo separa.
+              c.anulada
+                ? e('span', { className: 'badge', title: 'El banco anulo esta compra el mismo dia: nunca entro a la facturacion',
+                    style: { display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, padding: '4px 10px',
+                             background: 'rgba(148,163,184,0.15)', color: 'var(--text-muted)', border: '1px solid var(--border)' } },
+                    e(Ico, { name: 'ban', size: 12, color: 'currentColor' }), 'Anulada')
+                : c.reversada
                 ? e('span', { className: 'badge', title: 'El banco devolvio esta compra; el dinero se aplico como credito',
                     style: { display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, padding: '4px 10px',
                              background: 'rgba(148,163,184,0.15)', color: 'var(--text-muted)', border: '1px solid var(--border)' } },
@@ -1229,8 +1240,8 @@ function CardResumen({ tarjeta, onDataChange }) {
               // caso de uso. No aplica a diferidas (v1). Si ya se reversó, el botón desaparece y el
               // estado se lee en la columna ESTADO, que pasa a decir "Reversada" (v6.0.0).
               // Ternario (no `cond &&`): c.reversada es un número (0/1); con `&&` React pintaría el "0".
-              (!isDif && !c.reversada) ? ' ' : null,
-              (!isDif && !c.reversada) ? e('button', { className: 'btn btn-sm', title: 'Reversar compra (devolución del banco)', onClick: () => reverseCompra(c) }, e(Ico, { name: 'undo', size: 14, color: 'currentColor' })) : null
+              (!isDif && !c.reversada && !c.anulada) ? ' ' : null,
+              (!isDif && !c.reversada && !c.anulada) ? e('button', { className: 'btn btn-sm', title: 'Reversar compra (devolución del banco)', onClick: () => reverseCompra(c) }, e(Ico, { name: 'undo', size: 14, color: 'currentColor' })) : null
               // El badge "Reversada" vive en la columna ESTADO, no aquí: es un estado, no una acción.
             )
           );
@@ -1395,7 +1406,12 @@ function CardResumen({ tarjeta, onDataChange }) {
                       aplicaIntl && e('td', { className: 'text-right text-mono', style: { fontSize: 13, fontWeight: childIntl > 0 ? 600 : undefined } }, fmtCOP(childIntl > 0 ? childValor + childIntl : childValor)),
                       // Estado de la hija: cuando está pagado, el badge "Pagado" vive aquí.
                       e('td', null,
-                        childPaidPast
+                        c.anulada
+                          ? e('span', { className: 'badge', title: 'El banco anulo esta compra el mismo dia: nunca entro a la facturacion',
+                              style: { display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, padding: '3px 8px',
+                                       background: 'rgba(148,163,184,0.15)', color: 'var(--text-muted)', border: '1px solid var(--border)' } },
+                              e(Ico, { name: 'ban', size: 10, color: 'currentColor' }), 'Anulada')
+                          : childPaidPast
                           ? e('span', { className: 'badge badge-pagado', style: { display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, padding: '3px 8px' } },
                               e(Ico, { name: 'check', size: 10, color: 'currentColor' }), 'Pagado')
                           : (childBadge
