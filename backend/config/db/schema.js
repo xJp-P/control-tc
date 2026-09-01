@@ -223,6 +223,20 @@ function crearEsquema(db) {
 
     -- Ledger de "cruce de cuentas": a qué deuda del MISMO tercero (o a un cashout, con destino NULL) se
     -- adjudicó cada crédito. Permite auditar y DESHACER una aplicación. Espejo de abonos_diferida.
+    -- Calendario de capital IRREGULAR de una diferida. Sin filas aqui, el motor reparte
+    -- monto/num_cuotas uniforme (el comportamiento de siempre). Con filas, cada cuota amortiza
+    -- el capital que diga esta tabla: es lo que permite modelar la reprogramacion REAL del banco,
+    -- que conserva la cuota base del plan original y comprime el saldo en la siguiente a facturar.
+    CREATE TABLE IF NOT EXISTS capital_cuotas (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      diferida_id INTEGER NOT NULL,
+      cuota_num INTEGER NOT NULL,
+      capital REAL NOT NULL,
+      created_at TEXT DEFAULT (datetime('now','localtime')),
+      UNIQUE(diferida_id, cuota_num),
+      FOREIGN KEY (diferida_id) REFERENCES diferidas(id) ON DELETE CASCADE
+    );
+
     CREATE TABLE IF NOT EXISTS aplicaciones_saldo_favor (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       saldo_favor_id INTEGER NOT NULL REFERENCES saldos_favor_tercero(id) ON DELETE CASCADE,

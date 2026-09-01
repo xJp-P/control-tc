@@ -104,7 +104,7 @@ module.exports = {
   // grep -c 'CREATE TABLE IF NOT EXISTS' backend/config/db/schema.js  -> 21
   // (21 desde v6.0.0: se anade creditos_reverso)
   // La BD real tiene 21 = esas 20 + sqlite_sequence (que crea SQLite sola por los AUTOINCREMENT).
-  EXACTO_TABLAS: 21,
+  EXACTO_TABLAS: 22,   // +capital_cuotas (v6.4.0: calendario de capital irregular)
   // El sello de sanidad que este proyecto ya usa: sobre una copia intacta, syncData no debe
   // tener nada que corregir. Si devuelve > 0, algo movio datos.
   EXACTO_SYNCDATA_CORRECCIONES: 0,

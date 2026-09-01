@@ -78,10 +78,31 @@ function nuOpts(db, tarjetaOrId) {
  * saldo ya en curso. Con la bandera en 0/ausente devuelve EXACTAMENTE nuOpts(db, dif.tarjeta_id)
  * (fallback idéntico → cero regresión en las diferidas existentes).
  */
+// Calendario de capital irregular de una diferida (null si su plan es uniforme, que es lo normal).
+function capitalPorCuotaDe(db, dif) {
+  if (!db || !dif || typeof dif !== 'object' || !dif.id) return null;
+  let filas;
+  try { filas = db.prepare('SELECT cuota_num, capital FROM capital_cuotas WHERE diferida_id=?').all(dif.id); }
+  catch (e) { return null; }   // BD anterior a la tabla: se comporta como siempre
+  if (!filas || !filas.length) return null;
+  const m = {};
+  filas.forEach(f => { m[f.cuota_num] = f.capital; });
+  return m;
+}
+
 function nuOptsDif(db, dif) {
-  if (dif && dif.sin_gracia_cuota1) return undefined;
-  const tid = (dif && typeof dif === 'object') ? dif.tarjeta_id : dif;
-  return nuOpts(db, tid);
+  // El calendario irregular se inyecta AQUI a proposito: este helper ya lo llaman los ~24 sitios que
+  // amortizan una diferida almacenada, asi que el plan del banco llega a todos -extracto, dashboard,
+  // terceros, proyecciones, syncData- sin tocar ninguno de ellos.
+  const cap = capitalPorCuotaDe(db, dif);
+  if (!cap) {
+    // Sin calendario irregular se devuelve EXACTAMENTE lo de siempre (sin envolver en un objeto),
+    // para que el comportamiento y la huella de los motores no se muevan ni un peso.
+    if (dif && dif.sin_gracia_cuota1) return undefined;
+    return nuOpts(db, (dif && typeof dif === 'object') ? dif.tarjeta_id : dif);
+  }
+  const base = (dif && dif.sin_gracia_cuota1) ? {} : (nuOpts(db, dif.tarjeta_id) || {});
+  return Object.assign({}, base, { capitalPorCuota: cap });
 }
 
 /**

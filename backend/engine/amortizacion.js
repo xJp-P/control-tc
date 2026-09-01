@@ -111,6 +111,11 @@ function calcularAmortizacionDiferida(monto, tasaMV, numCuotas, fechaCompra, fec
   const esNu = opts && opts.esNu;
   const esBancolombia = opts && opts.esBancolombia;
   const cuotaCapitalFija = monto / numCuotas;
+  // Calendario de capital IRREGULAR (opcional). Modela la reprogramacion del banco, que NO
+  // re-amortiza uniforme: conserva la cuota base del plan original y comprime el saldo restante
+  // en la SIGUIENTE cuota a facturar. Sin el mapa, `cuotaCapitalFija` manda y el resultado es
+  // byte-identico al de siempre (la huella de R5 no se mueve).
+  const capitalMapa = (opts && opts.capitalPorCuota) || null;
   const tabla = [];
   let saldoInicial = monto;
   let fechaAnterior = fechaCompra;
@@ -138,7 +143,8 @@ function calcularAmortizacionDiferida(monto, tasaMV, numCuotas, fechaCompra, fec
       interesTotal = interesPeriodo;
     }
 
-    let cuotaCapital = Math.min(cuotaCapitalFija, saldoInicial);
+    const capitalDeEstaCuota = (capitalMapa && capitalMapa[i + 1] != null) ? capitalMapa[i + 1] : cuotaCapitalFija;
+    let cuotaCapital = Math.min(capitalDeEstaCuota, saldoInicial);
 
     const abonosAntes = abonosList.filter(a => a.fecha < fechaCorte && a.fecha >= (i === 0 ? fechaCompra : addMonths(fechaPrimerCorte, i - 1)));
     const montoAbonosAntes = abonosAntes.reduce((s, a) => s + a.monto, 0);

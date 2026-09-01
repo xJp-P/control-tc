@@ -10,6 +10,26 @@ const { nuOpts, nuOptsDif, bloqueoCuotasCicloCerrado } = require('../../helpers/
 const { compraTerceroConReembolso } = require('../../helpers/bolsillo');
 const { getCortesCustomMap, cicloConCorte, corteDeCiclo } = require('../../helpers/cortes');
 
+// Reparte un saldo en `cuotas` conservando la CUOTA BASE del plan original y comprimiendo las
+// unidades sobrantes en las PRIMERAS cuotas (las siguientes a facturar). Es el modelo real del
+// banco, calibrado con el extracto de agosto-2026: NETFLIX 44.900 a 4 cuotas (base 11.225), tras
+// facturar la 1 y reprogramar a 3 en total, quedo 22.450 y luego 11.225 -- o sea 2 unidades y 1,
+// no dos mitades de 16.837,50. El residuo del redondeo lo absorbe la ULTIMA cuota, para que la
+// suma sea EXACTAMENTE el saldo y no se pierda ni se invente un peso.
+function repartirComprimido(saldo, base, cuotas) {
+  const unidades = Math.max(cuotas, Math.round(saldo / base));
+  const porCuota = Math.floor(unidades / cuotas);
+  let extra = unidades - porCuota * cuotas;
+  const caps = [];
+  for (let i = 0; i < cuotas; i++) {
+    caps.push((porCuota + (extra > 0 ? 1 : 0)) * base);
+    if (extra > 0) extra--;
+  }
+  const suma = caps.reduce((s, x) => s + x, 0);
+  caps[caps.length - 1] = Math.round((caps[caps.length - 1] + (saldo - suma)) * 100) / 100;
+  return caps;
+}
+
 module.exports = function(router, ctx) {
   const { db, logAction, tjNombre, calcCiclo, avisoCifraOficial, esCicloPagado, esCicloCerrado, targetBolsillo } = ctx;
 
@@ -184,7 +204,7 @@ module.exports = function(router, ctx) {
   // reembolso ni abonos_diferida. La calibración FINA del interés del saldo queda pendiente de un
   // extracto real reprogramado → tasa por defecto conservadora (hereda la del plan; editable en la UI).
   router.post('/:id/reprogramar-saldo', (req, res) => {
-    const { num_cuotas_nuevas, tasa_mv, cobrar_intereses } = req.body || {};
+    const { num_cuotas_nuevas, tasa_mv, cobrar_intereses, num_cuotas_original } = req.body || {};
     const M = parseInt(num_cuotas_nuevas, 10);
     if (!M || M < 1 || M > 120) return res.status(400).json({ error: 'El número total de cuotas debe ser un entero entre 1 y 120.' });
     const c = db.prepare('SELECT * FROM compras WHERE id=?').get(req.params.id);
@@ -244,7 +264,13 @@ module.exports = function(router, ctx) {
     }
 
     // Amortizar la diferida ORIGINAL INTACTA (respeta su propia gracia de cuota 1 vía nuOptsDif).
-    const amortOrig = calcularAmortizacionDiferida(d.monto, d.tasa_mv, d.num_cuotas, d.fecha_compra, d.fecha_primer_corte, null, nuOptsDif(db, d));
+    // El plan ORIGINAL del banco puede no ser el que la fila tiene hoy: si alguien cambio el numero
+    // de cuotas desde el formulario, la diferida quedo re-planificada desde el origen y su cuota ya
+    // no es la que el banco facturo. `num_cuotas_original` permite decir cual era, y de ahi sale
+    // tanto el sellado (lo YA facturado) como la CUOTA BASE del modelo de compresion.
+    const nOrig = (parseInt(num_cuotas_original, 10) > 0) ? parseInt(num_cuotas_original, 10) : d.num_cuotas;
+    const amortOrig = calcularAmortizacionDiferida(d.monto, d.tasa_mv, nOrig, d.fecha_compra, d.fecha_primer_corte, null, nuOptsDif(db, d));
+    const cuotaBase = Math.round((d.monto / nOrig) * 100) / 100;
     const tabla = amortOrig.tabla;
     // k = cuotas ya FACTURADAS (fechaCorte en un ciclo estrictamente anterior al vigente). El corte del
     // vigente aún no llegó → su cuota NO se sella (es parte del saldo/hija).
@@ -361,7 +387,20 @@ module.exports = function(router, ctx) {
         // ROUND(valor_usd*tasa_usd) en tarjetas no duales. es_internacional/tasa_intl se conservan.
         db.prepare(`UPDATE compras SET estado='diferida', valor_cop=?, valor_usd=NULL, tasa_usd=NULL, ciclo=?, ciclo_manual=1, diferida_id=?, monto_bolsillo=0, monto_bolsillo_usd=0, notas=? WHERE id=?`)
           .run(saldoRestante, V, hijaId, (notasBase ? notasBase + ' | ' : '') + 'Diferida a ' + remanente + ' cuotas | Saldo reprogramado ' + d.num_cuotas + '->' + M, c.id);
-        const amortHija = calcularAmortizacionDiferida(saldoRestante, tasaHija, remanente, fechaCompraHija, fechaPrimerCorteHija, null, optsHija);
+        // MODELO DEL BANCO (calibrado con el extracto de agosto-2026, NETFLIX 4->3): al reducir el
+        // numero de cuotas NO re-amortiza el saldo en partes iguales. Conserva la CUOTA BASE del plan
+        // original y mete las unidades sobrantes en la SIGUIENTE cuota a facturar. Observado:
+        // 11.225 / 22.450 / 11.225 -- la doble es la 2 de 3, no la ultima.
+        // Solo se activa si el llamador declaro el plan original; sin el, reparto uniforme de siempre.
+        let optsHijaFinal = optsHija;
+        if (parseInt(num_cuotas_original, 10) > 0 && remanente > 0 && cuotaBase > 0) {
+          const caps = repartirComprimido(saldoRestante, cuotaBase, remanente);
+          const insCap = db.prepare('INSERT INTO capital_cuotas (diferida_id, cuota_num, capital) VALUES (?,?,?)');
+          const mapa = {};
+          caps.forEach((cap, i) => { insCap.run(hijaId, i + 1, cap); mapa[i + 1] = cap; });
+          optsHijaFinal = Object.assign({}, optsHija || {}, { capitalPorCuota: mapa });
+        }
+        const amortHija = calcularAmortizacionDiferida(saldoRestante, tasaHija, remanente, fechaCompraHija, fechaPrimerCorteHija, null, optsHijaFinal);
         // Prepago FUTURO del plan viejo (cuotas k+1..N) + el excedente rodado del pasado (personal).
         let prepagoFuturo = rollForward;
         for (let j = k + 1; j <= d.num_cuotas; j++) prepagoFuturo += (bolMap[j] || 0);
