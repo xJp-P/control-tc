@@ -13,6 +13,10 @@ function calcCicloLocal(fechaStr, diaCorte) { var d = new Date(fechaStr + 'T12:0
 function cicloVigente(diaCorte) { return calcCicloLocal(todayISO(), diaCorte); }
 // Ciclo siguiente a 'YYYY-MM' (aritmetica directa). Espejo de helpers/cortes.siguienteCiclo (backend).
 function cicloSiguiente(ciclo) { var a = String(ciclo).split('-'); var y = Number(a[0]), m = Number(a[1]) + 1; if (m > 12) { m = 1; y += 1; } return y + '-' + String(m).padStart(2, '0'); }
+// Ciclo ANTERIOR a 'YYYY-MM' (aritmetica directa, espejo de cicloSiguiente). Lo pide la
+// reprogramacion de saldo: un extracto llega despues de su corte, asi que lo que trae el papel
+// pudo ser efectivo en el ciclo que factura y no en el que corre.
+function cicloAnterior(ciclo) { var a = String(ciclo).split('-'); var y = Number(a[0]), m = Number(a[1]) - 1; if (m < 1) { m = 12; y -= 1; } return y + '-' + String(m).padStart(2, '0'); }
 // Ciclo destino de una fecha CONSCIENTE del corte adelantado: espejo de helpers/cortes.cicloConCorte.
 // Si hay corte real para el ciclo teorico de la fecha y la compra es POSTERIOR a ese corte, salta al
 // siguiente ciclo (solo ADELANTO). cortesMap: { 'YYYY-MM': 'YYYY-MM-DD' } = tarjeta.cortes_custom.

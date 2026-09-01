@@ -30,6 +30,29 @@ function repartirComprimido(saldo, base, cuotas) {
   return caps;
 }
 
+// Deduce el PLAN ORIGINAL del banco cuando el llamador NO lo declara pero si sabe cuanto capital
+// factura el extracto en el ciclo efectivo (la conciliacion IA siempre lo sabe: es el valor de la
+// linea). Prueba planes de M..120 cuotas y se queda con el PRIMERO -el mas corto- cuyo reparto
+// reproduce EXACTAMENTE esa cifra. Reproducir el papel es el unico criterio verificable con un
+// extracto en la mano; si dos planes lo reproducen (44.900 con 22.450 facturados: 2 y 6 cuotas), el
+// siguiente extracto desempata, y por eso el resultado se le ENSENA al usuario antes de aplicar.
+// Devuelve 0 si ningun plan lo reproduce -> el llamador cae al reparto uniforme de siempre.
+function deducirPlanOriginal(tablaDe, monto, M, V, capitalExtracto) {
+  for (let n = M; n <= 120; n++) {
+    const tabla = tablaDe(n);
+    const k = tabla.filter(q => q.fechaCorte.slice(0, 7) < V).length;
+    if (M <= k) continue;
+    const sumSellado = tabla.slice(0, k).reduce((sm, q) => sm + Math.round(q.cuotaCapital), 0);
+    const saldo = Math.round((Math.round(monto * 100) / 100 - sumSellado) * 100) / 100;
+    if (!(saldo > 0.01)) continue;
+    const base = Math.round((monto / n) * 100) / 100;
+    if (!(base > 0)) continue;
+    const caps = repartirComprimido(saldo, base, M - k);
+    if (Math.round(caps[0]) === Math.round(capitalExtracto)) return n;
+  }
+  return 0;
+}
+
 module.exports = function(router, ctx) {
   const { db, logAction, tjNombre, calcCiclo, avisoCifraOficial, esCicloPagado, esCicloCerrado, targetBolsillo } = ctx;
 
@@ -260,7 +283,7 @@ module.exports = function(router, ctx) {
   // reembolso ni abonos_diferida. La calibración FINA del interés del saldo queda pendiente de un
   // extracto real reprogramado → tasa por defecto conservadora (hereda la del plan; editable en la UI).
   router.post('/:id/reprogramar-saldo', (req, res) => {
-    const { num_cuotas_nuevas, tasa_mv, cobrar_intereses, num_cuotas_original, ciclo_efectivo } = req.body || {};
+    const { num_cuotas_nuevas, tasa_mv, cobrar_intereses, num_cuotas_original, ciclo_efectivo, capital_cuota_extracto } = req.body || {};
     const M = parseInt(num_cuotas_nuevas, 10);
     if (!M || M < 1 || M > 120) return res.status(400).json({ error: 'El número total de cuotas debe ser un entero entre 1 y 120.' });
     const c = db.prepare('SELECT * FROM compras WHERE id=?').get(req.params.id);
@@ -326,12 +349,21 @@ module.exports = function(router, ctx) {
       return res.status(409).json({ error: 'Esta diferida ya es un saldo reprogramado al ciclo vigente ' + V + '. Para cambiarla de nuevo, revierte primero o espera al próximo ciclo.' });
     }
 
+    let capitalPorCuotaAplicado = null;
     // Amortizar la diferida ORIGINAL INTACTA (respeta su propia gracia de cuota 1 vía nuOptsDif).
     // El plan ORIGINAL del banco puede no ser el que la fila tiene hoy: si alguien cambio el numero
     // de cuotas desde el formulario, la diferida quedo re-planificada desde el origen y su cuota ya
     // no es la que el banco facturo. `num_cuotas_original` permite decir cual era, y de ahi sale
     // tanto el sellado (lo YA facturado) como la CUOTA BASE del modelo de compresion.
-    const nOrig = (parseInt(num_cuotas_original, 10) > 0) ? parseInt(num_cuotas_original, 10) : d.num_cuotas;
+    const tablaDe = (n) => calcularAmortizacionDiferida(d.monto, d.tasa_mv, n, d.fecha_compra, d.fecha_primer_corte, null, nuOptsDif(db, d)).tabla;
+    const nOrigDeclarado = (parseInt(num_cuotas_original, 10) > 0) ? parseInt(num_cuotas_original, 10) : 0;
+    // Si no lo declararon, se DEDUCE del capital que el extracto factura este ciclo (ver
+    // deducirPlanOriginal). Sin ninguna de las dos cosas se conserva el plan de la fila y el reparto
+    // uniforme de siempre: el comportamiento anterior queda intacto.
+    const nOrigDeducido = (!nOrigDeclarado && Number(capital_cuota_extracto) > 0)
+      ? deducirPlanOriginal(tablaDe, d.monto, M, V, Number(capital_cuota_extracto)) : 0;
+    const nOrig = nOrigDeclarado || nOrigDeducido || d.num_cuotas;
+    const comprime = !!(nOrigDeclarado || nOrigDeducido);
     const amortOrig = calcularAmortizacionDiferida(d.monto, d.tasa_mv, nOrig, d.fecha_compra, d.fecha_primer_corte, null, nuOptsDif(db, d));
     const cuotaBase = Math.round((d.monto / nOrig) * 100) / 100;
     const tabla = amortOrig.tabla;
@@ -456,12 +488,13 @@ module.exports = function(router, ctx) {
         // 11.225 / 22.450 / 11.225 -- la doble es la 2 de 3, no la ultima.
         // Solo se activa si el llamador declaro el plan original; sin el, reparto uniforme de siempre.
         let optsHijaFinal = optsHija;
-        if (parseInt(num_cuotas_original, 10) > 0 && remanente > 0 && cuotaBase > 0) {
+        if (comprime && remanente > 0 && cuotaBase > 0) {
           const caps = repartirComprimido(saldoRestante, cuotaBase, remanente);
           const insCap = db.prepare('INSERT INTO capital_cuotas (diferida_id, cuota_num, capital) VALUES (?,?,?)');
           const mapa = {};
           caps.forEach((cap, i) => { insCap.run(hijaId, i + 1, cap); mapa[i + 1] = cap; });
           optsHijaFinal = Object.assign({}, optsHija || {}, { capitalPorCuota: mapa });
+          capitalPorCuotaAplicado = caps.slice();
         }
         const amortHija = calcularAmortizacionDiferida(saldoRestante, tasaHija, remanente, fechaCompraHija, fechaPrimerCorteHija, null, optsHijaFinal);
         // Prepago FUTURO del plan viejo (cuotas k+1..N) + el excedente rodado del pasado (personal).
@@ -522,6 +555,6 @@ module.exports = function(router, ctx) {
     reprogramar();
 
     logAction('editar', tjNombre(c.tarjeta_id) + 'Reprogramacion de saldo: ' + c.descripcion + ' (' + d.num_cuotas + ' -> ' + M + '; ' + k + ' selladas, saldo ' + Math.round(saldoRestante) + ' a ' + remanente + ')');
-    res.json({ ok: true, k, remanente, saldo_restante: Math.round(saldoRestante), hija_id: hijaId, sellados, ciclo_vigente: V, tasa_hija: tasaHija, bolsillo_liberado: Math.round(bolsilloLiberado), saldo_favor_creado: Math.round(saldoFavorCreado) });
+    res.json({ ok: true, k, remanente, saldo_restante: Math.round(saldoRestante), hija_id: hijaId, sellados, ciclo_vigente: V, tasa_hija: tasaHija, bolsillo_liberado: Math.round(bolsilloLiberado), saldo_favor_creado: Math.round(saldoFavorCreado), num_cuotas_original: nOrig, plan_original_deducido: !!nOrigDeducido, capital_por_cuota: capitalPorCuotaAplicado });
   });
 };

@@ -77,6 +77,14 @@ function iaProviderModels(pid) {
   return (p && p.models) ? p.models : [];
 }
 
+// Cuotas del plan que el banco YA facturo antes del ciclo que se esta conciliando. Se cuenta sobre
+// la amortizacion REAL que devuelve GET /diferidas/:id -el calendario de cortes es del backend, no se
+// reimplementa aqui-. Es el mismo criterio que usa reprogramar-saldo para decidir que sella.
+function cuotasFacturadasAntesDe(dif, ciclo) {
+  const tabla = (dif && Array.isArray(dif.amortizacion)) ? dif.amortizacion : [];
+  return tabla.filter(q => q && q.fechaCorte && String(q.fechaCorte).slice(0, 7) < String(ciclo)).length;
+}
+
 // ── Render del resultado de conciliación + aplicar acciones con 1 clic (Fase 4) ──
 function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanalizar, reanalizando }) {
   const c = (resultado && resultado.conciliacion_pago_minimo) || {};
@@ -259,7 +267,12 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
     if (op === 'reprogramar_cuotas') {
       const esDividir = Array.isArray(p.cuotas) && p.cuotas.length > 0;
       if (esDividir) return { titulo: 'Reprogramar dividiendo en cuotas', endpoint: 'POST /api/compras/' + cid + '/dividir-cuotas', filas: [['Compra', '#' + cid], ['Cuotas (irregulares)', String(p.cuotas.length)], ['Detalle', p.cuotas.map(q => q.ciclo + ': ' + fmtCOP(q.monto)).join('   |   ')]] };
-      return { titulo: 'Reprogramar número de cuotas', endpoint: 'POST /api/diferidas/(de #' + cid + ')/reprogramar', filas: [['Compra', '#' + cid], ['Nuevo total de cuotas', String(p.num_cuotas || '')], ['Regenera la proyección', 'si']] };
+      const filasRepro = [['Compra', '#' + cid], ['Nuevo total de cuotas', String(p.num_cuotas || '')], ['Ciclo efectivo de la reprogramación', ciclo]];
+      const capExtR = Number(p.capital_cuota != null ? p.capital_cuota : d.valor_extracto);
+      if (capExtR > 0) filasRepro.push(['Capital que factura el extracto', fmtCOP(capExtR) + ' — el reparto del saldo debe reproducirlo']);
+      if (Number(p.num_cuotas_original) > 0) filasRepro.push(['Plan original del banco', String(p.num_cuotas_original) + ' cuota(s)']);
+      filasRepro.push(['Cuotas ya facturadas', 'se sellan como registro histórico; solo el saldo vivo recibe el plan nuevo']);
+      return { titulo: 'Reprogramar número de cuotas', endpoint: 'POST /api/compras/' + cid + '/reprogramar-saldo (si el plan ya facturó cuotas) · POST /api/diferidas/(de #' + cid + ')/reprogramar (si no)', filas: filasRepro };
     }
     if (op === 'convertir_a_diferida') return { titulo: 'Convertir compra de contado a cuotas (diferida)', endpoint: 'POST /api/compras/' + cid + '/convertir-a-diferida', filas: [['Compra', '#' + cid], ['Pasa de', '1 cuota (contado)'], ['Nuevo total de cuotas', String(p.num_cuotas || '')], ['Cobra intereses', (p.cobrar_intereses === false ? 'no' : 'si')], ['Conserva su fecha real', 'si']] };
     if (op === 'actualizar_tasa_intl') {
@@ -448,16 +461,40 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
           const r = await api('/compras/' + cid + '/dividir-cuotas', { method: 'POST', body: { cuotas: p.cuotas, desde_conciliacion: true } });
           if (r && r.error) throw new Error(r.error);
         } else {
-          // Ruta A: reprogramacion uniforme → cambiar num_cuotas de la diferida vinculada.
+          // Ruta A: el banco cambio el TOTAL de cuotas del plan. DOS destinos, y elegir mal es lo que
+          // devolvia "la diferida ya tiene cuotas facturadas en ciclos pagados": regenerar el plan
+          // desde el origen reescribe las cuotas que el banco YA facturo, asi que el backend lo
+          // rechaza en cuanto una cayo en un mes pagado. Cuando las hay, esto es "Sellar y Renacer".
           if (!(Number(p.num_cuotas) > 0)) throw new Error('Falta el nuevo numero de cuotas.');
           const lista = await api('/compras?tarjeta_id=' + Number(tarjetaId));
           const a = Array.isArray(lista) ? lista.find(x => String(x.id) === String(cid)) : null;
           if (!a) throw new Error('No se encontro la compra #' + cid + ' en la tarjeta.');
           if (!a.diferida_id) throw new Error('La compra #' + cid + ' no es una compra a cuotas (diferida).');
-          // desde_conciliacion: exime del candado de "ciclo cerrado" (la IA corrige planes que el
-          // banco YA reprogramó en extractos pasados); el candado de ciclos PAGADOS sigue aplicando.
-          const r = await api('/diferidas/' + a.diferida_id + '/reprogramar', { method: 'POST', body: { num_cuotas: Number(p.num_cuotas), desde_conciliacion: true } });
-          if (r && r.error) throw new Error(r.error);
+          const dif = await api('/diferidas/' + a.diferida_id);
+          if (!dif || dif.error) throw new Error((dif && dif.error) || 'No se pudo leer el plan de cuotas de la compra #' + cid + '.');
+          if (cuotasFacturadasAntesDe(dif, ciclo) > 0) {
+            // ciclo_efectivo = el ciclo del EXTRACTO que se concilia, NUNCA el vigente: el papel llega
+            // despues de su corte, asi que la reprogramacion ya fue efectiva ahi. Sin declararlo el
+            // backend sella un mes de mas y corre la compresion (medido con NETFLIX en agosto-2026:
+            // sellaba agosto a 11.225 y mandaba los 22.450 a septiembre, al reves que el banco).
+            // capital_cuota_extracto = lo que el extracto factura ESTE ciclo; con eso el backend
+            // deduce el plan ORIGINAL del banco, que puede no ser el que la fila tiene hoy.
+            const body = { num_cuotas_nuevas: Number(p.num_cuotas), ciclo_efectivo: ciclo };
+            const nOrig = Number(p.num_cuotas_original);
+            if (nOrig > 0) body.num_cuotas_original = nOrig;
+            const capExt = Number(p.capital_cuota != null ? p.capital_cuota : d.valor_extracto);
+            if (capExt > 0) body.capital_cuota_extracto = capExt;
+            if (p.tasa_mv != null && p.tasa_mv !== '') body.tasa_mv = Number(p.tasa_mv);
+            if (p.cobrar_intereses === false) body.cobrar_intereses = false;
+            const r = await api('/compras/' + cid + '/reprogramar-saldo', { method: 'POST', body });
+            if (r && r.error) throw new Error(r.error);
+          } else {
+            // Nada facturado todavia: el plan se regenera entero desde el origen, que es mas simple y
+            // no crea una diferida hija. desde_conciliacion exime del candado de "ciclo cerrado" (la IA
+            // corrige planes que el banco YA reprogramo en extractos pasados); el de ciclos PAGADOS no.
+            const r = await api('/diferidas/' + a.diferida_id + '/reprogramar', { method: 'POST', body: { num_cuotas: Number(p.num_cuotas), desde_conciliacion: true } });
+            if (r && r.error) throw new Error(r.error);
+          }
         }
       } else if (op === 'convertir_a_diferida') {
         const cid = p.compra_id != null ? p.compra_id : d.compra_id;

@@ -579,7 +579,7 @@ function botonesDe(arbol) {
 const F7 = {
   id: 'F7',
   nombre: 'Render real del panel de conciliacion IA (ningun otro detector lo dibuja)',
-  medir(raiz) {
+  async medir(raiz) {
     const notas = [];
     const cifras = {};
     let ctx;
@@ -673,6 +673,85 @@ const F7 = {
       }
     } catch (e) {
       notas.push('FALLO renderizando el modal de confirmacion: ' + e.message);
+    }
+
+    // ── c) el PAYLOAD de la reprogramacion: a QUE endpoint va y con que cuerpo ─────
+    // Es el fallo que el PO vio en pantalla el 1-sep-2026. Un plan que YA facturo cuotas no se puede
+    // reprogramar regenerandolo desde el origen (/diferidas/:id/reprogramar): eso reescribe las
+    // cuotas que el banco ya cobro, y el backend lo rechaza en cuanto una cayo en un mes pagado
+    // ("la diferida ya tiene cuotas facturadas en ciclos pagados"). Ese caso es Sellar y Renacer.
+    // Y tiene que declarar el ciclo EFECTIVO -el del extracto que se concilia-, porque un extracto
+    // llega SIEMPRE despues de su corte: sin declararlo el endpoint sella un mes de mas y corre la
+    // compresion al mes siguiente (medido con NETFLIX). Se mide el cuerpo que sale por fetch, no el
+    // endpoint invocado a mano: la leccion de F9/F12 es que el camino real es el que falla.
+    for (const caso of [
+      { etiqueta: 'plan con cuotas ya facturadas', cortes: ['2026-05-30', '2026-06-30', '2026-07-30'], destino: '/compras/601/reprogramar-saldo' },
+      { etiqueta: 'plan sin nada facturado', cortes: ['2026-07-30', '2026-08-30'], destino: '/diferidas/71/reprogramar' },
+    ]) {
+      const enviados = [];
+      const espia = (url, opts) => {
+        const u = String(url);
+        const metodo = (opts && opts.method) || 'GET';
+        let cuerpo = null;
+        try { cuerpo = opts && opts.body ? JSON.parse(opts.body) : null; } catch (e2) { cuerpo = opts && opts.body; }
+        enviados.push({ url: u, metodo: metodo, cuerpo: cuerpo });
+        let datos = { ok: true };
+        if (metodo === 'GET' && u.indexOf('/compras?') !== -1) {
+          datos = [{ id: 601, descripcion: 'NETFLIX', diferida_id: 71, ciclo: '2026-07', tarjeta_id: 4 }];
+        } else if (metodo === 'GET' && u.indexOf('/diferidas/71') !== -1) {
+          datos = { id: 71, num_cuotas: caso.cortes.length, monto: 44900, compra_id: 601,
+            amortizacion: caso.cortes.map((fc, i) => ({ numCuota: i + 1, fechaCorte: fc, cuotaCapital: 44900 / caso.cortes.length })) };
+        }
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(datos) });
+      };
+      const dRepro = { tipo: 'cuota_reprogramada', severidad: 'media', descripcion: 'el banco comprimio la cuota',
+        valor_extracto: 22450, valor_app: 14967, compra_id: 601,
+        accion_sugerida: { operacion: 'reprogramar_cuotas', parametros: { compra_id: 601, num_cuotas: 3 } } };
+      const sC = semilla.slice();
+      sC[0] = { d: dRepro, idx: 0 };
+      const cC = montarConEstado(raiz, sC, { fetch: espia });
+      if (cC.window) cC.window.__addToast = () => {};
+      let btnC = null;
+      try {
+        const arbolC = cC.IaResultado(props);
+        btnC = buscarNodo(arbolC, n => n.type === 'button' && /Confirmar y aplicar/.test(textoDe(n)));
+      } catch (e3) {
+        notas.push('FALLO [REPRO/' + caso.etiqueta + '] renderizando el modal: ' + e3.message);
+        continue;
+      }
+      if (!btnC || typeof btnC.props.onClick !== 'function') {
+        notas.push('FALLO de sanidad [REPRO/' + caso.etiqueta + ']: no se encontro el boton "Confirmar y aplicar" del modal');
+        continue;
+      }
+      await btnC.props.onClick();
+      const post = enviados.filter(x => x.metodo === 'POST')[0];
+      if (!post) {
+        const dicho = cC.__setState.map(x => x.valor).filter(v => typeof v === 'string' && v.length > 3);
+        notas.push('FALLO [REPRO/' + caso.etiqueta + ']: confirmar la reprogramacion no envio ningun POST' +
+          (dicho.length ? ' (la vista reporto: ' + dicho[0] + ')' : ''));
+        continue;
+      }
+      if (post.url.indexOf(caso.destino) === -1) {
+        notas.push('FALLO [REPRO/' + caso.etiqueta + ']: la reprogramacion fue a ' + post.url + ' y tenia que ir a ' + caso.destino +
+          (caso.destino.indexOf('reprogramar-saldo') !== -1
+            ? ' -> regenerar el plan desde el origen reescribe cuotas ya facturadas: el backend lo rechaza si alguna cayo en un mes pagado'
+            : ' -> sin nada facturado no hay nada que sellar'));
+        continue;
+      }
+      cifras['repro_' + (caso.destino.indexOf('saldo') !== -1 ? 'sellado' : 'plan')] = post.metodo + ' ' + post.url.replace(/^.*\/api/, '/api');
+      if (caso.destino.indexOf('reprogramar-saldo') === -1) continue;
+      const cu = post.cuerpo || {};
+      if (cu.ciclo_efectivo !== props.ciclo) {
+        notas.push('FALLO [REPRO/ciclo efectivo]: viaja ciclo_efectivo=' + JSON.stringify(cu.ciclo_efectivo) + ' en vez de ' + props.ciclo +
+          ' -> el backend sella un mes de mas y corre la compresion al mes siguiente');
+      }
+      if (Number(cu.capital_cuota_extracto) !== 22450) {
+        notas.push('FALLO [REPRO/capital del extracto]: viaja capital_cuota_extracto=' + JSON.stringify(cu.capital_cuota_extracto) +
+          ' en vez de 22450 -> sin esa cifra el backend no puede deducir el plan original del banco y reparte uniforme');
+      }
+      if (Number(cu.num_cuotas_nuevas) !== 3) {
+        notas.push('FALLO [REPRO/total]: viaja num_cuotas_nuevas=' + JSON.stringify(cu.num_cuotas_nuevas) + ' en vez de 3');
+      }
     }
 
     return resultado(notas.length === 0, cifras, notas);
@@ -2505,7 +2584,136 @@ const F13 = {
 };
 function destinoDe(cortes, fecha) { return cortes.siguienteCiclo(cortes.cicloConCorte(fecha, 30, {})); }
 
-module.exports = [F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12, F13];
+// ─── F14: ReprogramarForm — el PAYLOAD de "Sellar y Renacer" ────────────────
+//
+// POR QUE EXISTE: es el formulario con el que se reprograma un plan teniendo el extracto delante, y
+// desde v6.5.0 decide DOS cosas que el backend no puede adivinar: cual era el plan ORIGINAL del
+// banco -de ahi sale la cuota base con la que comprime- y en que ciclo fue EFECTIVA la
+// reprogramacion. Lo segundo no es cosmetico: un extracto llega SIEMPRE despues de su corte, asi
+// que sin declararlo el endpoint sella un mes de mas y corre la compresion al siguiente (medido con
+// NETFLIX en agosto-2026). Ninguna otra pieza de la suite dibuja este formulario -F12/F13 cubren
+// CompraForm y F8 la vista principal-, asi que hasta un ReferenceError en su render salia en VERDE.
+// Se mide como F12: capturando el payload que sale por `onSave`, que es un prop, en vez de fiarse
+// de lo que el formulario dibuja.
+const F14 = {
+  id: 'F14',
+  nombre: 'ReprogramarForm: el payload de Sellar y Renacer (plan original + ciclo efectivo)',
+  medir(raiz) {
+    const notas = [];
+    const cifras = {};
+    // Escenario SEMBRADO (criterio de R6/R8/F8), y es el caso real que destapo el sprint: NETFLIX de
+    // 44.900 que la app tiene a 3 cuotas y el banco venia de un plan de 4 (cuota base 11.225).
+    const item = { id: 71, compra_id: 678, etiqueta: 'NETFLIX', monto: 44900, tasa_mv: 0.021285, num_cuotas: 3,
+      amortizacion: [
+        { numCuota: 1, fechaCorte: '2026-07-30', cuotaCapital: 14966.67 },
+        { numCuota: 2, fechaCorte: '2026-08-30', cuotaCapital: 14966.67 },
+        { numCuota: 3, fechaCorte: '2026-09-30', cuotaCapital: 14966.66 },
+      ] };
+    const tarjeta = { id: 4, dia_corte: 30, ciclo_vigente: '2026-09' };
+    const props = { item: item, tarjeta: tarjeta, onSave: () => {}, onCancel: () => {} };
+
+    // Huella de ranuras: se comprueba DESPUES de un render de descubrimiento (antes __hooks esta
+    // vacio) y por la FORMA del valor inicial, nunca por un indice escrito a mano.
+    let sonda;
+    try {
+      sonda = montarConEstado(raiz, []);
+      if (typeof sonda.ReprogramarForm !== 'function') {
+        return resultado(false, {}, ['FALLO: ReprogramarForm no es alcanzable en el ambito global']);
+      }
+      sonda.ReprogramarForm(props);
+    } catch (e) {
+      return resultado(false, {}, ['FALLO renderizando ReprogramarForm: ' + e.message]);
+    }
+    const h = sonda.__hooks;
+    const forma = h.map(v => typeof v).join(',');
+    cifras.hooks = h.length;
+    if (h.length !== 6 || forma !== 'number,boolean,string,boolean,string,string') {
+      return resultado(false, cifras, ['FALLO: la huella de ranuras es [' + forma + '] (' + h.length + ') y se esperaba ' +
+        '[number,boolean,string,boolean,string,string] (6) -> alguien reordeno, anadio o quito un useState y el detector estaria sembrando en la ranura equivocada']);
+    }
+    if (h[4] !== '3') notas.push('FALLO: el campo del plan original no arranca con el plan que la app tiene hoy (llego "' + h[4] + '", se esperaba "3")');
+    if (h[5] !== tarjeta.ciclo_vigente) notas.push('FALLO: el ciclo efectivo no arranca en el vigente (llego "' + h[5] + '")');
+
+    // La pantalla de confirmacion (ranura 3) es donde vive el boton que llama a onSave.
+    const payloadDe = (slots) => {
+      const capt = [];
+      const semilla = [];
+      semilla[3] = true;
+      Object.keys(slots).forEach(i => { semilla[i] = slots[i]; });
+      const c = montarConEstado(raiz, semilla);
+      let arbol;
+      try { arbol = c.ReprogramarForm({ item: item, tarjeta: tarjeta, onSave: (d) => capt.push(d), onCancel: () => {} }); }
+      catch (e) { return { error: 'reventó al dibujar: ' + e.message }; }
+      const btn = buscarNodo(arbol, n => n.type === 'button' && /Confirmar reprogramacion/.test(textoDe(n)));
+      if (!btn || typeof btn.props.onClick !== 'function') return { error: 'no se hallo el boton "Confirmar reprogramacion"', texto: textoDe(arbol) };
+      btn.props.onClick();
+      return { payload: capt[0], texto: textoDe(arbol) };
+    };
+
+    // ── A) POR DEFECTO: el plan original es el de la app y el ciclo es el vigente ──────
+    // El ciclo efectivo NO debe viajar: sin el, el endpoint se comporta exactamente como siempre.
+    const A = payloadDe({});
+    if (A.error) notas.push('FALLO [A/defecto]: ' + A.error);
+    else if (!A.payload) notas.push('FALLO [A/defecto]: confirmar no llamo a onSave');
+    else {
+      cifras.defecto = JSON.stringify(A.payload);
+      if (Number(A.payload.num_cuotas_original) !== 3) {
+        notas.push('FALLO [A/defecto]: viaja num_cuotas_original=' + JSON.stringify(A.payload.num_cuotas_original) + ' en vez de 3');
+      }
+      if ('ciclo_efectivo' in A.payload) {
+        notas.push('FALLO [A/defecto]: viaja ciclo_efectivo=' + JSON.stringify(A.payload.ciclo_efectivo) + ' aunque es el vigente -> el camino de siempre deja de ser el de siempre');
+      }
+    }
+
+    // ── B) CONCILIANDO: plan original 4 y la reprogramacion efectiva en el ciclo del extracto ──
+    const Bp = payloadDe({ 4: '4', 5: '2026-08' });
+    if (Bp.error) notas.push('FALLO [B/conciliando]: ' + Bp.error);
+    else if (!Bp.payload) notas.push('FALLO [B/conciliando]: confirmar no llamo a onSave');
+    else {
+      cifras.conciliando = JSON.stringify(Bp.payload);
+      if (Bp.payload.ciclo_efectivo !== '2026-08') {
+        notas.push('FALLO [B/ciclo efectivo]: viaja ciclo_efectivo=' + JSON.stringify(Bp.payload.ciclo_efectivo) + ' en vez de 2026-08 ' +
+          '-> el backend sellaria la cuota de agosto y correria la compresion a septiembre, al reves que el banco');
+      }
+      if (Number(Bp.payload.num_cuotas_original) !== 4) {
+        notas.push('FALLO [B/plan original]: viaja num_cuotas_original=' + JSON.stringify(Bp.payload.num_cuotas_original) + ' en vez de 4 ' +
+          '-> la cuota base saldria del plan de la app (14.967) y no del banco (11.225)');
+      }
+      // Y lo que ENSEÑA antes de aplicar: con el original en 4 la cuota base es 11.225. Si la
+      // pantalla no lo dice, el usuario confirma a ciegas un reparto que no puede prever.
+      if (String(Bp.texto || '').indexOf('11.225') === -1) {
+        notas.push('FALLO [B/vista previa]: la confirmacion no muestra la cuota base 11.225 que implica el plan original declarado: ' + String(Bp.texto || '').slice(0, 200));
+      }
+    }
+
+    // ── C) ESCAPE: vaciar el plan original vuelve al reparto uniforme de siempre ───────
+    // El modelo de compresion descansa hoy en UNA sola observacion; tiene que poder apagarse.
+    const C = payloadDe({ 4: '' });
+    if (C.error) notas.push('FALLO [C/uniforme]: ' + C.error);
+    else if (!C.payload) notas.push('FALLO [C/uniforme]: confirmar no llamo a onSave');
+    else {
+      cifras.uniforme = JSON.stringify(C.payload);
+      if ('num_cuotas_original' in C.payload) {
+        notas.push('FALLO [C/uniforme]: con el campo vacio sigue viajando num_cuotas_original=' + JSON.stringify(C.payload.num_cuotas_original) +
+          ' -> no hay forma de pedir el reparto en partes iguales');
+      }
+    }
+
+    return resultado(notas.length === 0, cifras, notas);
+  },
+  defecto: 'el formulario deja de declarar el ciclo EFECTIVO (vuelve a mandar solo el total de cuotas)',
+  mutar(raiz) {
+    // Se busca por CONTENIDO y se LANZA si no aparece. Ancla de UNA linea: los archivos estan en CRLF
+    // y una aguja con salto de linea no casa nunca.
+    const ruta = require('path').join(raiz, 'public', 'js', 'formularios.js');
+    const src = leer(ruta);
+    const aguja = "if (cicloEfectivo && cicloEfectivo !== vigente) data.ciclo_efectivo = cicloEfectivo;";
+    if (src.indexOf(aguja) === -1) throw new Error('no se encontro la linea que manda ciclo_efectivo en ReprogramarForm');
+    fs.writeFileSync(ruta, src.replace(aguja, "if (false) data.ciclo_efectivo = cicloEfectivo;"), 'utf8');
+  },
+};
+
+module.exports = [F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12, F13, F14];
 module.exports.medirSimbolos = medirSimbolos;
 module.exports.piezasEnOrden = piezasEnOrden;
 module.exports.RUTA_SIMBOLOS = RUTA_SIMBOLOS;

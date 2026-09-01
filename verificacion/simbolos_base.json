@@ -1,7 +1,7 @@
 {
   "generado": "2026-08-01",
   "nota": "Inventario de simbolos de nivel superior del frontend. F4 comprueba que existen; F5, que conservan su tamano. NO regenerar sin una razon aprobada.",
-  "total": 70,
+  "total": 72,
   "simbolos": [
     {
       "nombre": "e",
@@ -124,6 +124,12 @@
       "pieza": "js/ciclos.js"
     },
     {
+      "nombre": "cicloAnterior",
+      "tipo": "function",
+      "lineas": 1,
+      "pieza": "js/ciclos.js"
+    },
+    {
       "nombre": "cicloConCorteFront",
       "tipo": "function",
       "lineas": 1,
@@ -228,7 +234,7 @@
     {
       "nombre": "CHANGELOG",
       "tipo": "const",
-      "lineas": 826,
+      "lineas": 834,
       "pieza": "js/changelog.js"
     },
     {
@@ -306,7 +312,7 @@
     {
       "nombre": "ReprogramarForm",
       "tipo": "function",
-      "lineas": 88,
+      "lineas": 138,
       "pieza": "js/formularios.js"
     },
     {
@@ -376,9 +382,15 @@
       "pieza": "js/ia.js"
     },
     {
+      "nombre": "cuotasFacturadasAntesDe",
+      "tipo": "function",
+      "lineas": 4,
+      "pieza": "js/ia.js"
+    },
+    {
       "nombre": "IaResultado",
       "tipo": "function",
-      "lineas": 669,
+      "lineas": 698,
       "pieza": "js/ia.js"
     },
     {

@@ -12,6 +12,14 @@
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '6.5.0': [
+    'YA PUEDES APLICAR LA REPROGRAMACION QUE SUGIERE EL ASISTENTE AUNQUE EL PLAN YA TENGA CUOTAS COBRADAS. Antes el boton "Aplicar" devolvia un error -que la compra ya tenia cuotas facturadas en meses pagados- y desde ahi no habia salida: tocaba hacerlo a mano. Ahora el programa sella las cuotas que el banco ya cobro, que no se reescriben nunca, y reprograma solo el saldo que sigue vivo.',
+    'Y LO APLICA EN EL MES DEL EXTRACTO QUE ESTAS CONCILIANDO, no en el mes en curso. Un extracto llega siempre despues de su cierre, asi que lo que trae el papel ya paso; tomandolo como algo de este mes se sellaba un mes de mas y la cuota grande se corria al siguiente. Con NETFLIX pasaba justo eso: sellaba agosto y mandaba la cuota doble a septiembre, al reves que el banco.',
+    'EL PROGRAMA DEDUCE SOLO CUAL ERA EL PLAN ORIGINAL DEL BANCO. Como el extracto dice cuanto capital te factura este mes, prueba los planes posibles y se queda con el que reproduce esa cifra exacta. En el caso real de NETFLIX -44.900 que el banco dejo en 3 cuotas- deduce que venia de un plan de 4 cuotas de 11.225 y reparte 22.450 este mes y 11.225 el siguiente, que es exactamente lo que cobra el banco.',
+    'Antes de tocar nada te enseña a que compra va, con que cifra del extracto y en que mes, para que puedas cancelar si el extracto dice otra cosa.',
+    'AL REPROGRAMAR A MANO AHORA PUEDES DECIR LAS DOS COSAS. El formulario suma dos campos: las cuotas del plan ORIGINAL del banco -de ahi sale la cuota base con la que reparte- y el mes en que la reprogramacion fue efectiva (el que corre, o el del extracto que tienes delante). Vienen rellenos con lo mas probable: el plan que ya tienes registrado y el mes en curso.',
+    'OJO, ESO CAMBIA EL REPARTO POR DEFECTO cuando el saldo queda en dos o mas cuotas: ya no se hacen todas iguales, sino que se imita al banco (te mantiene la cuota de siempre y junta lo que sobra en la primera). Si prefieres partes iguales, vacia el campo del plan original: el reparto del banco esta calibrado con un solo extracto real, asi que se puede apagar.',
+  ],
   '6.4.0': [
     'AHORA SE PUEDE ANULAR UNA COMPRA QUE EL BANCO NUNCA TE COBRO. Cuando un comercio hace el cargo y lo anula el mismo dia, ese movimiento no entra al extracto: el banco lo saca de la cuenta como si nunca hubiera pasado. El programa seguia contandolo, asi que la deuda y las cuotas salian infladas y el analisis del extracto nunca cuadraba.',
     'Anular una compra la deja sin peso: no suma a la deuda ni proyecta cuotas hacia adelante. La fila NO se borra, queda marcada como anulada, para que siempre puedas ver que paso con ella.',

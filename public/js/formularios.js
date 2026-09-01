@@ -989,18 +989,39 @@ function ReprogramarPlanForm({ item, onSave, onCancel }) {
 
 function ReprogramarForm({ item, tarjeta, onSave, onCancel }) {
   const vigente = tarjeta.ciclo_vigente || cicloVigente(tarjeta.dia_corte);
+  const anterior = cicloAnterior(vigente);
   const tabla = item.amortizacion || [];
-  // k = cuotas ya facturadas (fechaCorte en un ciclo anterior al vigente). Saldo = monto - Σ capital(k).
-  const k = tabla.filter(q => q.fechaCorte.slice(0, 7) < vigente).length;
-  let sumSellado = 0;
-  for (let i = 0; i < k; i++) sumSellado += Math.round(tabla[i].cuotaCapital);
   const montoR = Math.round((item.monto || 0) * 100) / 100;
-  const saldoRestante = Math.round((montoR - sumSellado) * 100) / 100;
+  // Solo para el valor inicial del campo: un hook no puede depender de un estado que aun no existe.
+  // El k que se manda es el de abajo, atado al ciclo EFECTIVO que elija el usuario.
+  const kVigente = tabla.filter(q => q.fechaCorte.slice(0, 7) < vigente).length;
 
-  const [numCuotas, setNumCuotas] = useState(item.num_cuotas || (k + 1));
+  const [numCuotas, setNumCuotas] = useState(item.num_cuotas || (kVigente + 1));
   const [cobrarInt, setCobrarInt] = useState(true);
   const [tasaMv, setTasaMv] = useState(((item.tasa_mv || 0) * 100).toFixed(4)); // hereda la tasa del plan
   const [confirmando, setConfirmando] = useState(false);
+  // Los DOS hooks nuevos van al FINAL a proposito: las ranuras de useState son posicionales y los
+  // detectores que montan un formulario las localizan por orden.
+  // Plan ORIGINAL del banco. Puede NO ser el que la app tiene hoy (una reprogramacion anterior desde
+  // este mismo formulario re-planifico la fila desde el origen). De el sale la CUOTA BASE con la que
+  // el banco comprime; vaciar el campo = repartir el saldo en partes iguales, como se hacia antes.
+  const [numOriginal, setNumOriginal] = useState(String(item.num_cuotas || ''));
+  // Un extracto llega SIEMPRE despues de su corte: si estas conciliando el papel, la reprogramacion
+  // ya fue efectiva en el ciclo que factura, no en el que corre. Sin declararlo se sella un mes de
+  // mas y la compresion se corre (medido con NETFLIX en agosto-2026).
+  const [cicloEfectivo, setCicloEfectivo] = useState(vigente);
+
+  // k = cuotas ya facturadas antes del ciclo EFECTIVO. Saldo = monto - Σ capital(k).
+  const nOrig = parseInt(numOriginal, 10) > 0 ? parseInt(numOriginal, 10) : 0;
+  const kBruto = tabla.filter(q => q.fechaCorte.slice(0, 7) < cicloEfectivo).length;
+  const k = nOrig > 0 ? Math.min(nOrig, kBruto) : kBruto;
+  const cuotaBase = nOrig > 0 ? Math.round((montoR / nOrig) * 100) / 100 : 0;
+  // Con el plan original declarado, la cuota sellada es la del BANCO (monto/original) y no la que la
+  // app proyecta hoy. Es una VISTA PREVIA: el reparto exacto lo calcula el backend al aplicar.
+  let sumSellado = 0;
+  if (nOrig > 0 && nOrig !== (item.num_cuotas || 0)) sumSellado = Math.round(cuotaBase) * k;
+  else for (let i = 0; i < k; i++) sumSellado += Math.round(tabla[i].cuotaCapital);
+  const saldoRestante = Math.round((montoR - sumSellado) * 100) / 100;
 
   const M = parseInt(numCuotas, 10);
   const remanente = (M && M > k) ? (M - k) : 0;
@@ -1015,7 +1036,14 @@ function ReprogramarForm({ item, tarjeta, onSave, onCancel }) {
   else if (cobrarInt && !(tasaNum >= 0 && tasaNum < 1)) err = 'Tasa invalida (entre 0 y 100% MV).';
   const valido = !err;
 
-  function aplicar() { onSave({ num_cuotas_nuevas: M, tasa_mv: tasaNum, cobrar_intereses: cobrarInt }); }
+  function aplicar() {
+    const data = { num_cuotas_nuevas: M, tasa_mv: tasaNum, cobrar_intereses: cobrarInt };
+    // Los dos parametros nuevos solo viajan cuando dicen algo: sin ellos el endpoint se comporta
+    // EXACTAMENTE como antes (reparto uniforme, ciclo vigente).
+    if (nOrig > 0) data.num_cuotas_original = nOrig;
+    if (cicloEfectivo && cicloEfectivo !== vigente) data.ciclo_efectivo = cicloEfectivo;
+    onSave(data);
+  }
 
   if (confirmando && valido) {
     return e('div', null,
@@ -1026,6 +1054,10 @@ function ReprogramarForm({ item, tarjeta, onSave, onCancel }) {
         e('ul', { style: { margin: '10px 0', paddingLeft: 18 } },
           e('li', null, 'Se sellaran ', e('strong', null, String(k)), ' cuota(s) ya facturada(s) como registro historico (intocables).'),
           e('li', null, 'El saldo de ', e('strong', null, fmtCOP(saldoRestante)), ' se reprograma a ', e('strong', null, String(remanente)), ' cuota(s)', cobrarInt ? (' al ' + parseFloat(tasaMv).toFixed(4) + '% MV.') : ' sin intereses.'),
+          e('li', null, 'Reprogramacion efectiva en el ciclo ', e('strong', null, cicloEfectivo), cicloEfectivo !== vigente ? ' (el del extracto que estas conciliando).' : ' (el vigente).'),
+          nOrig > 0
+            ? e('li', null, 'Plan original del banco: ', e('strong', null, String(nOrig)), ' cuota(s) de ', e('strong', null, fmtCOP(cuotaBase)), '. El saldo se reparte como lo hace el banco: conserva esa cuota base y comprime lo que sobra en la primera cuota a facturar.')
+            : e('li', null, 'Sin plan original declarado: el saldo se reparte en partes ', e('strong', null, 'iguales'), '.'),
           e('li', { style: { color: 'var(--text-muted)' } }, 'Crea un plan nuevo y elimina el actual. No es facilmente reversible.')
         )
       ),
@@ -1038,7 +1070,7 @@ function ReprogramarForm({ item, tarjeta, onSave, onCancel }) {
 
   return e('form', { onSubmit: (ev) => { ev.preventDefault(); if (valido) setConfirmando(true); } },
     e('div', { style: { fontSize: 13, color: 'var(--text-muted)', marginBottom: 12, lineHeight: 1.5 } },
-      'Plan actual: ' + (item.num_cuotas || '?') + ' cuotas. Ya facturadas (se sellaran): ' + k + '. Saldo a reprogramar: ' + fmtCOP(saldoRestante) + '.'),
+      'Plan actual: ' + (item.num_cuotas || '?') + ' cuotas. Ya facturadas antes de ' + cicloEfectivo + ' (se sellaran): ' + k + '. Saldo a reprogramar: ' + fmtCOP(saldoRestante) + '.'),
     e('div', { className: 'form-row' },
       e('div', { className: 'form-group' },
         e('label', { className: 'form-label' }, 'Nuevo total de cuotas'),
@@ -1055,13 +1087,31 @@ function ReprogramarForm({ item, tarjeta, onSave, onCancel }) {
         e('input', { type: 'checkbox', checked: cobrarInt, onChange: ev => setCobrarInt(ev.target.checked) }),
         'Cobrar intereses sobre el saldo reprogramado')
     ),
+    e('div', { className: 'form-row' },
+      e('div', { className: 'form-group' },
+        e('label', { className: 'form-label' }, 'Cuotas del plan ORIGINAL del banco'),
+        e('input', { type: 'number', className: 'form-input', min: 1, max: 120, value: numOriginal, onChange: ev => setNumOriginal(ev.target.value), placeholder: 'vacio = partes iguales' }),
+        e('div', { style: { fontSize: 11, color: 'var(--text-muted)', marginTop: 3 } }, nOrig > 0
+          ? ('Cuota base ' + fmtCOP(cuotaBase) + '. El banco conserva esa cuota y comprime lo que sobra en la siguiente.')
+          : 'Vacio: el saldo se reparte en partes iguales.')
+      ),
+      e('div', { className: 'form-group' },
+        e('label', { className: 'form-label' }, 'Ciclo en que fue efectiva'),
+        e('select', { className: 'form-input', value: cicloEfectivo, onChange: ev => setCicloEfectivo(ev.target.value) },
+          e('option', { value: vigente }, vigente + ' (ciclo vigente)'),
+          e('option', { value: anterior }, anterior + ' (el extracto que estoy conciliando)')),
+        e('div', { style: { fontSize: 11, color: 'var(--text-muted)', marginTop: 3 } }, 'El extracto llega despues del corte: si lo estas conciliando, la reprogramacion ya fue efectiva en ese mes.')
+      )
+    ),
     (() => {
       if (err) return e('div', { style: { marginTop: 4, padding: '10px 12px', background: 'var(--danger-bg)', color: 'var(--danger)', borderRadius: 8, fontSize: 13, lineHeight: 1.4 } }, err);
       return e('div', { style: { marginTop: 4, padding: '12px', background: 'var(--bg-tertiary)', borderRadius: 8, fontSize: 13, lineHeight: 1.7 } },
         e('div', { style: { fontWeight: 600, marginBottom: 6 } }, 'Vista previa'),
         e('div', null, 'Cuotas selladas (facturadas): ', e('strong', null, String(k))),
         e('div', null, 'Saldo a reprogramar: ', e('strong', null, fmtCOP(saldoRestante))),
-        e('div', null, 'Nuevas cuotas del saldo: ', e('strong', null, String(remanente)), ' de ~', e('strong', null, fmtCOP(cuotaCapitalAprox)), ' de capital c/u'),
+        (nOrig > 0 && remanente > 1)
+          ? e('div', null, 'Nuevas cuotas del saldo: ', e('strong', null, String(remanente)), ', repartidas como el banco (cuota base ', e('strong', null, fmtCOP(cuotaBase)), ', el resto comprimido en la primera)')
+          : e('div', null, 'Nuevas cuotas del saldo: ', e('strong', null, String(remanente)), ' de ~', e('strong', null, fmtCOP(cuotaCapitalAprox)), ' de capital c/u'),
         cobrarInt
           ? e('div', { style: { color: 'var(--text-muted)' } }, 'Interes 1a cuota (~1 mes, aprox): ~' + fmtCOP(interesPrimerMes) + '. El detalle exacto se calcula al aplicar.')
           : e('div', { style: { color: 'var(--text-muted)' } }, 'Sin intereses (0%).')
