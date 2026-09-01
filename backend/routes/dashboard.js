@@ -92,6 +92,15 @@ module.exports = function(db) {
     //   - Diferida: suma de cuotas no pagadas (fechaCorte >= hoy) y no cubiertas por bolsillo
     //               (el bolsillo cubre la cuota del calendario si bolsillo >= cuota.total)
     // El bolsillo afecta el total visual al apartar dinero. Incluye todas las compras pendientes.
+    // ANULADAS FUERA (1-sep-2026). La neutralizacion de anular-plan -estado 'pagado' con
+    // monto_abonado = valor_cop- pone a CERO la deuda propia en todas las consultas sin tocar ninguna,
+    // pero NO sirve aqui: lo que un tercero debe no se mide restando `monto_abonado` (eso es lo que el
+    // usuario le abona al banco, no lo que el deudor le reembolsa), asi que la compra seguia contando
+    // entera. Medido con MERCADOPAGO #737: la card "Me Deben" cargaba $882.000 que el banco nunca
+    // facturo. `routes/terceros.js` ya filtraba desde v6.4.0 -- esta es la otra mitad de la duplicacion
+    // deliberada de esa formula, y por eso las dos vistas se contradecian en la misma pantalla.
+    // La consulta de DIFERIDAS del corte no lo necesita: exige estado='diferida' (la anulada queda en
+    // 'pagado') y ademas resuelve la diferida con estado='activo' (la anulada queda en 'anulado').
     const comprasTerceroAll = db.prepare(`
       SELECT c.id, c.tarjeta_id, c.persona_id, p.nombre, p.color, c.valor_cop, c.valor_usd, c.estado,
         c.diferida_id, c.descripcion, c.fecha, c.ciclo,
@@ -103,7 +112,7 @@ module.exports = function(db) {
         t.franquicia as tarjeta_franquicia,
         t.banco as tarjeta_banco
       FROM compras c JOIN personas p ON c.persona_id = p.id JOIN tarjetas t ON c.tarjeta_id = t.id
-      WHERE c.tercero_pagado = 0${tjFilter}
+      WHERE c.tercero_pagado = 0 AND COALESCE(c.anulada, 0) = 0${tjFilter}
     `).all(...tjParams);
     const meDebenMap = {};
     comprasTerceroAll.forEach(c => {
@@ -571,7 +580,7 @@ module.exports = function(db) {
         t.franquicia as tarjeta_franquicia,
         t.banco as tarjeta_banco
       FROM compras c JOIN personas p ON c.persona_id = p.id JOIN tarjetas t ON c.tarjeta_id = t.id
-      WHERE c.tercero_pagado = 0 AND c.estado != 'diferida' AND c.ciclo = ?${tjFilter}
+      WHERE c.tercero_pagado = 0 AND COALESCE(c.anulada, 0) = 0 AND c.estado != 'diferida' AND c.ciclo = ?${tjFilter}
     `).all(cicloActual, ...tjParams);
     meDebenCorte1Cuota.forEach(r => {
       // NO recortar a 0 todavía: si el bolsillo apartado supera el valor (excedente que el

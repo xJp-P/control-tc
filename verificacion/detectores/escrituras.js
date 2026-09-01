@@ -363,4 +363,98 @@ const R9 = {
   },
 };
 
-module.exports = [R6, R9];
+// ─── R10: una compra ANULADA no deja plata colgando en NINGUNA card ─────────
+//
+// POR QUE EXISTE: anular no borra la fila -el rastro es auditable-, la NEUTRALIZA: estado 'pagado'
+// con monto_abonado = valor_cop. Eso pone su deuda a CERO en toda consulta sin tocar ninguna... y
+// por eso es una trampa: donde la deuda NO se mide restando `monto_abonado`, la compra sigue
+// contando entera. Paso de verdad: la card "Me Deben" cargaba $882.000 de una compra que el banco
+// anulo y nunca facturo, mientras la pestaña Terceros -que si filtra desde v6.4.0- decia otra cosa.
+// Las dos vistas se contradecian en la misma pantalla, que es el sintoma clasico de la duplicacion
+// deliberada de esa formula.
+//
+// El escenario se SIEMBRA entero (criterio de R6/R8/R9) y en el CICLO VIGENTE del reloj congelado,
+// que es la unica forma de que la compra entre a la vez en "Me Deben" y en "Me Deben Corte".
+// Los asertos van en PARES antes/despues: sin comprobar que la compra pesaba ANTES, el aserto de
+// despues pasaria en vacio con cualquier fixture que no llegue a la card.
+const R10 = {
+  id: 'R10',
+  nombre: 'Una compra ANULADA deja de pesar en las cards (Me Deben, corte, deuda) sin perder el rastro',
+  async medir(raiz) {
+    const notas = [];
+    const cifras = {};
+    const A = (cond, msg) => { if (!cond) notas.push('FALLO ' + msg); };
+
+    try {
+      await conApp(raiz, 'R10', async (port, db) => {
+        const VALOR = 500000;
+        // Ciclo vigente segun el reloj congelado, leido del backend real (nunca calculado aqui).
+        const hoy = require(path.join(raiz, 'backend', 'helpers', 'dates')).hoyLocal();
+        const tj = db.prepare("INSERT INTO tarjetas (nombre, banco, franquicia, dia_corte, cupo_total, tasa_mv_avances, estado) VALUES ('R10 TARJETA','Bancolombia','Visa',30,40000000,0.02,'activa')").run().lastInsertRowid;
+        const tjInfo = await pedir(port, 'GET', '/api/tarjetas');
+        const mia = (Array.isArray(tjInfo.j) ? tjInfo.j : []).find(t => t.id === tj);
+        const ciclo = (mia && (mia.ciclo_vigente || mia.ciclo_sugerido)) || hoy.slice(0, 7);
+        const per = db.prepare("INSERT INTO personas (nombre, color) VALUES ('R10 DEUDOR','#444444')").run().lastInsertRowid;
+        const compra = db.prepare("INSERT INTO compras (tarjeta_id, fecha, descripcion, valor_cop, estado, ciclo, persona_id, monto_bolsillo, tercero_pagado) VALUES (?,?,?,?,'pendiente',?,?,0,0)")
+          .run(tj, ciclo + '-05', 'R10 COMPRA ANULABLE', VALOR, ciclo, per).lastInsertRowid;
+
+        const cards = async () => {
+          const d = await pedir(port, 'GET', '/api/dashboard?tarjeta_id=' + tj);
+          const t = await pedir(port, 'GET', '/api/terceros?tarjeta_id=' + tj);
+          const j = d.j || {};
+          return {
+            meDeben: Math.round((j.meDeben && j.meDeben.total) || 0),
+            meDebenCorte: Math.round((j.meDebenCorte && j.meDebenCorte.total) || 0),
+            deudaTotal: Math.round(j.deudaTotal || 0),
+            filas: Array.isArray(t.j) ? t.j.filter(x => x.id === compra).length : -1,
+          };
+        };
+
+        // ── ANTES: la compra tiene que PESAR en las tres cards y salir en Terceros ──
+        const antes = await cards();
+        cifras.antes = JSON.stringify(antes);
+        A(antes.meDeben === VALOR, '[SANIDAD/ANTES]: la compra sembrada no llega a "Me Deben" (' + antes.meDeben + ' en vez de ' + VALOR + ') -> el aserto de despues pasaria en vacio');
+        A(antes.meDebenCorte === VALOR, '[SANIDAD/ANTES]: la compra sembrada no llega a "Me Deben Corte" (' + antes.meDebenCorte + ' en vez de ' + VALOR + ') -> el ciclo del fixture no es el vigente y el aserto de despues no probaria nada');
+        A(antes.deudaTotal === VALOR, '[SANIDAD/ANTES]: la compra sembrada no llega a la deuda total (' + antes.deudaTotal + ')');
+        A(antes.filas === 1, '[SANIDAD/ANTES]: la compra sembrada no aparece en la pestaña Terceros');
+
+        // ── ANULAR con el endpoint REAL ──
+        const rAn = await pedir(port, 'POST', '/api/compras/' + compra + '/anular-plan', {});
+        A(rAn.s === 200 && rAn.j && rAn.j.ok, '[ANULAR]: el endpoint rechazo la anulacion: ' + JSON.stringify(rAn.j));
+
+        // ── DESPUES: cero en todas las cards, y fuera de Terceros ──
+        const despues = await cards();
+        cifras.despues = JSON.stringify(despues);
+        A(despues.meDeben === 0, '[ME DEBEN]: la card sigue cobrando ' + despues.meDeben + ' de una compra ANULADA -> el banco nunca la facturo y el tercero no debe nada; la neutralizacion no basta porque esta card no resta monto_abonado');
+        A(despues.meDebenCorte === 0, '[ME DEBEN CORTE]: la card del corte sigue cobrando ' + despues.meDebenCorte + ' de una compra ANULADA');
+        A(despues.deudaTotal === 0, '[DEUDA]: la deuda total sigue contando ' + despues.deudaTotal + ' de una compra ANULADA');
+        A(despues.filas === 0, '[TERCEROS]: la compra anulada sigue listada en la pestaña Terceros');
+
+        // ── El rastro NO se pierde: la fila sigue ahi, marcada ──
+        const fila = db.prepare('SELECT id, estado, anulada, monto_abonado, valor_cop FROM compras WHERE id=?').get(compra);
+        A(!!fila, '[RASTRO]: la anulacion BORRO la fila -> se pierde la auditoria de lo que paso');
+        A(fila && fila.anulada === 1, '[RASTRO]: la fila no quedo marcada como anulada (anulada=' + (fila && fila.anulada) + ')');
+        A(fila && Math.round(fila.monto_abonado) === Math.round(fila.valor_cop), '[RASTRO]: la fila no quedo neutralizada (abonado ' + (fila && fila.monto_abonado) + ' vs valor ' + (fila && fila.valor_cop) + ')');
+
+        // ── Idempotencia: anular dos veces no acumula ──
+        const rDos = await pedir(port, 'POST', '/api/compras/' + compra + '/anular-plan', {});
+        A(rDos.s === 409, '[IDEMPOTENCIA]: anular una compra ya anulada devolvio ' + rDos.s + ' en vez de 409');
+      });
+    } catch (e) {
+      return resultado(false, cifras, ['FALLO ejecutando el escenario: ' + e.message]);
+    }
+    return resultado(notas.length === 0, cifras, notas);
+  },
+  defecto: 'la card "Me Deben" deja de excluir las compras anuladas (vuelve a contar plata que el banco nunca facturo)',
+  mutar(raiz) {
+    // Ancla de UNA linea (los archivos van en CRLF) y por CONTENIDO: si el filtro se muda, la
+    // mutacion LANZA en vez de aplicarse a la nada.
+    const p = path.join(raiz, 'backend', 'routes', 'dashboard.js');
+    const src = leer(p);
+    const aguja = 'WHERE c.tercero_pagado = 0 AND COALESCE(c.anulada, 0) = 0${tjFilter}';
+    if (src.indexOf(aguja) === -1) throw new Error('no se encontro el filtro de anuladas en la consulta de "Me Deben"');
+    fs.writeFileSync(p, src.replace(aguja, 'WHERE c.tercero_pagado = 0${tjFilter}'), 'utf8');
+  },
+};
+
+module.exports = [R6, R9, R10];
