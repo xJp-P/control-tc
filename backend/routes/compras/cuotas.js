@@ -204,7 +204,7 @@ module.exports = function(router, ctx) {
   // reembolso ni abonos_diferida. La calibración FINA del interés del saldo queda pendiente de un
   // extracto real reprogramado → tasa por defecto conservadora (hereda la del plan; editable en la UI).
   router.post('/:id/reprogramar-saldo', (req, res) => {
-    const { num_cuotas_nuevas, tasa_mv, cobrar_intereses, num_cuotas_original } = req.body || {};
+    const { num_cuotas_nuevas, tasa_mv, cobrar_intereses, num_cuotas_original, ciclo_efectivo } = req.body || {};
     const M = parseInt(num_cuotas_nuevas, 10);
     if (!M || M < 1 || M > 120) return res.status(400).json({ error: 'El número total de cuotas debe ser un entero entre 1 y 120.' });
     const c = db.prepare('SELECT * FROM compras WHERE id=?').get(req.params.id);
@@ -248,7 +248,14 @@ module.exports = function(router, ctx) {
     const diaCorte = (tj && tj.dia_corte) || 30;
     const cortesMap = getCortesCustomMap(db, c.tarjeta_id);
     // Ciclo VIGENTE (consciente del corte adelantado) = destino del saldo reprogramado.
-    const V = cicloConCorte(hoyLocal(), diaCorte, cortesMap);
+    // Ciclo de REFERENCIA de la reprogramacion. Por defecto el vigente (el banco acaba de cambiar el
+    // plan), pero un extracto SIEMPRE llega despues de su corte: cuando se concilia, la reprogramacion
+    // que trae el papel ya fue efectiva en el ciclo FACTURADO, no en el que corre. Sin poder decirlo,
+    // el endpoint sella de mas y corre la compresion un mes -medido con NETFLIX: sellaba agosto a
+    // 11.225 y mandaba los 22.450 a septiembre, justo al reves que el banco-.
+    const Vauto = cicloConCorte(hoyLocal(), diaCorte, cortesMap);
+    const V = (typeof ciclo_efectivo === 'string' && /^\d{4}-\d{2}$/.test(ciclo_efectivo)) ? ciclo_efectivo : Vauto;
+    if (V > Vauto) return res.status(400).json({ error: 'El ciclo efectivo (' + V + ') no puede ser posterior al ciclo vigente (' + Vauto + ').' });
     // GUARD DE DESTINO (SIEMPRE, ni la IA lo exime): no se inyecta el saldo vivo en un ciclo cuyo
     // extracto ya se cerró como total pagado.
     const extV = db.prepare("SELECT estado FROM extractos WHERE tarjeta_id=? AND ciclo=?").get(c.tarjeta_id, V);
