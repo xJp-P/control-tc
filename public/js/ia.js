@@ -120,7 +120,7 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
   }
   useEffect(() => { recargarContexto(); }, [tarjetaId, ciclo]);
   // Operaciones que la app puede aplicar automaticamente (mapean a endpoints existentes).
-  const AUTO = { crear_compra: 1, eliminar_compra: 1, fijar_pago_minimo_oficial: 1, editar_valor: 1, mover_ciclo: 1, reprogramar_cuotas: 1, convertir_a_diferida: 1, crear_diferida_omitida: 1, actualizar_tasa_intl: 1, actualizar_fecha_pago: 1, reversar_compra: 1, registrar_pago: 1 };
+  const AUTO = { crear_compra: 1, eliminar_compra: 1, fijar_pago_minimo_oficial: 1, editar_valor: 1, mover_ciclo: 1, reprogramar_cuotas: 1, convertir_a_diferida: 1, crear_diferida_omitida: 1, actualizar_tasa_intl: 1, actualizar_fecha_pago: 1, reversar_compra: 1, anular_plan: 1, registrar_pago: 1 };
   // Operaciones ESTRUCTURALES: cambian QUE compras forman el ciclo y por cuanto. Fijar la cifra oficial
   // del extracto tiene que ir DESPUES de estas, porque es lo que convierte un pago parcial inofensivo en
   // un SELLADO del mes: sin cifra oficial, pagar menos que el estimado del motor queda como abono y no
@@ -129,7 +129,7 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
   // todavia habria que mover a otro mes, que quedan tras el 403 de ciclos pagados y sin reversa.
   // NO estructurales a proposito: actualizar_fecha_pago (solo cambia lo que se ve) y registrar_pago
   // (opera sobre el ciclo ANTERIOR, no sobre la composicion de este).
-  const ESTRUCTURAL = { crear_compra: 1, eliminar_compra: 1, editar_valor: 1, mover_ciclo: 1, reprogramar_cuotas: 1, convertir_a_diferida: 1, crear_diferida_omitida: 1, actualizar_tasa_intl: 1, reversar_compra: 1, fecha_corte_movida: 1 };
+  const ESTRUCTURAL = { crear_compra: 1, eliminar_compra: 1, editar_valor: 1, mover_ciclo: 1, reprogramar_cuotas: 1, convertir_a_diferida: 1, crear_diferida_omitida: 1, actualizar_tasa_intl: 1, reversar_compra: 1, anular_plan: 1, fecha_corte_movida: 1 };
 
   // Formatea una tasa mensual decimal a porcentaje colombiano (0.020849 -> "2,0849%").
   const fmtPct = (x) => (x == null || x === '') ? '—' : (Number(x) * 100).toFixed(4).replace('.', ',') + '%';
@@ -138,7 +138,7 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
   const fmtTipoDiscrepancia = (tipo) => {
     if (!tipo) return 'Discrepancia';
     const map = {
-      compra_omitida: 'Compra omitida', monto_erroneo: 'Monto erróneo',
+      compra_omitida: 'Compra omitida', monto_erroneo: 'Monto erróneo', compra_anulada: 'Compra anulada por el banco',
       clasificacion_incorrecta: 'Clasificación incorrecta', cuota_reprogramada: 'Cuota reprogramada',
       tasa_intl_incorrecta: 'Tasa internacional incorrecta', fecha_pago_movida: 'Fecha de pago movida',
       reverso_detectado: 'Reverso detectado', mover_ciclo: 'Mover de ciclo', diferida_omitida: 'Diferida omitida',
@@ -156,7 +156,7 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
       crear_compra: 'Crear compra', eliminar_compra: 'Eliminar compra', editar_valor: 'Editar valor', mover_ciclo: 'Mover de ciclo',
       reprogramar_cuotas: 'Reprogramar cuotas', actualizar_tasa_intl: 'Actualizar tasa internacional',
       actualizar_fecha_pago: 'Actualizar fecha de pago', fecha_corte_movida: 'Aplicar corte adelantado',
-      convertir_a_diferida: 'Convertir a diferida', crear_diferida_omitida: 'Crear diferida omitida', reversar_compra: 'Reversar compra',
+      convertir_a_diferida: 'Convertir a diferida', crear_diferida_omitida: 'Crear diferida omitida', reversar_compra: 'Reversar compra', anular_plan: 'Anular compra',
       registrar_pago: 'Registrar pago', fijar_pago_minimo_oficial: 'Usar el pago minimo del extracto', ninguna: 'Sin acción'
     };
     if (map[op]) return map[op];
@@ -278,6 +278,15 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
       const fc = p.fecha_corte != null ? p.fecha_corte : d.fecha_extracto;
       return { titulo: 'Fijar el corte adelantado de este ciclo', endpoint: 'POST /api/compras/aplicar-corte-ciclo',
         filas: [['Corte que calculo la app', fmtDate(d.fecha_app)], ['Corte real del extracto', fmtDate(fc)], ['Ciclo', p.ciclo || ciclo], ['Efecto', 'las compras posteriores al corte pasan al ciclo siguiente (ahora y a futuro)']] };
+    }
+    if (op === 'anular_plan') {
+      // ANULACION: el banco cargo y anulo el mismo dia con la misma autorizacion, asi que nunca entro
+      // al extracto. Distinto de un reverso, donde el cargo SI se facturo.
+      return { titulo: 'Anular compra (el banco la anulo, no entro al extracto)',
+        endpoint: 'POST /api/compras/' + cid + '/anular-plan',
+        filas: [['Compra', '#' + cid + '  ' + (d.descripcion || '')],
+          ['Efecto', 'deja de proyectar cuotas y de contar como deuda; la fila se conserva para auditoria'],
+          ['Si es de un tercero', 'lo que ya te haya adelantado queda como saldo a favor suyo']] };
     }
     if (op === 'reversar_compra') {
       const rv = d.reverso || {};
@@ -474,6 +483,12 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
         const fc = p.fecha_corte != null ? p.fecha_corte : d.fecha_extracto;
         if (!fc) throw new Error('No hay una fecha de corte para aplicar.');
         const r = await api('/compras/aplicar-corte-ciclo', { method: 'POST', body: { tarjeta_id: Number(tarjetaId), ciclo: (p.ciclo || ciclo), fecha_corte: fc } });
+        if (r && r.error) throw new Error(r.error);
+      } else if (op === 'anular_plan') {
+        // El endpoint es idempotente (409 si ya esta anulada) y rechaza ciclos ya pagados.
+        const cid = p.compra_id != null ? p.compra_id : d.compra_id;
+        if (!cid) throw new Error('No se identifico la compra a anular.');
+        const r = await api('/compras/' + cid + '/anular-plan', { method: 'POST' });
         if (r && r.error) throw new Error(r.error);
       } else if (op === 'reversar_compra') {
         // Reverso (devolución del banco): neutraliza la compra y, si es de un tercero que ya reembolsó,
