@@ -97,10 +97,32 @@ const R7 = {
       };
       // (A) Ciclo con compras INTERNACIONALES: el mock devuelve una tasa ~3% menor a la registrada,
       //     asi que el bloque 3 tiene que emitir tasa_intl_incorrecta.
-      const intl = db.prepare(
+      //     OJO: no basta con que la compra sea internacional. El bloque compara la tasa REGISTRADA
+      //     de cada compra contra la que devuelve el mock, asi que sin `tasa_intl` no hay nada que
+      //     discrepar y el bloque no emite. Tampoco valen las compras ya PAGADAS: no entran a los
+      //     movimientos del ciclo, asi que el bloque no las mira. Elegir un escenario que cumple
+      //     solo parte de las precondiciones deja el invariante SIN PROBAR y con cara de rojo
+      //     espurio. Elegir un escenario que cumple la mitad de las
+      //     precondiciones deja el invariante SIN PROBAR y con cara de rojo espurio — es el mismo
+      //     fallo que R6 tuvo en v5.9.1, y la respuesta es la misma: endurecer la seleccion y, si
+      //     aun asi no hay caso, SEMBRARLO en la copia en vez de declararse sin datos.
+      let intl = db.prepare(
         "SELECT tarjeta_id, ciclo, COUNT(*) n FROM compras " +
-        "WHERE es_internacional=1 AND estado != 'diferida' AND COALESCE(valor_cop,0) > 0 " +
+        "WHERE es_internacional=1 AND estado NOT IN ('diferida','pagado') AND COALESCE(valor_cop,0) > 0 " +
+        "AND tasa_intl IS NOT NULL " +
         "GROUP BY tarjeta_id, ciclo HAVING n >= 1 ORDER BY n DESC, ciclo DESC LIMIT 1").get();
+      if (!intl) {
+        // Siembra: una compra internacional con su tasa congelada, en un ciclo cuyo extracto no este
+        // pagado (si no, el bloque no la mirara). Se trabaja sobre COPIA, asi que es seguro.
+        const tj = db.prepare("SELECT id FROM tarjetas WHERE LOWER(banco) LIKE '%bancolombia%' ORDER BY id LIMIT 1").get()
+          || db.prepare('SELECT id FROM tarjetas ORDER BY id LIMIT 1').get();
+        if (tj) {
+          const cic = '2029-05';
+          db.prepare("INSERT INTO compras (tarjeta_id, fecha, descripcion, valor_cop, estado, ciclo, es_internacional, tasa_intl) VALUES (?,?, 'R7 INTL SEMBRADA', 150000, 'pendiente', ?, 1, 0.021285)")
+            .run(tj.id, cic + '-05', cic);
+          intl = { tarjeta_id: tj.id, ciclo: cic, n: 1, sembrado: true };
+        }
+      }
       // (B) Ciclo cuyo ANTERIOR sigue impago: es la precondicion de detectarPagosOmitidos (si ya
       //     esta pagado, el detector devuelve [] por dedup y el bloque 8 no dejaria huella).
       let previoImpago = null;
