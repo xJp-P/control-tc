@@ -12,6 +12,15 @@
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '6.4.0': [
+    'AHORA SE PUEDE ANULAR UNA COMPRA QUE EL BANCO NUNCA TE COBRO. Cuando un comercio hace el cargo y lo anula el mismo dia, ese movimiento no entra al extracto: el banco lo saca de la cuenta como si nunca hubiera pasado. El programa seguia contandolo, asi que la deuda y las cuotas salian infladas y el analisis del extracto nunca cuadraba.',
+    'Anular una compra la deja sin peso: no suma a la deuda ni proyecta cuotas hacia adelante. La fila NO se borra, queda marcada como anulada, para que siempre puedas ver que paso con ella.',
+    'Si la compra era de un responsable y el ya te habia adelantado dinero, ese dinero no se pierde: pasa a quedar a favor suyo, para que lo cruces contra otra deuda suya cuando quieras.',
+    'EL ASISTENTE YA DISTINGUE UNA COMPRA ANULADA DE UNA DEVOLUCION. Se parecen mucho en el extracto y se arreglan distinto. Si el cobro y su negativo llevan el mismo numero de autorizacion y la misma fecha, es una anulacion y te propone anularla. Si el negativo viene otro dia o con otra autorizacion, el banco si te cobro y despues te devolvio el dinero: eso sigue siendo una devolucion. Ante la duda elige la devolucion, que es la que no borra tus cuotas.',
+    'Y CUANDO EL ASISTENTE YA TE EXPLICO UNA DIFERENCIA, DEJA DE CONTARTELA DOS VECES. Si te decia, por ejemplo, cuanto cobra el banco de intereses de mas, ese mismo monto se le quedaba ademas dentro del "sin explicar", asi que el descuadre final se veia mas grande de lo que era. Ahora en "sin explicar" solo queda lo que de verdad no supo atribuir.',
+    'UN PLAN DE CUOTAS YA PUEDE TENER CUOTAS DE DISTINTO TAMANO. Cuando el banco te reduce el numero de cuotas no reparte el saldo en partes iguales: te mantiene la cuota de siempre y junta lo que falta en la siguiente que va a cobrar. Un plan real de la aplicacion, de 4 cuotas de $11.225 que el banco dejo en 3, quedo en $11.225, $22.450 y $11.225, y hasta ahora el programa se empenaba en mostrar tres cuotas iguales.',
+    'El formulario de reprogramar sigue repartiendo el saldo en partes iguales, que es lo unico que se puede suponer antes de ver el extracto. El reparto real del banco se registra despues, con el extracto en la mano.',
+  ],
   '6.3.0': [
     'YA PUEDES APLICAR UN SALDO A FAVOR A UNA COMPRA A CUOTAS. El dinero que queda a favor de una persona (por ejemplo cuando el banco reversa una compra que ella ya te habia reembolsado) solo se podia cruzar contra compras de una sola cuota. Si su deuda estaba en un plan de cuotas no habia donde aplicarlo, y la unica salida era devolverle el efectivo.',
     'Ahora eliges TU a que cuota se aplica. El desplegable de "Dinero a favor" lista las cuotas que todavia deben, con lo que falta en cada una. El programa no reparte ese dinero por su cuenta: es plata de la otra persona y decides tu donde va.',
