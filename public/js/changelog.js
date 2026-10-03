@@ -12,6 +12,16 @@
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '6.6.0': [
+    'LOS INTERESES DE BANCOLOMBIA YA CUADRAN CON LOS DEL BANCO. El banco cobra interes sobre el saldo de cada dia: la cuota que te factura en el corte sigue generando interes hasta el dia en que pagas el extracto, no hasta el corte. La aplicacion no lo contaba y cada mes se quedaba corta en unos puntos del interes. Ahora lo suma con la fecha real de tu pago, o con la fecha limite si todavia no has pagado. Comparado contra tres extractos reales seguidos, el ultimo quedo a unas decenas de pesos del banco.',
+    'PAGAR ANTES SI TE AHORRA INTERESES, y la aplicacion ya lo refleja: si pagas el extracto pocos dias despues del corte, el interes del mes siguiente baja.',
+    'LA ULTIMA CUOTA DE UN PLAN TAMBIEN GENERA ESE INTERES, y el banco lo cobra el mes siguiente, cuando el plan ya termino. Antes ese mes se veia mas barato de lo que era; ahora el pago minimo y la tarjeta de intereses lo incluyen.',
+    'AL REPROGRAMAR UN PLAN YA NO SE PIERDE EL INTERES DE LA PRIMERA CUOTA. Bancolombia no te cobra el interes de la cuota 1: lo pasa a la cuota 2. Si reprogramabas despues de que te cobraran solo la primera cuota, esa cuota 2 desaparecia y el programa olvidaba ese interes; el banco no, te lo cobra en la primera cuota del plan nuevo. Ahora la aplicacion tambien lo cobra ahi, junto con lo que la cuota ya cobrada genero hasta que la pagaste.',
+    'LA FECHA LIMITE DE PAGO DE LA VISA DE BANCOLOMBIA YA ES LA DEL BANCO. No es el dia 16 de cada mes: es el corte mas 17 dias, y si cae en fin de semana o festivo pasa al siguiente dia habil. La aplicacion ya conoce los festivos de Colombia, incluidos los que se mueven al lunes y los de Semana Santa. Las demas tarjetas siguen con su fecha de siempre.',
+    'EL ASISTENTE YA RECONOCE LAS DEVOLUCIONES DE COMERCIOS DE MERCADO PAGO. Como su nombre trae la palabra "PAGO", las confundia con un pago tuyo y las ignoraba. Ahora solo toma como pago lo que empieza por ABONO o PAGO.',
+    'AL CONVERTIR UNA COMPRA A CUOTAS, EL PLAN NACE CON LA TASA DEL MES DE LA COMPRA, como hace el banco, y no con la que tenga configurada la tarjeta hoy.',
+    'SI VUELVES A REPROGRAMAR UN PLAN YA REPROGRAMADO, se descarta el reparto de cuotas anterior (antes la cuota nueva podia quedarse con el valor de la vieja) y la numeracion sigue siendo la del banco, por ejemplo "Cuota 2/2" y no "1/1".',
+  ],
   '6.5.0': [
     'YA PUEDES APLICAR LA REPROGRAMACION QUE SUGIERE EL ASISTENTE AUNQUE EL PLAN YA TENGA CUOTAS COBRADAS. Antes el boton "Aplicar" devolvia un error -que la compra ya tenia cuotas facturadas en meses pagados- y desde ahi no habia salida: tocaba hacerlo a mano. Ahora el programa sella las cuotas que el banco ya cobro, que no se reescriben nunca, y reprograma solo el saldo que sigue vivo.',
     'Y LO APLICA EN EL MES DEL EXTRACTO QUE ESTAS CONCILIANDO, no en el mes en curso. Un extracto llega siempre despues de su cierre, asi que lo que trae el papel ya paso; tomandolo como algo de este mes se sellaba un mes de mas y la cuota grande se corria al siguiente. Con NETFLIX pasaba justo eso: sellaba agosto y mandaba la cuota doble a septiembre, al reves que el banco.',
