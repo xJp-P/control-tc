@@ -21,6 +21,7 @@
 //   ... generar_base.js huella golden -> solo las dos referencias atadas a los datos
 
 const fs = require('fs');
+const path = require('path');
 const lib = require('./lib');
 const B = require('./linea_base');
 
@@ -86,8 +87,12 @@ if (hacer('huella')) {
     entradas: h.entradas,
     entradasPost: h.entradasPost,
     filas: h.lineas.length,
-    lineas: h.lineas,
+    // Solo CLAVE + hash por fila: este archivo va a un repo PUBLICO y las cifras son las de la BD real.
+    lineas: h.lineas.map(runtime.firmaFila),
   }, null, 2) + '\n', 'utf8');
+  // Copia LEGIBLE para el diagnostico local de R5 (docs/temp/ esta en .gitignore).
+  fs.mkdirSync(path.dirname(runtime.RUTA_HUELLA_LEGIBLE), { recursive: true });
+  fs.writeFileSync(runtime.RUTA_HUELLA_LEGIBLE, JSON.stringify({ generado: B.FECHA_CONGELADA, lineas: h.lineas }, null, 2) + '\n', 'utf8');
 
   console.log('huella_motores.json: ' + h.lineas.length + ' filas (extractos=' + h.okExt + ' diferidas=' + h.okDif + ' avances=' + h.okAv + ')');
   console.log('  huella: ' + h.huella);

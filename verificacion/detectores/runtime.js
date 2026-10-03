@@ -358,6 +358,17 @@ const R4 = {
 
 // ─── R5: huella numerica de los motores de dinero ───────────────────────────
 const RUTA_HUELLA = path.join(__dirname, '..', 'huella_motores.json');
+// La referencia de R5 vive en un repo PUBLICO y sus filas son cifras de la BD REAL del usuario (pago
+// minimo, total e intereses de cada extracto). Hasta oct-2026 se commiteaban legibles; ahora se guarda
+// solo CLAVE + hash de cada fila, que basta para decir QUE fila cambio. Las cifras quedan en una copia
+// local ignorada por git (docs/temp/), que solo sirve para mostrar el "antes" al diagnosticar.
+const RUTA_HUELLA_LEGIBLE = path.join(__dirname, '..', '..', 'docs', 'temp', 'huella_motores_legible.json');
+// Clave = lo que IDENTIFICA la fila, nunca una cifra: EXT|tarjeta|ciclo, DIF|id, AVA|id. (Con los tres
+// primeros campos de siempre, en DIF y AVA el tercero es el SALDO y la clave publicaba un monto real.)
+const claveFila = (l) => { const p = String(l).split('|'); return p.slice(0, p[0] === 'EXT' ? 3 : 2).join('|'); };
+const firmaFila = (l) => claveFila(l) + '|#' + require('crypto').createHash('sha256').update(String(l)).digest('hex').slice(0, 16);
+// Una fila de la referencia es una firma (formato nuevo) o la fila legible (referencias anteriores).
+const esFirma = (r) => /\|#[0-9a-f]{16}$/.test(String(r));
 const RUTA_GOLDEN = path.join(__dirname, '..', 'golden_base.json');
 
 // Tablas que los motores LEEN de verdad: es el grep de `FROM` sobre backend/engine/extracto.js
@@ -459,7 +470,7 @@ function calcularHuella(raiz, rutaBd) {
       try {
         const tj = db.prepare('SELECT dia_corte FROM tarjetas WHERE id=?').get(a.tarjeta_id) || {};
         const abonos = db.prepare('SELECT * FROM abonos_avance WHERE avance_id=? ORDER BY id').all(a.id);
-        const r = calcularAmortizacionAvance(a.monto, a.tasa_mv, a.plazo_meses, a.fecha_desembolso, tj.dia_corte, abonos, a.comision, avanceOpts(db, a.tarjeta_id));
+        const r = calcularAmortizacionAvance(a.monto, a.tasa_mv, a.plazo, a.fecha_desembolso, tj.dia_corte, abonos, a.comision, avanceOpts(db, a.tarjeta_id));
         const s = r.resumen || {};
         lineas.push(['AVA', a.id, s.saldoActual, s.totalIntereses, s.interesesPagados, s.cuotasRestantes,
           s.abonoSobrante, (r.tabla || []).length].join('|'));
@@ -509,9 +520,14 @@ const R5 = {
     const datosMovidos = (ref.entradas != null && ref.entradas !== entradas);
     if (ref.huella !== huella) {
       // Se nombran las filas concretas que se movieron: "la huella cambio" no sirve para actuar.
-      const antes = new Map(ref.lineas.map(l => [l.split('|').slice(0, 3).join('|'), l]));
-      const movidas = lineas.filter(l => antes.get(l.split('|').slice(0, 3).join('|')) !== l);
-      const detalle = '(' + movidas.length + ' filas distintas). Primeras: ' + movidas.slice(0, 3).join(' || ');
+      const antes = new Map(ref.lineas.map(l => [claveFila(l), l]));
+      const movidas = lineas.filter(l => { const r = antes.get(claveFila(l)); return esFirma(r) ? r !== firmaFila(l) : r !== l; });
+      // Las cifras de AHORA salen del calculo en vivo; las de ANTES, de la copia local si existe (nunca
+      // del repo). Se imprimen en la consola de quien corre la suite, no se guardan en ningun archivo.
+      let legibles = null;
+      try { legibles = new Map(JSON.parse(leer(RUTA_HUELLA_LEGIBLE)).lineas.map(l => [claveFila(l), l])); } catch (e) { legibles = null; }
+      const conAntes = (l) => (legibles && legibles.get(claveFila(l)) ? legibles.get(claveFila(l)) + '  ->  ' : '') + l;
+      const detalle = '(' + movidas.length + ' filas distintas). Primeras: ' + movidas.slice(0, 3).map(conAntes).join(' || ');
       if (ref.entradas == null || ref.entradasPost == null) {
         // Referencia anterior a v5.9.2: sin los campos no se puede diagnosticar. Se dice, en vez de
         // adivinar: un "caduco por datos" inventado taparia una regresion real.
@@ -633,6 +649,8 @@ const R8 = {
 module.exports = [R1, R2, R3, R4, R5, R8];
 module.exports.abrirApp = abrirApp;
 module.exports.RUTA_HUELLA = RUTA_HUELLA;
+module.exports.RUTA_HUELLA_LEGIBLE = RUTA_HUELLA_LEGIBLE;
+module.exports.firmaFila = firmaFila;
 module.exports.calcularHuella = calcularHuella;
 module.exports.RUTA_GOLDEN = RUTA_GOLDEN;
 module.exports.capturar = capturar;
