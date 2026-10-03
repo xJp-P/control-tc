@@ -7,6 +7,7 @@ const { calcExtracto } = require('../engine/extracto');
 const { minimoEfectivo } = require('../helpers/extractoOficial');
 const { creditosDeTarjeta } = require('../helpers/creditoReverso');
 const { nuOptsDif, avanceOpts, isDualExtracto, aplicaIntInternacional } = require('../helpers/banco');
+const { fechaPagoProyectada, esBancolombiaVisa } = require('../helpers/fechaPago');
 
 module.exports = function(db) {
   const router = Router();
@@ -29,8 +30,10 @@ module.exports = function(db) {
     const tjParams = tarjeta_id ? [tarjeta_id] : [];
 
     let diaCorte = 30, diaPago = 16, esRappiDash = false, dualExtractoDash = false, tasaIntlGlobal = 0.01911, aplicaIntlDash = false;
+    let tjDash = null;
     if (tarjeta_id) {
       const tj = db.prepare('SELECT dia_corte, dia_pago, banco, franquicia, tasa_mv_avances FROM tarjetas WHERE id=?').get(tarjeta_id);
+      tjDash = tj || null;
       if (tj) {
         diaCorte = tj.dia_corte;
         diaPago = tj.dia_pago || 16;
@@ -476,8 +479,12 @@ module.exports = function(db) {
         const corteIso = fechaCorteCiclo.toISOString().slice(0, 10);
         const fpIso = addDays(corteIso, 14);
         fechaPago = new Date(fpIso + 'T00:00:00');
+      } else if (esBancolombiaVisa(tjDash)) {
+        // Bancolombia Visa: corte + 17 dias calendario, al siguiente habil (helpers/fechaPago.js).
+        const corteIso = fechaCorteCiclo.toISOString().slice(0, 10);
+        fechaPago = new Date(fechaPagoProyectada(tjDash, cicloActual, corteIso) + 'T00:00:00');
       } else {
-        // Bancolombia y similares: dia_pago del mes siguiente al ciclo
+        // Resto: dia_pago del mes siguiente al ciclo
         fechaPago = new Date(yrC, moC, diaPago);
       }
     }

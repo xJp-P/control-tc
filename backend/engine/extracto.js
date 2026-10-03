@@ -3,16 +3,16 @@
 // desglose de compras/cuotas/avances/diferidas, con soporte dual COP/USD).
 // Extraído de routes/extractos.js (v3.6) para reutilizarlo también en el Asistente de
 // Conciliación (services/movimientos.js). Recibe `db` explícitamente.
-const { daysBetween, addDays } = require('../helpers/dates');
+const { daysBetween } = require('../helpers/dates');
 const { calcularAmortizacionAvance, calcularAmortizacionDiferida } = require('./amortizacion');
 const { esNuBank, nuOptsDif, avanceOpts, isDualExtracto, aplicaIntInternacional } = require('../helpers/banco');
+const { fechaPagoProyectada } = require('../helpers/fechaPago');
 
 function calcExtracto(db, tarjetaId, cicloStr, incluirPagadas) {
   const tj = db.prepare('SELECT * FROM tarjetas WHERE id=?').get(tarjetaId);
   if (!tj) return null;
   const diaCorte = tj.dia_corte || 30;
   const diaPago = tj.dia_pago || 16;
-  const esRappiCardCalc = tj.banco && (tj.banco.toLowerCase().includes('rappi') || tj.banco.toLowerCase().includes('davivienda'));
   const esNuCalc = esNuBank(db, tj);
   const dualExtracto = !esNuCalc && isDualExtracto(tj.franquicia);
   const aplicaIntl = aplicaIntInternacional(tj.banco, tj.franquicia);
@@ -20,13 +20,9 @@ function calcExtracto(db, tarjetaId, cicloStr, incluirPagadas) {
   const [year, month] = cicloStr.split('-').map(Number);
   const lastDayOfMonth = new Date(year, month, 0).getDate();
   const fechaCorte = new Date(year, month - 1, Math.min(diaCorte, lastDayOfMonth)).toISOString().slice(0, 10);
-  let fechaPago;
-  if (esRappiCardCalc) {
-    // RappiCard/Davivienda: fecha de pago = fecha de corte + 14 dias
-    fechaPago = addDays(fechaCorte, 14);
-  } else {
-    fechaPago = new Date(year, month, diaPago).toISOString().slice(0, 10);
-  }
+  // RappiCard: corte + 14. Bancolombia Visa: corte + 17 dias calendario, al siguiente habil (medido en
+  // 4 extractos). El resto: dia_pago del mes siguiente. Ver helpers/fechaPago.js.
+  const fechaPago = fechaPagoProyectada(Object.assign({}, tj, { dia_pago: diaPago }), cicloStr, fechaCorte);
 
   const comprasIndividuales = db.prepare(`
     SELECT c.id, c.fecha, c.descripcion, c.nota_personal, c.tasa_intl, c.valor_cop, c.valor_usd, c.tasa_usd,
