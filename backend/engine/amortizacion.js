@@ -1,6 +1,23 @@
 // backend/engine/amortizacion.js — Amortization engines (pure math, no DB/IO)
 const { hoyLocal, addMonths, daysBetween, primerCorteAvance } = require('../helpers/dates');
 
+// Interes de la cuota que se FACTURO en el corte anterior, por los dias que pasaron hasta que se pago.
+// Bancolombia liquida sobre el saldo DIARIO: la cuota no deja de devengar el dia del corte sino el dia
+// del pago. Medido en los extractos de jul/ago/sep-2026 de la Visa Infinite (CLAUDE.md, 3-oct-2026):
+// solo con este termino el interes del motor queda a menos de $2.000 del banco en los tres meses, y
+// el termino se encogio de agosto (16 dias) a septiembre (12 dias) en la misma proporcion que el pago.
+// Topado a los dias del periodo: un extracto pagado tarde no puede devengar mas alla del corte
+// siguiente por esta via (la mora es otra cosa y no se modela aqui).
+// En la fila 0 solo hay cuota previa en una hija de "Sellar y Renacer": la ultima cuota SELLADA del plan
+// viejo (opts.capitalFacturadoPrevio), facturada en el corte que es la fecha_compra de la hija.
+function interesCuotaFacturadaHastaPago(fechaPagoDe, i, capFacturadoPrev, cortePrevio, diasPeriodo, tasaMV) {
+  if (!fechaPagoDe || !(capFacturadoPrev > 0)) return 0;
+  const fp = fechaPagoDe(String(cortePrevio).slice(0, 7), cortePrevio);
+  if (!fp) return 0;
+  const d = Math.max(0, Math.min(diasPeriodo, daysBetween(cortePrevio, fp)));
+  return capFacturadoPrev * tasaMV * (d / 30);
+}
+
 // ─── Amortization engine: Avances ─────────────────────────────────
 // El interés se liquida sobre el SALDO AMORTIZADO (saldoInicio): el capital que resta
 // DESPUÉS de amortizar la cuota del mes anterior; NO se re-suma la cuota del mes en curso.
@@ -15,6 +32,10 @@ function calcularAmortizacionAvance(monto, tasaMV, plazo, fechaDesembolso, diaCo
   let saldoInicio = monto;
   let fechaAnterior = fechaDesembolso;
   let primerCorte = primerCorteAvance(fechaDesembolso, diaCorte);
+  // opts.fechaPagoDe (solo Bancolombia, ver helpers/banco.js): la cuota FACTURADA en el corte anterior
+  // sigue devengando hasta el dia en que se paga. Sin la funcion, el termino no existe.
+  const fechaPagoDe = (opts && typeof opts.fechaPagoDe === 'function') ? opts.fechaPagoDe : null;
+  let capFacturadoPrev = 0;
 
   for (let i = 0; i < plazo; i++) {
     if (saldoInicio <= 0.01) break;
@@ -38,6 +59,8 @@ function calcularAmortizacionAvance(monto, tasaMV, plazo, fechaDesembolso, diaCo
       interes = (saldoBase * tasaMV * (diasPreAbono / 30))
               + (Math.max(0, saldoBase - sumaAbonos) * tasaMV * (diasPostAbono / 30));
     }
+    const interesCuotaFacturada = interesCuotaFacturadaHastaPago(fechaPagoDe, i, capFacturadoPrev, fechaAnterior, dias, tasaMV);
+    interes += interesCuotaFacturada;
 
     const cuotaCapital = Math.min(cuotaCapitalFija, Math.max(0, saldoInicio - sumaAbonos));
     const comisionCuota = (i === 0 && comision) ? comision : 0;
@@ -53,6 +76,7 @@ function calcularAmortizacionAvance(monto, tasaMV, plazo, fechaDesembolso, diaCo
       abonos: Math.round(sumaAbonos * 100) / 100,
       fecha1erAbono, diasPreAbono, diasPostAbono,
       interes: Math.round(interes * 100) / 100,
+      interesCuotaFacturada: Math.round(interesCuotaFacturada * 100) / 100,
       comision: comisionCuota,
       cuotaCapital: Math.round(cuotaCapital * 100) / 100,
       totalExtracto: Math.round(totalExtracto * 100) / 100,
@@ -63,6 +87,7 @@ function calcularAmortizacionAvance(monto, tasaMV, plazo, fechaDesembolso, diaCo
 
     saldoInicio = saldoFinal;
     fechaAnterior = fechaCorte;
+    capFacturadoPrev = cuotaCapital;
     if (saldoFinal <= 0) break;
   }
 
@@ -116,10 +141,18 @@ function calcularAmortizacionDiferida(monto, tasaMV, numCuotas, fechaCompra, fec
   // en la SIGUIENTE cuota a facturar. Sin el mapa, `cuotaCapitalFija` manda y el resultado es
   // byte-identico al de siempre (la huella de R5 no se mueve).
   const capitalMapa = (opts && opts.capitalPorCuota) || null;
+  // Cuota facturada devengando hasta el pago (Bancolombia; ver interesCuotaFacturadaHastaPago).
+  const fechaPagoDe = (opts && typeof opts.fechaPagoDe === 'function') ? opts.fechaPagoDe : null;
+  // ARRASTRE de "Sellar y Renacer": el interes de la cuota 1 que el plan ORIGINAL difirio a su cuota 2
+  // y que, al reprogramar con solo la cuota 1 facturada, cobra la cuota 1 de esta hija. Medido en un
+  // extracto real (sep-2026): la primera cuota del plan nuevo trajo ese interes diferido, y sin el el mes
+  // no cuadraba por casi un 6%. El banco NO lo condona al reprogramar.
+  const interesArrastrado = (opts && Number(opts.interesArrastrado) > 0) ? Number(opts.interesArrastrado) : 0;
   const tabla = [];
   let saldoInicial = monto;
   let fechaAnterior = fechaCompra;
   const abonosList = abonos || [];
+  let capFacturadoPrev = (fechaPagoDe && opts && Number(opts.capitalFacturadoPrevio) > 0) ? Number(opts.capitalFacturadoPrevio) : 0;
 
   // Bancolombia: el interés acumulado de la cuota 1 que se cobrará en la cuota 2
   let interesPendienteCuota1 = 0;
@@ -131,7 +164,8 @@ function calcularAmortizacionDiferida(monto, tasaMV, numCuotas, fechaCompra, fec
     // Nu: cuota 1 no genera intereses (no se acumulan ni se cobran)
     // Bancolombia: cuota 1 acumula intereses pero no se cobran (se difieren a cuota 2)
     // Default (RappiCard, etc.): cada cuota cobra su propio interés
-    const interesPeriodo = (esNu && i === 0) ? 0 : saldoInicial * tasaMV * (dias / 30);
+    const interesCuotaFacturada = interesCuotaFacturadaHastaPago(fechaPagoDe, i, capFacturadoPrev, fechaAnterior, dias, tasaMV);
+    const interesPeriodo = (esNu && i === 0) ? 0 : saldoInicial * tasaMV * (dias / 30) + interesCuotaFacturada;
 
     let interesTotal;
     if (esBancolombia && i === 0) {
@@ -142,9 +176,12 @@ function calcularAmortizacionDiferida(monto, tasaMV, numCuotas, fechaCompra, fec
     } else {
       interesTotal = interesPeriodo;
     }
+    if (i === 0) interesTotal += interesArrastrado;
 
     const capitalDeEstaCuota = (capitalMapa && capitalMapa[i + 1] != null) ? capitalMapa[i + 1] : cuotaCapitalFija;
     let cuotaCapital = Math.min(capitalDeEstaCuota, saldoInicial);
+    // Lo FACTURADO es la cuota del plan; un abono anticipado no se factura (se paga al hacerlo).
+    const capFacturado = cuotaCapital;
 
     const abonosAntes = abonosList.filter(a => a.fecha < fechaCorte && a.fecha >= (i === 0 ? fechaCompra : addMonths(fechaPrimerCorte, i - 1)));
     const montoAbonosAntes = abonosAntes.reduce((s, a) => s + a.monto, 0);
@@ -160,12 +197,14 @@ function calcularAmortizacionDiferida(monto, tasaMV, numCuotas, fechaCompra, fec
       saldoInicial: Math.round(saldoInicial * 100) / 100,
       interesPeriodo: Math.round(interesPeriodo * 100) / 100,
       interesTotal: Math.round(interesTotal * 100) / 100,
+      interesCuotaFacturada: Math.round(interesCuotaFacturada * 100) / 100,
       cuotaCapital: Math.round(cuotaCapital * 100) / 100,
       totalPagar: Math.round(totalPagar * 100) / 100
     });
 
     saldoInicial = Math.max(0, saldoInicial - cuotaCapital);
     fechaAnterior = fechaCorte;
+    capFacturadoPrev = capFacturado;
   }
 
   const totalIntereses = tabla.reduce((s, r) => s + r.interesTotal, 0);
@@ -190,4 +229,4 @@ function calcularAmortizacionDiferida(monto, tasaMV, numCuotas, fechaCompra, fec
   };
 }
 
-module.exports = { calcularAmortizacionAvance, calcularAmortizacionDiferida };
+module.exports = { calcularAmortizacionAvance, calcularAmortizacionDiferida, interesCuotaFacturadaHastaPago };

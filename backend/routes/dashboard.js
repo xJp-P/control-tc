@@ -8,6 +8,7 @@ const { minimoEfectivo } = require('../helpers/extractoOficial');
 const { creditosDeTarjeta } = require('../helpers/creditoReverso');
 const { nuOptsDif, avanceOpts, isDualExtracto, aplicaIntInternacional } = require('../helpers/banco');
 const { fechaPagoProyectada, esBancolombiaVisa } = require('../helpers/fechaPago');
+const { interesColaCuotasFinales } = require('../engine/colaCuotaFacturada');
 
 module.exports = function(db) {
   const router = Router();
@@ -573,6 +574,10 @@ module.exports = function(db) {
     const saldoBolsilloUsd = Math.max(0, Math.round((saldoBolsilloUsdBruto - saldoBolsilloUsdAbonado) * 100) / 100);
     // Intereses del mes USD: suma de intereses USD de diferidas + revolving USD (= 0 por ahora).
     const interesesMesUsd = Math.round((interesesMesDiferidasUsd + interesesComprasUsdDash) * 100) / 100;
+    // Interes de la ultima cuota de los planes que terminaron el ciclo anterior: la MISMA cola que suma
+    // calcExtracto (engine/colaCuotaFacturada.js), para que esta card y el pago minimo no difieran.
+    const tarjetasCola = tarjeta_id ? [Number(tarjeta_id)] : db.prepare("SELECT id FROM tarjetas WHERE estado='activa'").all().map(t => t.id);
+    const interesesMesCola = tarjetasCola.reduce((s, id) => s + interesColaCuotasFinales(db, id, cicloActual).total, 0);
 
     // Me Deben Corte: lo que cada tercero debe en este ciclo. Resta abono del tercero y bolsillo del usuario.
     const meDebenCorteMap = {};
@@ -678,7 +683,8 @@ module.exports = function(db) {
       saldoBolsilloUsd: saldoBolsilloUsd,
       proximoCorte: { fecha: proximoCorteDate.toISOString().slice(0, 10), diasFaltan: diasParaCorte },
       fechaPago: { fecha: fechaPago.toISOString().slice(0, 10), diasFaltan: diasParaPago, esManual: esFechaPagoManual },
-      interesesMes: Math.round((interesesMesAvances + interesesMesDiferidas + interesesComprasIntl) * 100) / 100,
+      interesesMes: Math.round((interesesMesAvances + interesesMesDiferidas + interesesComprasIntl + interesesMesCola) * 100) / 100,
+      interesesMesCuotasFinales: Math.round(interesesMesCola * 100) / 100,
       interesesMesAvances: Math.round(interesesMesAvances * 100) / 100,
       interesesMesDiferidas: Math.round(interesesMesDiferidas * 100) / 100,
       interesesComprasIntl: Math.round(interesesComprasIntl),

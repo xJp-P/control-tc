@@ -7,6 +7,7 @@ const { daysBetween } = require('../helpers/dates');
 const { calcularAmortizacionAvance, calcularAmortizacionDiferida } = require('./amortizacion');
 const { esNuBank, nuOptsDif, avanceOpts, isDualExtracto, aplicaIntInternacional } = require('../helpers/banco');
 const { fechaPagoProyectada } = require('../helpers/fechaPago');
+const { interesColaCuotasFinales } = require('./colaCuotaFacturada');
 
 function calcExtracto(db, tarjetaId, cicloStr, incluirPagadas) {
   const tj = db.prepare('SELECT * FROM tarjetas WHERE id=?').get(tarjetaId);
@@ -97,6 +98,13 @@ function calcExtracto(db, tarjetaId, cicloStr, incluirPagadas) {
     }
   });
 
+  // Cola: interes de la ULTIMA cuota de los planes que terminaron el ciclo anterior (la cuota facturada
+  // devenga hasta el pago y el banco lo cobra este mes, cuando el plan ya no tiene filas). Solo
+  // Bancolombia; ver engine/colaCuotaFacturada.js.
+  const cola = interesColaCuotasFinales(db, tarjetaId, cicloStr);
+  cuotasInteres += cola.total;
+  cuotasTotal += cola.total;
+
   const comprasTotalPendientes = db.prepare("SELECT COALESCE(SUM(valor_cop - COALESCE(monto_abonado,0)),0) as total FROM compras WHERE tarjeta_id=? AND estado NOT IN ('pagado','diferida')").get(tarjetaId);
   const tasaIntl = tj.tasa_mv_avances || 0.01911;
 
@@ -173,6 +181,7 @@ function calcExtracto(db, tarjetaId, cicloStr, incluirPagadas) {
     avancesTotal: Math.round(avancesTotal), diferidasTotal: Math.round(diferidasTotal),
     interesesComprasIntl,
     detalleAvances, detalleDiferidas,
+    interesCuotasFinales: cola.total, detalleInteresCuotasFinales: cola.detalle,
     dualExtracto,
     comprasUsd: comprasUsdTotal,
     interesesComprasUsd,
