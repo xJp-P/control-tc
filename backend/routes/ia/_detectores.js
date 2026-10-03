@@ -17,12 +17,25 @@ const { addMonths } = require('../../helpers/dates');
 // reversada -> idempotencia). Alcance v1: compras de 1 cuota en COP (las que el endpoint reversa).
 // `lineasBanco` (OPCIONAL): mismos movimientos negativos aplanados por la estrategia del banco que
 // consume detectarPagosOmitidos. Sin ese argumento se parsea el texto crudo, como siempre. Los dos
-// detectores REPARTEN esas líneas con sus propios `esPago` —que difieren a propósito— así que cada
-// línea la procesa uno solo: aquí se descartan las de PAGO/ABONO y allí se descartan las demás.
+// detectores REPARTEN esas líneas a partir de UNA sola definición de pago (esConceptoDePago), así que
+// cada línea la procesa uno solo: aquí se descartan las de PAGO/ABONO y allí se descartan las demás.
+
+// Concepto de una línea NEGATIVA que es un PAGO del usuario (o un ajuste a su favor), no el reverso de
+// un comercio. Las etiquetas reales de pago EMPIEZAN por ABONO o PAGO ("ABONO SUCURSAL VIRTUAL",
+// "PAGO PSE", "PAGO ATH", "PAGOS RAPPIPAY APP") o dicen "SU PAGO" / "A FAVOR". Antes bastaba con que
+// PAGO apareciera EN CUALQUIER PARTE, y el reverso de un comercio de Mercado Pago ("MERCADO
+// PAGO*<comercio>") se descartaba en silencio como si fuera un pago (conciliación de sep-2026;
+// "MERCADOPAGO" junto sí pasaba). La comparten los DOS detectores: es lo que sostiene el reparto.
+function esConceptoDePago(c) {
+  const t = String(c || '').trim();
+  return /^(ABONOS?|PAGOS?)\b/i.test(t) || /\b(SU PAGO|SALDO A FAVOR|A FAVOR)\b/i.test(t);
+}
+
 function detectarReversos(db, texto, tarjetaId, lineasBanco) {
   if (!texto || !tarjetaId) return [];
   const fmt = (n) => '$' + Math.round(n).toLocaleString('es-CO');
-  const esPago = (c) => /\b(ABONO|PAGO|SU PAGO|SALDO A FAVOR|A FAVOR|NU\b)/i.test(c);
+  // + "NU": las líneas de Nu no son reversos de comercio (el detector de pagos no las toma).
+  const esPago = (c) => esConceptoDePago(c) || /\bNU\b/i.test(c);
   // Líneas con valor NEGATIVO en pesos: [auth] DD/MM/YYYY  CONCEPTO  $ -NNN.NNN,NN
   const reNeg = /(\d{1,2}\/\d{1,2}\/\d{2,4})\s+(.+?)\s+\$\s*-\s*([\d][\d.]*(?:,\d{1,2})?)/;
   const candidatos = [];
@@ -108,7 +121,9 @@ function detectarPagosOmitidos(db, texto, tarjetaId, ciclo, lineasBanco) {
   // PLURALES: el `\b` de cierre hacía que "\bPAGO\b" NO matcheara "PAGOS RAPPIPAY APP" (el concepto real
   // de RappiCard/Davivienda), así que esa línea se caía de los DOS detectores y rompía el invariante de
   // arriba (el de reversos sí la matchea: su regex no lleva `\b` final, así que casa por prefijo).
-  const esPago = (c) => /\b(ABONOS?|PAGOS?|SU PAGO|SALDO A FAVOR|A FAVOR)\b/i.test(c);
+  // La MISMA definición que usa detectarReversos (esConceptoDePago): antes cada uno tenía su regex y
+  // el reparto dependía de mantenerlas sincronizadas a mano.
+  const esPago = esConceptoDePago;
   const reNeg = /(\d{1,2}\/\d{1,2}\/\d{2,4})\s+(.+?)\s+\$\s*-\s*([\d][\d.]*(?:,\d{1,2})?)/;
   const aISO = (s) => { const m = String(s).match(/(\d{1,2})\/(\d{1,2})\/(\d{2,4})/); if (!m) return null; let y = m[3]; if (y.length === 2) y = '20' + y; return y + '-' + String(m[2]).padStart(2, '0') + '-' + String(m[1]).padStart(2, '0'); };
   const lineas = [];
