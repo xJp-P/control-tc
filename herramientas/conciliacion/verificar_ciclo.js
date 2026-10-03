@@ -131,7 +131,8 @@ ok(!!fp && fp.fecha_pago === E.fecha_pago, 'fecha limite: ' + (fp ? fp.fecha_pag
 
 // ── Interes (informativo) ──────────────────────────────────────────────────────────────────────
 const ce = calcExtracto(db, T, ciclo, false);
-const intApp = ce.detalleAvances.reduce((s, a) => s + a.interes, 0) + ce.detalleDiferidas.reduce((s, a) => s + a.interes, 0) + ce.interesesComprasIntl;
+const intApp = ce.detalleAvances.reduce((s, a) => s + a.interes, 0) + ce.detalleDiferidas.reduce((s, a) => s + a.interes, 0) + ce.interesesComprasIntl
+  + (ce.interesCuotasFinales || 0);   // la ultima cuota de los planes que terminaron el mes anterior
 console.log('\nInteres (informativo, NO se exige): motor ' + fmt(intApp) + ' vs extracto ' + fmt(E.resumen.intereses) + ' -> diferencia ' + fmt(E.resumen.intereses - intApp));
 const est = db.prepare('SELECT estado, monto_pagado FROM extractos WHERE tarjeta_id=? AND ciclo=?').get(T, ciclo);
 const pagos = db.prepare("SELECT COUNT(*) n FROM pagos WHERE tarjeta_id=? AND ciclo=? AND tipo='abono_extracto'").get(T, ciclo).n;

@@ -27,7 +27,9 @@ for (const ciclo of ciclos.split(',')) {
   e.detalleDiferidas.filter(d => d.interes).forEach(d => console.log(`  diferida ${d.etiqueta}  interes ${d.interes}`));
   // Ojo: con incluirPagadas el interes intl de las compras 1/1 ya pagadas sale en 0 (el motor solo
   // lo calcula sobre las pendientes), asi que en un ciclo cerrado este total lo EXCLUYE.
-  console.log(`  interes del motor: avances ${intAv} + diferidas ${intDif} + intl ${e.interesesComprasIntl} = ${intAv + intDif + e.interesesComprasIntl}`);
+  const cola = Math.round(e.interesCuotasFinales || 0);
+  (e.detalleInteresCuotasFinales || []).forEach(c => console.log(`  cola (ultima cuota del ciclo anterior) ${c.etiqueta}  capital ${c.capital}  interes ${c.interes}`));
+  console.log(`  interes del motor: avances ${intAv} + diferidas ${intDif} + intl ${e.interesesComprasIntl} + cola ${cola} = ${intAv + intDif + e.interesesComprasIntl + cola}`);
 }
 
 for (const id of (diferidas ? diferidas.split(',') : [])) {

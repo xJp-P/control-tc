@@ -140,6 +140,53 @@ const OPS = {
     return 'antes ' + antes.map(q => q.fechaCorte.slice(0, 7) + ':' + q.cuotaCapital).join(', ') + '  ->  ahora ' + despues.map(q => q.fechaCorte.slice(0, 7) + ':' + q.cuotaCapital).join(', ');
   },
 
+  // Rellena interes_arrastrado en una hija de "Sellar y Renacer" creada ANTES de que el endpoint lo
+  // guardara (Fase B, oct-2026). Reproduce exactamente lo que el endpoint calcula hoy: el interes de la
+  // cuota 1 del plan ORIGINAL (monto x tasa x dias de la compra al primer corte / 30), que la gracia de
+  // Bancolombia difirio a una cuota 2 que la reprogramacion hizo desaparecer. Solo si se sello UNA cuota:
+  // con dos o mas, la cuota 2 ya lo cobro. `monto_original` es opcional (si el total del plan se ajusto
+  // despues, la suma sellada + hija ya no es el monto con que el banco calculo ese interes).
+  async arrastrar_interes_cuota1(port, o) {
+    const c = unaCompra(o.compra);
+    const d = c.diferida_id && db.prepare('SELECT * FROM diferidas WHERE id=?').get(c.diferida_id);
+    if (!d || !d.sin_gracia_cuota1 || !d.reprog_total) throw new Error('La compra no es el saldo renacido de una reprogramacion.');
+    const k = d.reprog_total - d.num_cuotas;
+    if (k !== 1) return 'se sellaron ' + k + ' cuotas: la cuota 2 ya cobro el interes diferido, no hay arrastre';
+    const { nuOpts } = require(path.join(ROOT, 'backend', 'helpers', 'banco.js'));
+    const g = nuOpts(db, T);
+    if (!(g && g.esBancolombia)) return 'la tarjeta no difiere el interes de la cuota 1: no hay arrastre';
+    const s = db.prepare("SELECT * FROM compras WHERE tarjeta_id=? AND fecha=? AND descripcion LIKE ? AND diferida_id IS NULL").all(T, c.fecha, c.descripcion + ' (cuota 1/%');
+    if (s.length !== 1) throw new Error('La cuota 1 sellada encontro ' + s.length + ' filas (se exige 1).');
+    const { corteDeCiclo } = require(path.join(ROOT, 'backend', 'helpers', 'cortes.js'));
+    const { daysBetween } = require(path.join(ROOT, 'backend', 'helpers', 'dates.js'));
+    const diaCorte = db.prepare('SELECT dia_corte FROM tarjetas WHERE id=?').get(T).dia_corte || 30;
+    const corte1 = corteDeCiclo(s[0].ciclo, diaCorte);
+    const monto = o.monto_original != null ? Number(o.monto_original) : r2(s[0].valor_cop + d.monto);
+    const dias = daysBetween(c.fecha, corte1);
+    const interes = r2(monto * d.tasa_mv * dias / 30);
+    // Y la cuota 1 sellada (la unica, k=1) es la que devenga del corte al pago: su capital va a la hija.
+    const capPrevio = r2(s[0].valor_cop);
+    if (d.interes_arrastrado != null && Math.abs(d.interes_arrastrado - interes) < 0.005
+      && d.capital_facturado_previo != null && Math.abs(d.capital_facturado_previo - capPrevio) < 0.005) return 'ya tenia ' + interes + ' y ' + capPrevio + ', se salta';
+    db.prepare('UPDATE diferidas SET interes_arrastrado=?, capital_facturado_previo=? WHERE id=?').run(interes, capPrevio, d.id);
+    logAction('editar', tjNombre(T) + 'Reprogramacion de ' + c.descripcion + ': su cuota 1 cobra el interes diferido de la cuota 1 original (' + interes.toLocaleString('es-CO') + ') y el de la cuota sellada hasta el pago');
+    return 'arrastra ' + interes + ' (' + monto + ' x ' + (d.tasa_mv * 100).toFixed(4) + '% x ' + dias + ' dias / 30, del ' + c.fecha + ' al corte ' + corte1 + ') + cuota sellada ' + capPrevio;
+  },
+
+  // Asigna una compra a un tercero por la MISMA via que la interfaz (PUT /compras/:id con la fila
+  // completa: el PUT reemplaza todos los campos). La persona se resuelve por nombre y debe ser unica.
+  async asignar_persona(port, o) {
+    const c = unaCompra(o.compra);
+    const ps = db.prepare('SELECT id, nombre FROM personas WHERE nombre LIKE ?').all(o.persona + '%');
+    if (ps.length !== 1) throw new Error('La persona "' + o.persona + '" encontro ' + ps.length + ' coincidencias (se exige 1).');
+    if (c.persona_id === ps[0].id) return 'ya era de ' + ps[0].nombre + ', se salta';
+    await api(port, 'PUT', '/compras/' + c.id, { tarjeta_id: c.tarjeta_id, fecha: c.fecha, descripcion: c.descripcion, valor_cop: c.valor_cop,
+      valor_usd: c.valor_usd, tasa_usd: c.tasa_usd, persona_id: ps[0].id, estado: c.estado, notas: c.notas, monto_bolsillo: c.monto_bolsillo,
+      es_internacional: c.es_internacional, ciclo: c.ciclo, ciclo_manual: c.ciclo_manual, desde_conciliacion: true });
+    const f = db.prepare('SELECT persona_id, ciclo, estado FROM compras WHERE id=?').get(c.id);
+    return 'asignada a ' + ps[0].nombre + ' (ciclo ' + f.ciclo + ', ' + f.estado + ')';
+  },
+
   async pago_oficial(port, o) {
     const r = await api(port, 'POST', '/extractos/pago-oficial', { tarjeta_id: T, ciclo: plan.ciclo, pago_minimo: o.pago_minimo, pago_total: o.pago_total, fuente: 'conciliacion' });
     return 'minimo ' + r.pago_minimo + ', total ' + r.pago_total;
