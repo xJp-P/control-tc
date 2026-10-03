@@ -237,11 +237,13 @@ saldo_restante                      = monto − cuota_1
 
 Es decir, **las cuotas resultantes NO son iguales** (no es `monto / 2` cada una). 
 
-> **Implicación en el motor:** `calcularAmortizacionDiferida` asume cuotas iguales (`monto / N`), por lo que **no** representa nativamente una reprogramación irregular como ésta. La forma recomendada de modelarla es con **dos movimientos de una cuota**: uno con el valor de la cuota original (`monto / N_original`) en el ciclo actual, y otro con el saldo restante en el ciclo siguiente. Así el pago mínimo de cada ciclo refleja exactamente lo que cobra el banco, a costa de perder la representación de "una sola compra".
+> **Implicación en el motor:** desde v6.4.0 el motor representa el calendario irregular sin partir la compra: la reprogramación ("Sellar y Renacer") guarda el capital de cada cuota del plan nuevo en `capital_cuotas`, y `nuOptsDif` lo inyecta a la amortización en todos los sitios que la consumen. Conserva la cuota base del plan original y comprime el saldo en la **siguiente** cuota a facturar, que es lo que se midió en el banco.
+
+**Arrastre del interés aplazado.** Con la gracia de la cuota 1, su interés se cobra en la cuota 2. Si se reprograma cuando solo la cuota 1 está facturada, esa cuota 2 deja de existir, pero el banco **no condona** el interés: lo cobra la primera cuota del plan nuevo, junto con lo que devengó la cuota 1 desde su corte hasta el pago. En la app, "Sellar y Renacer" guarda los dos datos en la diferida hija (`interes_arrastrado` y `capital_facturado_previo`) y su cuota 1 los cobra.
 
 ---
 
-## 6. Avances — modelo "saldo facturado"
+## 6. Avances — interés sobre el saldo diario
 
 ### 6.1 Comportamiento del banco
 
@@ -260,35 +262,37 @@ Avance ejemplo: `100002 - 10/03 AVANCE SUCURSAL VIRTUAL $18.000.000 a 24 cuotas`
 
 **Archivo:** `backend/engine/amortizacion.js` función `calcularAmortizacionAvance`
 
-Para Bancolombia (flag `esBancolombia` desde `avanceOpts`), el modelo de intereses es **"saldo facturado"**, distinto al estándar:
+El interés de cada ciclo tiene dos partes:
 
-```js
-const saldoFacturado = (esBancolombia && i > 0)
-  ? saldoInicio + cuotaCapitalFija   // ← clave: saldoInicio + capital del periodo
-  : saldoInicio;                      // estándar para otros bancos / cuota 1
-
-interes = saldoFacturado × tasaMV × (dias / 30);
+```
+interés = saldo_sin_facturar × tasaMV × (días_del_periodo / 30)          ← capital que aún no se ha facturado
+        + cuota_facturada_anterior × tasaMV × (días_hasta_el_pago / 30)  ← ver §6.4
 ```
 
-**Ejemplo verificado contra el extracto:**
-- Avance $18M a 24 cuotas, en cuota 2:
-  - `saldoInicio` (saldo al cierre del ciclo anterior) = $17.250.000,00
-  - `cuotaCapitalFija` = $750.000,00
-  - `saldoFacturado` = $17.250.000,00 + $750.000,00 = $18.000.000
-  - Interés = $18.000.000 × 0,019110 = **$343.980**
-- Avance $4,8M en cuota 2: interés = $4.800.000 × 0,019110 = $91.728
-- Avance $3,6M (recién desembolsado en ciclo 3) en cuota 1: interés = 0 (cuota 1 difiere)
-- Suma de intereses de avances en ciclo 3 = $435.708
-
-Este monto se suma con los intereses de las diferidas y los intl para producir el cargo "INTERESES CORRIENTES" total que aparece como movimiento agregado en el extracto.
-
-> **Nota técnica:** el modelo "saldo facturado" puede sentirse contraintuitivo (parece que cobran el interés sobre la cuota que apenas se va a pagar). Está validado con extracto Visa Platinum Bancolombia abril 2026: el banco sí calcula así, no como amortización francesa pura.
+> **Descartado: el modelo "saldo facturado"** (`(saldoInicio + cuotaCapital) × tasa`, sin contar días). Se usó un tiempo porque cuadraba en un mes concreto, pero sobreestimaba el interés en los meses siguientes y, contrastado contra tres extractos consecutivos, falla por mucho más que el modelo de saldo diario. El que sí cuadra los tres es el de arriba: lo que parecía "interés sobre la cuota del mes" era en realidad la cuota **anterior** devengando hasta que se pagó.
 
 ### 6.3 Comisiones de avance
 
 - Cada avance trae una `COMISION AVANCE SUCURSA` separada el mismo día del desembolso.
 - Valor observado: $6.840 por avance en Visa Platinum (ciclos 2026).
 - En el motor: `comision` se almacena en la tabla `avances` y se factura una sola vez en la cuota 1 vía `comisionCuota = (i === 0 && comision) ? comision : 0`.
+
+---
+
+### 6.4 La cuota facturada devenga hasta el día del pago (avances y diferidas)
+
+El banco liquida sobre el **saldo diario**: una cuota que se factura en el corte **no deja de devengar el día del corte**, sino el día en que se paga el extracto que la trajo. Ese interés aparece en el cargo agregado `INTERESES CORRIENTES` del **extracto siguiente**.
+
+```
+interés_cuota_facturada = capital_de_la_cuota × tasaMV × (días entre su corte y el pago) / 30
+```
+
+Ejemplo sintético: una cuota de $100.000 facturada el 30 a 2% MV y pagada 12 días después aporta `100.000 × 0,02 × 12/30 = $800` al interés del mes siguiente; pagada a los 16 días aportaría $1.066,67. Pagar antes **sí** baja el interés.
+
+- **Fecha del pago:** la real si el extracto ya se pagó; si no, la fecha límite (§7.5), suponiendo pago a tiempo.
+- **La última cuota de un plan** también devenga hasta el pago, pero ese interés llega en el extracto siguiente, cuando el plan ya no tiene cuotas. El motor lo suma como "cola" del plan (`backend/engine/colaCuotaFacturada.js`), y lo comparten el pago mínimo y la card de intereses del dashboard.
+- **Validación:** contrastado contra tres extractos consecutivos de la Visa Infinite; sin este término el motor se quedaba corto en el orden del 3% del interés del mes, y el término se encogió en la misma proporción en que se acortó el tiempo entre corte y pago.
+- **Alcance:** solo tarjetas Bancolombia (se inyecta por `nuOptsDif`/`avanceOpts`); RappiCard y Nu calculan como siempre.
 
 ---
 
@@ -338,6 +342,21 @@ Donde:
 ### 7.4 Pago Total
 
 `Pago Total = Saldo a fecha de corte`. Es decir, todas las deudas pendientes (compras + saldo de avances + saldo de diferidas + intereses) menos abonos.
+
+---
+
+### 7.5 Fecha límite de pago
+
+**Corte + 17 días calendario, corrida al siguiente día hábil** (sábado, domingo y festivos nacionales de Colombia). No son 17 días hábiles ni "el día 16 del mes siguiente": en un mes de 30 días la regla cae en el 17.
+
+| Corte | + 17 días | Fecha límite del extracto |
+|-------|-----------|---------------------------|
+| 30-abr | 17-may (domingo); 18-may festivo | **19-may** |
+| 30-jul | 16-ago (domingo); 17-ago festivo | **18-ago** |
+| 30-ago | 16-sep (miércoles) | **16-sep** |
+| 30-sep | 17-oct (sábado) | **19-oct** |
+
+Festivos: fijos, los trasladables al lunes (Ley Emiliani) y los que dependen de la Pascua (Jueves y Viernes Santo, Ascensión, Corpus Christi, Sagrado Corazón). Implementado en `backend/helpers/fechaPago.js`. **Solo Visa**: las Mastercard/Amex de Bancolombia conservan el `dia_pago` configurado hasta medirlas con un extracto.
 
 ---
 
