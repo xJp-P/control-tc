@@ -191,6 +191,22 @@ function aplicarMigraciones(db) {
   try { db.prepare('SELECT interes_sellado FROM compras LIMIT 1').get(); }
   catch (e) { db.exec('ALTER TABLE compras ADD COLUMN interes_sellado REAL'); }
 
+  // interes_arrastrado = interes de la cuota 1 que el plan ORIGINAL de una diferida Bancolombia difirio
+  // a su cuota 2 y que, al reprogramar con solo esa cuota facturada ("Sellar y Renacer"), cobra la
+  // cuota 1 de la HIJA. Lo midio un extracto real (sep-2026): la primera cuota del plan nuevo trajo el
+  // interes diferido de la cuota 1 original: el banco NO lo condona. Antes se perdia porque la cuota 2 que lo iba a cobrar dejaba de
+  // existir. NULL en toda diferida normal -> cero regresion (la amortizacion lo ignora).
+  try { db.prepare('SELECT interes_arrastrado FROM diferidas LIMIT 1').get(); }
+  catch (e) { db.exec('ALTER TABLE diferidas ADD COLUMN interes_arrastrado REAL'); }
+
+  // capital_facturado_previo = capital de la ULTIMA cuota que se SELLO al reprogramar (la que el banco
+  // facturo en el corte justo antes del primero de la hija). Esa cuota vive ahora como una compra
+  // sellada suelta, fuera de cualquier plan, pero sigue devengando interes hasta que se paga el
+  // extracto que la trajo: la cuota 1 de la hija lo cobra. Medido en un extracto real (sep-2026): sin
+  // ese tramo el interes del mes no cuadraba. NULL -> cero regresion.
+  try { db.prepare('SELECT capital_facturado_previo FROM diferidas LIMIT 1').get(); }
+  catch (e) { db.exec('ALTER TABLE diferidas ADD COLUMN capital_facturado_previo REAL'); }
+
   // Intereses sobre compras internacionales: se persiste al cerrar el extracto
   // para que el historial mantenga el valor real cobrado por el banco aunque la
   // tasa o las compras cambien después.

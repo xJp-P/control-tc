@@ -380,6 +380,20 @@ module.exports = function(router, ctx) {
     const saldoRestante = Math.round((montoR - sumSellado) * 100) / 100;
     if (!(saldoRestante > 0.01)) return res.status(400).json({ error: 'No queda saldo por reprogramar en esta diferida.' });
 
+    // ARRASTRE del interes diferido de la cuota 1. En una diferida con gracia (Bancolombia) la cuota 1
+    // NO cobra su interes: lo cobra la cuota 2. Si solo se facturo la cuota 1 y se reprograma, esa cuota
+    // 2 deja de existir y el interes se perdia; un extracto real (sep-2026) demostro que el banco lo
+    // cobra igual en la primera cuota del plan nuevo (sin el, el mes no cuadraba por casi un 6%). Con k >= 2 la cuota 2 ya lo cobro y no hay nada que arrastrar; con k = 0 la
+    // hija hereda el arrastre que trajera la propia diferida (si era hija de una reprogramacion anterior).
+    const optsOrig = nuOptsDif(db, d);
+    let interesArrastrado = 0;
+    if (k === 1 && optsOrig && optsOrig.esBancolombia && tabla[0]) interesArrastrado = Number(tabla[0].interesPeriodo) || 0;
+    else if (k === 0 && Number(d.interes_arrastrado) > 0) interesArrastrado = Number(d.interes_arrastrado);
+    interesArrastrado = Math.round(interesArrastrado * 100) / 100;
+    // La ULTIMA cuota sellada se facturo en el corte que es la fecha_compra de la hija y devenga hasta que
+    // se pague ese extracto (medido en sep-2026). La cobra la cuota 1 de la hija.
+    const capitalFacturadoPrevio = k >= 1 ? sealCapitals[k - 1] : (Number(d.capital_facturado_previo) > 0 ? Number(d.capital_facturado_previo) : 0);
+
     // Tasa de la HIJA: por defecto HEREDA la del plan; cobrar_intereses=false la anula (0%); tasa_mv
     // explícita la sobreescribe (ej. la del extracto reprogramado real).
     let tasaHija;
@@ -473,9 +487,10 @@ module.exports = function(router, ctx) {
         //     (num_cuotas=1). Antes remanente==1 se reusaba como compra de CONTADO (diferida_id=NULL); ahora
         //     TODA deuda reprogramada vive en Diferidas con su amortizacion. reprog_total=M (total del plan
         //     nuevo del banco) -> el badge muestra la numeracion del plan "(k+1)/M" (ej. 2/2), no la local 1/1.
-        const rDif = db.prepare(`INSERT INTO diferidas (tarjeta_id, etiqueta, monto, tasa_mv, num_cuotas, fecha_compra, fecha_primer_corte, estado, notas, sin_gracia_cuota1, reprog_total)
-                                 VALUES (?,?,?,?,?,?,?,?,?,1,?)`)
-          .run(c.tarjeta_id, c.descripcion, saldoRestante, tasaHija, remanente, fechaCompraHija, fechaPrimerCorteHija, 'activo', 'Saldo reprogramado (' + d.num_cuotas + '->' + M + ')', M);
+        const rDif = db.prepare(`INSERT INTO diferidas (tarjeta_id, etiqueta, monto, tasa_mv, num_cuotas, fecha_compra, fecha_primer_corte, estado, notas, sin_gracia_cuota1, reprog_total, interes_arrastrado, capital_facturado_previo)
+                                 VALUES (?,?,?,?,?,?,?,?,?,1,?,?,?)`)
+          .run(c.tarjeta_id, c.descripcion, saldoRestante, tasaHija, remanente, fechaCompraHija, fechaPrimerCorteHija, 'activo', 'Saldo reprogramado (' + d.num_cuotas + '->' + M + ')', M,
+               interesArrastrado > 0 ? interesArrastrado : null, capitalFacturadoPrevio > 0 ? capitalFacturadoPrevio : null);
         hijaId = rDif.lastInsertRowid;
         // Re-vincular la compra ORIGINAL al saldo vivo del vigente (conserva id/fecha/created_at).
         // valor_usd/tasa_usd=NULL → el saldo es COP puro; evita que syncData paso 1 lo reviva a
@@ -488,12 +503,14 @@ module.exports = function(router, ctx) {
         // 11.225 / 22.450 / 11.225 -- la doble es la 2 de 3, no la ultima.
         // Solo se activa si el llamador declaro el plan original; sin el, reparto uniforme de siempre.
         let optsHijaFinal = optsHija;
+        if (interesArrastrado > 0) optsHijaFinal = Object.assign({}, optsHijaFinal || {}, { interesArrastrado });
+        if (capitalFacturadoPrevio > 0 && optsHijaFinal && optsHijaFinal.fechaPagoDe) optsHijaFinal = Object.assign({}, optsHijaFinal, { capitalFacturadoPrevio });
         if (comprime && remanente > 0 && cuotaBase > 0) {
           const caps = repartirComprimido(saldoRestante, cuotaBase, remanente);
           const insCap = db.prepare('INSERT INTO capital_cuotas (diferida_id, cuota_num, capital) VALUES (?,?,?)');
           const mapa = {};
           caps.forEach((cap, i) => { insCap.run(hijaId, i + 1, cap); mapa[i + 1] = cap; });
-          optsHijaFinal = Object.assign({}, optsHija || {}, { capitalPorCuota: mapa });
+          optsHijaFinal = Object.assign({}, optsHijaFinal || {}, { capitalPorCuota: mapa });
           capitalPorCuotaAplicado = caps.slice();
         }
         const amortHija = calcularAmortizacionDiferida(saldoRestante, tasaHija, remanente, fechaCompraHija, fechaPrimerCorteHija, null, optsHijaFinal);
@@ -555,6 +572,6 @@ module.exports = function(router, ctx) {
     reprogramar();
 
     logAction('editar', tjNombre(c.tarjeta_id) + 'Reprogramacion de saldo: ' + c.descripcion + ' (' + d.num_cuotas + ' -> ' + M + '; ' + k + ' selladas, saldo ' + Math.round(saldoRestante) + ' a ' + remanente + ')');
-    res.json({ ok: true, k, remanente, saldo_restante: Math.round(saldoRestante), hija_id: hijaId, sellados, ciclo_vigente: V, tasa_hija: tasaHija, bolsillo_liberado: Math.round(bolsilloLiberado), saldo_favor_creado: Math.round(saldoFavorCreado), num_cuotas_original: nOrig, plan_original_deducido: !!nOrigDeducido, capital_por_cuota: capitalPorCuotaAplicado });
+    res.json({ ok: true, k, remanente, saldo_restante: Math.round(saldoRestante), hija_id: hijaId, sellados, ciclo_vigente: V, tasa_hija: tasaHija, bolsillo_liberado: Math.round(bolsilloLiberado), saldo_favor_creado: Math.round(saldoFavorCreado), num_cuotas_original: nOrig, plan_original_deducido: !!nOrigDeducido, capital_por_cuota: capitalPorCuotaAplicado, interes_arrastrado: interesArrastrado });
   });
 };
