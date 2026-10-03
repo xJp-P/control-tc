@@ -8,6 +8,7 @@ const { corteDeCiclo } = require('../../helpers/cortes');
 const { calcularAmortizacionDiferida } = require('../../engine/amortizacion');
 const { nuOptsDif, bloqueoCuotasCicloCerrado } = require('../../helpers/banco');
 const { compraTerceroConReembolso } = require('../../helpers/bolsillo');
+const { tasaDelMesDeCompra } = require('../../helpers/tasas');
 
 module.exports = function(router, ctx) {
   const { db, logAction, tjNombre, validateDiferidaMutable } = ctx;
@@ -66,7 +67,10 @@ module.exports = function(router, ctx) {
     // cobra ~1 mes de interés, no un período inflado (mismo criterio que la hija de reprogramar-saldo).
     const fechaCompra = corteDeCiclo(restarMeses(cicloOrigen, 1), diaCorte);
     const total = Math.round(cap * M);
-    const tasaMv = cobrar_intereses ? ((tj.tasa_mv_diferidas) || 0) : 0;
+    // Tasa del mes de ORIGEN del plan (el banco la fija ahi), no la vigente de la tarjeta.
+    const tasaMv = cobrar_intereses
+      ? (tasaDelMesDeCompra(db, tarjeta_id, cicloOrigen, fechaPrimerCorte, null, null) || (tj.tasa_mv_diferidas) || 0)
+      : 0;
     const notas = 'Diferida omitida (conciliación): detectada en la cuota ' + N + '/' + M + ' del ciclo ' + ciclo + '; origen ' + cicloOrigen + '.';
     const r = db.prepare(`INSERT INTO diferidas (tarjeta_id, etiqueta, monto, tasa_mv, num_cuotas, fecha_compra, fecha_primer_corte, estado, notas)
                           VALUES (?,?,?,?,?,?,?,?,?)`)
@@ -153,10 +157,20 @@ module.exports = function(router, ctx) {
     }
 
     const nuevaFPC = fecha_primer_corte || d.fecha_primer_corte;
-    // reprog_total=NULL: una reprogramacion UNIFORME (N->M) es un plan NUEVO -> el badge debe caer a la
-    // numeracion local i/num_cuotas. Si esta diferida era una HIJA de reprogramacion-de-saldo (reprog_total=M
-    // viejo), dejarlo obsoleto romperia el badge (la formula asume reprog_total - num_cuotas == cuotas selladas).
-    db.prepare('UPDATE diferidas SET num_cuotas=?, fecha_primer_corte=?, reprog_total=NULL WHERE id=?').run(nuevoN, nuevaFPC, req.params.id);
+    // reprog_total: en una diferida normal sigue NULL (badge i/num_cuotas). En una HIJA de "Sellar y
+    // Renacer" las k cuotas selladas no cambian al reprogramar las que quedan, asi que el total del banco
+    // pasa a k + nuevoN y la formula del badge (reprog_total - num_cuotas == selladas) sigue cuadrando. Es
+    // lo que imprime el banco: un plan ya reprogramado que se vuelve a pasar a 2 cuotas en total se
+    // factura "2/2" (medido en sep-2026). Antes se ponia NULL y el badge caia a "1/1".
+    const selladasHija = d.reprog_total ? Math.max(0, d.reprog_total - d.num_cuotas) : 0;
+    const nuevoReprogTotal = d.reprog_total ? selladasHija + nuevoN : null;
+    db.transaction(() => {
+      db.prepare('UPDATE diferidas SET num_cuotas=?, fecha_primer_corte=?, reprog_total=? WHERE id=?').run(nuevoN, nuevaFPC, nuevoReprogTotal, req.params.id);
+      // El calendario de capital IRREGULAR describia el plan viejo; una reprogramacion uniforme lo anula.
+      // Sin borrarlo, su cuota 1 seguia mandando sobre el capital: la cuota unica quedaba con el capital
+      // de la cuota vieja en vez del saldo completo que factura el banco (conciliacion de sep-2026).
+      db.prepare('DELETE FROM capital_cuotas WHERE diferida_id=?').run(req.params.id);
+    })();
 
     // Limpiar bolsillo per-cuota huérfano (cuota_num > nuevoN) de las compras vinculadas y recachear.
     const comprasVinc = db.prepare('SELECT id, notas FROM compras WHERE diferida_id=?').all(req.params.id);

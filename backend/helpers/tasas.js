@@ -103,4 +103,15 @@ function tasaIntlEnFecha(db, tarjetaId, ciclo, fecha, excluirCompraId) {
   return { tasa: null, fuente: null };
 }
 
-module.exports = { tasaIntlEnFecha, tasaDeCompraDelCiclo, tasaDeHistorial, parseDetallesTasa };
+// Tasa MV con la que nace un plan de cuotas: la del MES de la compra, no la vigente de la tarjeta.
+// Bancolombia fija la tasa de una compra a cuotas en su mes de origen (un plan de septiembre-2026 se
+// factura a 2,1593% aunque la tarjeta ya este configurada con la de octubre, 2,1155%). Orden: la tasa que
+// la propia compra guardo al registrarse (tasa_intl, que es la publicada ese mes), luego la del historial o
+// las vecinas del ciclo (tasaIntlEnFecha). null si no hay ninguna: el llamador cae a la de la tarjeta.
+function tasaDelMesDeCompra(db, tarjetaId, ciclo, fecha, tasaPropia, excluirCompraId) {
+  if (Number(tasaPropia) > 0) return Number(tasaPropia);
+  const t = tasaIntlEnFecha(db, tarjetaId, ciclo, fecha, excluirCompraId);
+  return (t && Number(t.tasa) > 0) ? Number(t.tasa) : null;
+}
+
+module.exports = { tasaIntlEnFecha, tasaDeCompraDelCiclo, tasaDeHistorial, parseDetallesTasa, tasaDelMesDeCompra };

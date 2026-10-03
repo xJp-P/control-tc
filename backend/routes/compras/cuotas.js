@@ -8,6 +8,7 @@ const { hoyLocal } = require('../../helpers/dates');
 const { calcularAmortizacionDiferida } = require('../../engine/amortizacion');
 const { nuOpts, nuOptsDif, bloqueoCuotasCicloCerrado } = require('../../helpers/banco');
 const { compraTerceroConReembolso } = require('../../helpers/bolsillo');
+const { tasaDelMesDeCompra } = require('../../helpers/tasas');
 const { getCortesCustomMap, cicloConCorte, corteDeCiclo } = require('../../helpers/cortes');
 
 // Reparte un saldo en `cuotas` conservando la CUOTA BASE del plan original y comprimiendo las
@@ -101,7 +102,12 @@ module.exports = function(router, ctx) {
     const [cy, cm] = String(c.ciclo).split('-').map(Number);
     const lastDayConv = new Date(cy, cm, 0).getDate();
     const fechaPrimerCorte = cy + '-' + String(cm).padStart(2, '0') + '-' + String(Math.min(diaCorte, lastDayConv)).padStart(2, '0');
-    const tasaMv = cobrar_intereses ? ((tj && tj.tasa_mv_diferidas) || 0) : 0;
+    // Tasa del MES de la compra, no la vigente de la tarjeta (conciliacion de sep-2026: un plan de
+    // septiembre nacia con la tasa de octubre ya configurada en la tarjeta, y el banco lo factura con la
+    // de septiembre).
+    const tasaMv = cobrar_intereses
+      ? (tasaDelMesDeCompra(db, c.tarjeta_id, c.ciclo, c.fecha, c.tasa_intl, c.id) || (tj && tj.tasa_mv_diferidas) || 0)
+      : 0;
 
     let difId = null, trasladado = 0;
     const convertir = db.transaction(() => {
