@@ -196,10 +196,50 @@ const R6 = {
       });
     } catch (e) { chk('bolsillo tercero', false, 'excepcion: ' + e.message); }
 
+    // ── 7. Sellar libera el bolsillo PROPIO y respeta el libro del TERCERO ───
+    // Las diferidas sin compra vinculada (RappiCard) guardan su bolsillo en diferidas.monto_bolsillo,
+    // que la card "Bolsillo" suma en TODOS los meses: un apartado de septiembre seguia ahi en octubre,
+    // noviembre... (reportado por el director, oct-2026). Desde v6.7.0 el sellado lo limpia, igual que
+    // el de las compras personales. La otra mitad del aserto es la que impide "arreglarlo" de mas: en una
+    // compra de TERCERO monto_bolsillo es su REEMBOLSO; vaciarlo al sellar no quita nada de la card de
+    // bolsillo y le resucita la deuda en Terceros y en "Me Deben" (medido sobre una copia real: 10 compras
+    // ya reembolsadas volvian como deuda). Todo se SIEMBRA en una tarjeta propia y en 2029.
+    try {
+      await conApp(raiz, '7', async (port, db) => {
+        const T = db.prepare("INSERT INTO tarjetas (nombre, banco, dia_corte, dia_pago, estado) VALUES ('R6 SUELTAS','RappiCard',20,4,'activa')").run().lastInsertRowid;
+        const P = db.prepare("INSERT INTO personas (nombre, color) VALUES ('R6 TERCERO', '#888888')").run().lastInsertRowid;
+        const A = '2029-05', B = '2029-06';
+        const dif = (fpc, bol) => db.prepare("INSERT INTO diferidas (tarjeta_id, etiqueta, monto, tasa_mv, num_cuotas, fecha_compra, fecha_primer_corte, estado, monto_bolsillo) VALUES (?, 'R6 SUELTA', 240000, 0, 24, ?, ?, 'activo', ?)")
+          .run(T, A + '-01', fpc, bol).lastInsertRowid;
+        const enMarcha = dif(A + '-20', 17000);    // factura en el ciclo que se sella
+        const porArrancar = dif(B + '-20', 5000);  // su primera cuota es del ciclo siguiente: no se toca
+        const compra = (persona, bol) => db.prepare("INSERT INTO compras (tarjeta_id, fecha, descripcion, valor_cop, estado, ciclo, persona_id, monto_bolsillo) VALUES (?, ?, 'R6 COMPRA', 30000, 'bolsillo', ?, ?, ?)")
+          .run(T, A + '-10', A, persona, bol).lastInsertRowid;
+        const propia = compra(null, 30000), deTercero = compra(P, 30000);
+        const ext = db.prepare("INSERT INTO extractos (tarjeta_id, ciclo, fecha_corte, fecha_pago, pago_minimo, pago_total, estado, monto_pagado) VALUES (?, ?, ?, ?, 60000, 60000, 'pendiente', 0)")
+          .run(T, A, A + '-20', B + '-04').lastInsertRowid;
+        const antes = (await pedir(port, 'GET', '/api/dashboard?tarjeta_id=' + T + '&ciclo=' + B)).j || {};
+        const r = await pedir(port, 'PUT', '/api/extractos/' + ext + '/pagar', { monto_pagado: 60000, fecha_pagado: B + '-01' });
+        chk('el pago sella el ciclo sembrado', !!(r.j && r.j.pagadoCompleto), 'status=' + r.s + ' ' + r.b.slice(0, 90));
+        const bolDif = id => db.prepare('SELECT monto_bolsillo m FROM diferidas WHERE id=?').get(id).m;
+        const bolCompra = id => db.prepare('SELECT monto_bolsillo m FROM compras WHERE id=?').get(id).m;
+        chk('sellar limpia el bolsillo de la diferida SIN compra que facturaba ese mes', bolDif(enMarcha) === 0,
+          'sigue en ' + bolDif(enMarcha) + ' -> la card "Bolsillo" lo seguira sumando en todos los meses siguientes');
+        chk('no toca el de una diferida suelta que aun no factura', bolDif(porArrancar) === 5000,
+          'quedo en ' + bolDif(porArrancar) + ' (era 5000: ese apartado es para una cuota que todavia no llega)');
+        chk('limpia el de la compra PERSONAL (comportamiento de siempre)', bolCompra(propia) === 0, 'quedo en ' + bolCompra(propia));
+        chk('respeta el REEMBOLSO del tercero', bolCompra(deTercero) === 30000,
+          'quedo en ' + bolCompra(deTercero) + ' -> vaciarlo no quita nada de la card de bolsillo y le resucita la deuda al tercero');
+        const despues = (await pedir(port, 'GET', '/api/dashboard?tarjeta_id=' + T + '&ciclo=' + B)).j || {};
+        chk('la card del mes siguiente deja de sumar el apartado ya usado', antes.saldoBolsilloBruto === 22000 && despues.saldoBolsilloBruto === 5000,
+          'antes ' + antes.saldoBolsilloBruto + ' (esperado 22000) y despues ' + despues.saldoBolsilloBruto + ' (esperado 5000)');
+      });
+    } catch (e) { chk('bolsillo al sellar', false, 'excepcion: ' + e.message); }
+
     // Piso: si el numero de asertos ejecutados cae, el detector dejo de mirar. Se distingue el
     // motivo: quedarse corto POR DATOS (invariantes que no se pudieron montar) no es lo mismo que
     // quedarse corto porque alguien borro asertos, y confundirlos manda a investigar el codigo.
-    const PISO = 9;
+    const PISO = 15;
     if (total < PISO) {
       notas.push('FALLO: solo se ejecutaron ' + total + ' asertos, piso ' + PISO +
         (caducados ? ' -> ' + caducados + ' invariante(s) se quedaron SIN DATOS con que probarse (ver arriba), no es una regresion del codigo'

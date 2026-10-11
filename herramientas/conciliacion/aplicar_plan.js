@@ -1,13 +1,15 @@
 // herramientas/conciliacion/aplicar_plan.js
 // Aplica un plan de conciliacion (JSON) sobre una BD, por la MISMA via que la interfaz: levanta la
 // app real (createApp) en un puerto efimero y llama a sus endpoints, asi que rigen todos los candados
-// y reglas del backend. Solo dos operaciones bajan a SQL, porque la API no las cubre:
+// y reglas del backend. Solo bajan a SQL las operaciones que la API no cubre:
 //   - fijar_calendario: reescribe el calendario de capital de una diferida (capital_cuotas). Ningun
 //     endpoint lo edita, y POST /diferidas/:id/reprogramar cambia num_cuotas SIN limpiar ese mapa (la
 //     cuota vieja seguiria mandando sobre el capital). Lleva sus propios candados: no puede mover el
 //     capital de una cuota que ya cayo en un ciclo pagado, y el plan nuevo debe sumar el monto.
 //   - la tasa de una diferida recien convertida (convertir-a-diferida toma la tasa VIGENTE de la
 //     tarjeta, no la del mes de la compra; el plan puede pedir la tasa_intl que la compra ya guarda).
+//   - limpiar_bolsillo_diferidas_sueltas: re-aplica a un ciclo ya pagado la limpieza que el sellado
+//     hace desde v6.7.0 (por el MISMO helper que usa el sellado, no una copia del SQL).
 // Toda escritura SQL queda en el Historial de la app (logAction), igual que las de los endpoints.
 //
 // Los registros se resuelven por descripcion + fecha (+ valor/estado), NUNCA por id: la BD maestra se
@@ -203,6 +205,19 @@ const OPS = {
     let n = 0;
     for (const t of tjs) { const r = await api(port, 'GET', '/extractos?tarjeta_id=' + t.id); n += Array.isArray(r) ? r.length : 0; }
     return n + ' extractos releidos en ' + tjs.length + ' tarjetas (proyecciones guardadas al dia)';
+  },
+
+  // Aplica a un ciclo YA sellado la limpieza que el sellado hace desde v6.7.0 (helpers/bolsillo.js): el
+  // bolsillo de las diferidas sin compra vinculada que facturaban en ese ciclo. Para los meses que se
+  // sellaron antes de que existiera, cuyo apartado se quedo sumando en la card de los meses siguientes.
+  // Candado: el ciclo tiene que estar pagado (si no, el sellado normal se encargara al pagarlo).
+  async limpiar_bolsillo_diferidas_sueltas(port) {
+    if (!cicloPagado(plan.ciclo)) throw new Error('El ciclo ' + plan.ciclo + ' no esta pagado: el bolsillo aun cumple su funcion.');
+    const { limpiarBolsilloDiferidasSueltas } = require(path.join(ROOT, 'backend', 'helpers', 'bolsillo.js'));
+    const r = limpiarBolsilloDiferidasSueltas(db, T, plan.ciclo);
+    if (!r.filas) return 'ninguna diferida sin compra con bolsillo, se salta';
+    logAction('editar', tjNombre(T) + 'Bolsillo de ' + r.filas + ' diferida(s) sin compra liberado al ciclo pagado ' + plan.ciclo + ': $ ' + r.total.toLocaleString('es-CO'));
+    return r.filas + ' diferida(s), ' + r.total + ' liberados';
   },
 
   async fecha_pago(port, o) {

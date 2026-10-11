@@ -71,6 +71,24 @@ function liberarBolsilloAvance(db, avId) {
   return liberado;
 }
 
+// Diferidas SIN compra vinculada (RappiCard las registra asi): su bolsillo vive en la columna
+// diferidas.monto_bolsillo, sin cuota asociada, y la card "Bolsillo" del dashboard lo suma en TODOS los
+// meses. Es plata propia apartada para la cuota del mes: al sellar ese ciclo cumplio su fin, igual que el
+// bolsillo per-cuota de las diferidas CON compra (que la card deja de contar con el mes pagado) y que el
+// de las compras personales de 1 cuota. Sin limpiarlo, un apartado de septiembre seguia en la card de
+// octubre, noviembre... (reportado por el director, oct-2026). Solo planes que ya facturaban en ese ciclo:
+// un apartado para un plan que todavia no arranca no se toca. Limite conocido: sin cuota asociada no hay
+// forma de distinguir un apartado hecho ANTES de sellar para la cuota del mes SIGUIENTE; se limpia igual
+// y el usuario lo vuelve a apartar. Devuelve { filas, total } (COP) para el log.
+function limpiarBolsilloDiferidasSueltas(db, tarjetaId, ciclo) {
+  const where = `tarjeta_id=? AND estado IN ('activo','liquidado') AND COALESCE(monto_bolsillo,0) <> 0
+    AND fecha_primer_corte IS NOT NULL AND substr(fecha_primer_corte,1,7) <= ?
+    AND id NOT IN (SELECT diferida_id FROM compras WHERE diferida_id IS NOT NULL)`;
+  const antes = db.prepare('SELECT COUNT(*) n, COALESCE(SUM(monto_bolsillo),0) t FROM diferidas WHERE ' + where).get(tarjetaId, ciclo);
+  if (antes.n) db.prepare('UPDATE diferidas SET monto_bolsillo=0 WHERE ' + where).run(tarjetaId, ciclo);
+  return { filas: antes.n, total: Math.round(antes.t) };
+}
+
 // ¿Una compra de TERCERO ya tiene reembolsos registrados? (bolsillo, abono directo, marcada como
 // pagada por el tercero, o bolsillo per-cuota con monto). Se usa para bloquear reprogramar/dividir
 // y no destruir esa contabilidad. Para compras personales (persona_id NULL) devuelve false.
@@ -103,4 +121,4 @@ function cicloYaPagado(db, c) {
   return esUsd ? ext.estado_usd === 'pagado' : ext.estado === 'pagado';
 }
 
-module.exports = { liberarBolsilloDiferida, liberarBolsilloAvance, compraTerceroConReembolso, objetivoBolsilloCop, cicloYaPagado };
+module.exports = { liberarBolsilloDiferida, liberarBolsilloAvance, limpiarBolsilloDiferidasSueltas, compraTerceroConReembolso, objetivoBolsilloCop, cicloYaPagado };

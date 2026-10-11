@@ -8,6 +8,7 @@
 // indefinido -> HTTP 500 al registrar un pago. Lo caza R6, que es el unico detector que
 // ejercita rutas de ESCRITURA; ninguno de los otros catorce lo habria visto.
 const { minimoEfectivo, pagoMinimoOficial } = require('../../helpers/extractoOficial');
+const { limpiarBolsilloDiferidasSueltas } = require('../../helpers/bolsillo');
 // Margen que el pago de un extracto puede desviarse del mínimo estimado y aun así darse por completo.
 // Existe porque el estimado NO puede ser exacto por diseño (el banco cobra interés sobre la cuota ya
 // facturada hasta el día del pago). Calibrado con 10 extractos reales: los desfases medidos van de
@@ -21,7 +22,8 @@ module.exports = function(db, logAction, tjNombre) {
   // Núcleo de registro de pago/abono a un extracto (COP o USD). Lo comparten PUT /:id/pagar y
   // POST /registrar-pago. Recibe la fila del extracto ya resuelta y devuelve el objeto de respuesta
   // (el caller hace res.json). Efecto: acumula monto_pagado; al alcanzar el mínimo sella el extracto
-  // (marca las compras del ciclo como pagadas, limpia bolsillo personal y congela tasa intl).
+  // (marca las compras del ciclo como pagadas, limpia el bolsillo personal -compras y diferidas sin
+  // compra- y congela tasa intl).
   function pagarExtracto(ext, body) {
     const { monto_pagado, fecha_pagado, tipo, moneda } = body || {};
     const monedaPago = (moneda === 'USD') ? 'USD' : 'COP';
@@ -102,6 +104,9 @@ module.exports = function(db, logAction, tjNombre) {
           WHERE tarjeta_id=? AND ciclo=? AND estado='pagado' AND persona_id IS NULL
             AND (valor_usd IS NULL OR valor_usd = 0)`)
           .run(ext.tarjeta_id, ext.ciclo);
+        // Y el de las diferidas sin compra vinculada (RappiCard), que vive en otra columna y la card
+        // sumaba en todos los meses siguientes. Ver helpers/bolsillo.js.
+        limpiarBolsilloDiferidasSueltas(db, ext.tarjeta_id, ext.ciclo);
         // Freeze al cerrar: congela la tasa intl ACTUAL de la tarjeta en las compras internacionales
         // de este ciclo que aún no tengan tasa propia (piso de seguridad contra drift futuro). Si el
         // usuario o la IA ya fijaron una tasa por compra, no se toca.
