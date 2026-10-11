@@ -145,6 +145,8 @@ Esto provoca que cuando un usuario compara la app contra el extracto del banco p
 
 Es una decisión arquitectónica deliberada: el usuario ve en el ciclo presente cuánto le va a costar el interés, antes de que el banco lo muestre como cargo.
 
+**Al conciliar** el cargo `INTERESES CORRIENTES` contra la app, este desfase es una de las causas que hay que nombrar con su cifra (§4.6). No está medido al peso: en los meses contrastados movió el resultado del orden de cientos de pesos.
+
 ### 4.5 Compras intl personales vs compras de terceros
 
 El motor separa la porción de intereses intl que pertenece a compras "Personal" (sin `persona_id`) de las que pertenecen a compras de terceros.
@@ -156,17 +158,21 @@ El motor separa la porción de intereses intl que pertenece a compras "Personal"
 
 En compras divididas (1 compra repartida entre varias personas), el interés se computa por cada hijo individualmente sobre su propio `valor_cop`, lo cual hace que la suma de hijos cuadre con el padre por construcción.
 
-### 4.6 El interés corriente del banco puede exceder la aproximación del motor (revolving internacional)
+### 4.6 La diferencia de interés con el banco: se explica por causa, no con "revolving"
 
-Al conciliar un ciclo en el que hay **saldo internacional arrastrado** de ciclos anteriores, se observó que el cargo agregado "Intereses corrientes" del banco es **ligeramente mayor** que la suma que calcula el motor de:
+Hasta septiembre de 2026 esta sección decía que el cargo `INTERESES CORRIENTES` del banco salía "ligeramente mayor" que el del motor por un *revolving* sobre el saldo internacional arrastrado, y que esa diferencia era ruido aceptable. **Ese diagnóstico se descartó** (Fase B, oct-2026): contrastando tres extractos consecutivos, el hueco no era revolving sino tres causas concretas que el motor no modelaba y que ahora sí modela:
 
-```
-interés_motor ≈ interés_avances + interés_intl_del_ciclo_actual
-```
+1. **La cuota facturada devenga hasta el día del pago** (§6.4), en avances y diferidas.
+2. **La última cuota de un plan** devenga igual y la cobra el extracto siguiente, cuando el plan ya no tiene cuotas ("cola", §6.4).
+3. **Al reprogramar** ("Sellar y Renacer", §5.4), el interés de la cuota 1 que el plan original difería **no se condona**: lo cobra la cuota 1 del plan nuevo.
 
-**Causa:** el banco aplica capitalización diaria sobre el **saldo internacional pendiente acumulado** (revolving), que incluye el remanente de compras internacionales de ciclos previos aún no saldadas por completo. El motor, en cambio, sólo calcula el interés internacional sobre las compras del **ciclo vigente** (proporcional a `días_compra_a_corte / 30`, ver §4.3), por lo que **subestima** el interés corriente cuando existe saldo internacional previo.
+**Cómo se concilia hoy** el cargo del banco contra la app: la app entrega su interés **separado por causa** (periodo, cuota facturada hasta el pago, interés diferido de cuotas 1, arrastre de reprogramaciones, cola e intl de compras 1/1) y la conciliación compara el total con la línea del extracto. Con esas causas, lo que queda es del orden de **decenas de pesos** en un mes limpio. Lo que puede moverlo más, y hay que nombrarlo con su cifra:
 
-**Magnitud típica observada:** una fracción menor (orden de centésimas de punto porcentual del pago mínimo). Se considera **ruido aceptable**: modelar el revolving exacto exigiría el log día-a-día de saldos del banco, que no está disponible del lado del cliente. La conciliación del pago mínimo debe tolerar esta pequeña diferencia por debajo del componente de intereses.
+- **El día real del pago** del extracto anterior: si se pagó en una fecha distinta a la que supuso la app, la parte "cuota facturada" cambia en proporción a los días. Con **abonos parciales** antes de la fecha límite, todavía no está medido si el banco descuenta la cuota facturada el día de cada abono (hipótesis en prueba).
+- **El ciclo del intl de las compras 1/1** (§4.4): la app lo cobra en el mismo ciclo y el banco puede cobrarlo en el siguiente; en los meses medidos el desfase fue del orden de cientos de pesos, en uno y otro sentido, así que no está fijado al peso.
+- **Una fecha corrida** de una compra internacional o una cuota reprogramada que la app aún no refleja.
+
+Una diferencia de **miles o decenas de miles de pesos ya no es ruido**: es una causa que falta (y su severidad se califica por el monto). La palabra "revolving" no explica nada en este modelo.
 
 ---
 

@@ -1,9 +1,10 @@
 // backend/routes/ia/_detectores.js
 //
-// Los dos detectores DETERMINISTAS de la conciliacion, movidos VERBATIM desde ia.js. Son
-// funciones puras de modulo (no dependen del router ni del ctx): reciben la conexion, el texto
-// del extracto y la tarjeta, y devuelven discrepancias. El factory de ia.js las vuelve a colgar
-// de module.exports porque son los unicos exports del backend pensados para pruebas.
+// Los bloques DETERMINISTAS de la conciliacion que no dependen del router ni del ctx: los dos
+// detectores movidos VERBATIM desde ia.js (reversos y pagos omitidos) y, desde la Fase C (oct-2026),
+// lo que el codigo sabe y no se le deja a la IA: la severidad por monto, el cargo de intereses contra
+// el desglose de la app y las fechas corridas junto al corte. El factory de ia.js vuelve a colgar los
+// dos detectores de module.exports porque son exports del backend pensados para pruebas.
 const { parseMontoCol, dice, normalizarDesc } = require('../../services/extracto/motorCruce');
 const { calcExtracto } = require('../../engine/extracto');
 const { addMonths } = require('../../helpers/dates');
@@ -192,4 +193,109 @@ function detectarPagosOmitidos(db, texto, tarjetaId, ciclo, lineasBanco) {
   return [];
 }
 
-module.exports = { detectarReversos, detectarPagosOmitidos };
+// ── SEVERIDAD por monto (escala del director, oct-2026) ─────────────────────────────────────────────
+// La IA calificaba a ojo: en la conciliacion de septiembre-2026 una diferencia de intereses de decenas de
+// miles de pesos salio como BAJA. La severidad de una discrepancia que mueve plata la decide su impacto en el pago
+// minimo, no el modelo: mas de ALTA -> alta; desde MEDIA hasta ALTA -> media; por debajo -> baja.
+const UMBRAL_SEVERIDAD_ALTA = 20000;
+const UMBRAL_SEVERIDAD_MEDIA = 2000;
+function severidadPorMonto(monto) {
+  const a = Math.abs(Number(monto) || 0);
+  if (a > UMBRAL_SEVERIDAD_ALTA) return 'alta';
+  if (a >= UMBRAL_SEVERIDAD_MEDIA) return 'media';
+  return 'baja';
+}
+// Recalcula la severidad de toda discrepancia con impacto en dinero y deja la de la IA en `severidad_ia`
+// cuando no coincide. Las que no mueven el pago minimo (fechas, cifra oficial, reversos) conservan la
+// suya, y un posible falso positivo sigue en baja: ahi la severidad dice "dudoso", no "cuanto".
+function calibrarSeveridad(discrepancias) {
+  let cambiadas = 0;
+  (discrepancias || []).forEach(d => {
+    if (!d || d.posible_falso_positivo) return;
+    const imp = Number(d.impacto_pago_minimo);
+    if (!isFinite(imp) || imp === 0) return;
+    const s = severidadPorMonto(imp);
+    if (d.severidad !== s) { d.severidad_ia = d.severidad || null; d.severidad = s; cambiadas++; }
+  });
+  return cambiadas;
+}
+
+// ── El cargo INTERESES CORRIENTES contra el DESGLOSE de la app ───────────────────────────────────────
+// La cifra del banco la lee la estrategia (parsearIntereses) y la de la app viene con su desglose por
+// causa (services/movimientos.js). Con las dos, la diferencia y su severidad son aritmetica: no se le
+// dejan al modelo, que en septiembre-2026 la atribuyo a "revolving" y la califico baja. Reemplaza el
+// item de intereses que haya armado la IA (el que trae la cifra del banco como valor_extracto y no
+// propone ninguna accion): nunca toca una discrepancia accionable.
+function conciliarIntereses(resu, mv, interesBanco) {
+  const dg = mv && mv.desglose_intereses;
+  if (!(Number(interesBanco) >= 0) || !dg || !Array.isArray(resu.discrepancias)) return null;
+  const fmt = (n) => '$' + Math.round(n).toLocaleString('es-CO');
+  const banco = Math.round(Number(interesBanco) * 100) / 100;
+  const app = Number(dg.total_app) || 0;
+  const impacto = Math.round(app - banco);          // + la app cobra de MAS que el banco, - de MENOS
+  const antes = resu.discrepancias.length;
+  resu.discrepancias = resu.discrepancias.filter(d => {
+    if (!d || d.valor_extracto == null || Math.abs(Number(d.valor_extracto) - banco) > 2) return true;
+    const op = d.accion_sugerida && d.accion_sugerida.operacion;
+    return !!(op && op !== 'ninguna');
+  });
+  const reemplazadas = antes - resu.discrepancias.length;
+  const c = dg.componentes || {};
+  const fp = dg.cuota_facturada;
+  const partes = [
+    ['periodo', c.periodo], ['cuota facturada hasta el pago' + (fp && fp.devenga_hasta ? ' (' + fp.devenga_hasta + ')' : ''), c.cuota_facturada_hasta_pago],
+    ['interes diferido de cuotas 1', c.interes_cuota1_diferido], ['arrastre de reprogramaciones', c.arrastre_reprogramacion],
+    ['ultima cuota de planes terminados', c.cola_ultima_cuota], ['intl de compras 1/1', c.intl_compras_1_1],
+  ].filter(p => Math.round(Number(p[1]) || 0) !== 0).map(p => p[0] + ' ' + fmt(p[1]));
+  let lectura;
+  if (Math.abs(impacto) < UMBRAL_SEVERIDAD_MEDIA) lectura = 'La diferencia (' + fmt(Math.abs(impacto)) + ') esta dentro del margen del modelo.';
+  else {
+    lectura = 'Quedan ' + fmt(Math.abs(impacto)) + (impacto < 0 ? ' que el banco cobra de mas' : ' que la app cobra de mas') + ' sin causa identificada por la app.';
+    const abonos = (fp && Array.isArray(fp.abonos_al_extracto_anterior)) ? fp.abonos_al_extracto_anterior.filter(a => fp.devenga_hasta && a.fecha < fp.devenga_hasta) : [];
+    if (abonos.length && impacto > 0) lectura += ' El extracto anterior tuvo abonos antes del ' + fp.devenga_hasta + ': si el banco descuenta la cuota facturada el dia de cada abono, cobra menos (sin medir todavia).';
+    const desfase = dg.intl_desfase ? Math.abs((dg.intl_desfase.de_este_ciclo_segun_app || 0) - (dg.intl_desfase.del_ciclo_anterior || 0)) : 0;
+    if (desfase > 0 && Math.abs(impacto) <= desfase + 1) lectura += ' Es del tamano del desfase del intl entre ciclos.';
+  }
+  const item = {
+    tipo: 'intereses_corrientes',
+    descripcion: 'El extracto cobra ' + fmt(banco) + ' de intereses corrientes y la app ' + fmt(app) + (partes.length ? ' (' + partes.join(' + ') + ')' : '') + '. ' + lectura,
+    valor_extracto: banco, valor_app: app, impacto_pago_minimo: impacto,
+    severidad: severidadPorMonto(impacto), compra_id: null, desglose: c,
+    accion_sugerida: { operacion: 'ninguna', parametros: {} },
+  };
+  resu.discrepancias.push(item);
+  return { extracto: banco, app, diferencia: Math.round(banco - app), reemplazo_ia: reemplazadas };
+}
+
+// ── Compras con la FECHA CORRIDA junto al corte ─────────────────────────────────────────────────────
+// Que la app y el banco difieran en un dia en la fecha de una compra es inocuo... salvo en el borde
+// del corte, que es justo donde un dia la cambia de mes (hubo un caso real en jul-2026).
+// Se avisa solo ahi, para no llenar la lista de ruido. Informativo: no hay nada que aplicar.
+function detectarFechasCorridas(cruce, fechaCorte) {
+  if (!cruce || !fechaCorte) return [];
+  const dias = (a, b) => Math.round((new Date(b + 'T12:00:00') - new Date(a + 'T12:00:00')) / 86400000);
+  const out = [];
+  (cruce.matches || []).forEach(m => {
+    if (!m || (m.tipo && m.tipo !== 'compra') || !m.fecha_app || m.dia_extracto == null || m.mes_extracto == null) return;
+    const fa = String(m.fecha_app).slice(0, 10);
+    const mesA = Number(fa.slice(5, 7)), mesE = Number(m.mes_extracto);
+    let y = Number(fa.slice(0, 4));
+    if (mesA === 1 && mesE === 12) y -= 1; else if (mesA === 12 && mesE === 1) y += 1;
+    const fe = y + '-' + String(mesE).padStart(2, '0') + '-' + String(Number(m.dia_extracto)).padStart(2, '0');
+    const d = dias(fa, fe);
+    if (!d || Math.abs(d) > 2) return;
+    const aCorte = Math.min(dias(fa, fechaCorte), dias(fe, fechaCorte));
+    if (aCorte < 0 || aCorte > 2) return;
+    out.push({
+      tipo: 'fecha_corrida',
+      descripcion: 'Compra "' + (m.descripcion_app || ('#' + m.compra_id)) + '": la app la tiene el ' + fa + ' y el banco el ' + fe + ', a ' + aCorte
+        + ' dia(s) del corte (' + fechaCorte + '). Hoy cuadra, pero en el borde del corte un dia la cambia de mes: confirma la fecha.',
+      severidad: 'baja', compra_id: m.compra_id, fecha_app: fa, fecha_extracto: fe,
+      accion_sugerida: { operacion: 'ninguna', parametros: {} },
+    });
+  });
+  return out;
+}
+
+module.exports = { detectarReversos, detectarPagosOmitidos, severidadPorMonto, calibrarSeveridad, conciliarIntereses, detectarFechasCorridas,
+  UMBRAL_SEVERIDAD_ALTA, UMBRAL_SEVERIDAD_MEDIA };

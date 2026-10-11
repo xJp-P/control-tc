@@ -12,7 +12,7 @@ const { analizar: analizarIA } = require('../../services/aiProvider');
 const { cruzar, dice, normalizarDesc } = require('../../services/extracto/motorCruce');
 const { getEstrategiaExtracto } = require('../../services/extracto');
 const { construirPrompt } = require('./_prompt');
-const { detectarReversos, detectarPagosOmitidos } = require('./_detectores');
+const { detectarReversos, detectarPagosOmitidos, calibrarSeveridad, conciliarIntereses, detectarFechasCorridas } = require('./_detectores');
 
 module.exports = function(router, ctx) {
   const { db, readIaKey } = ctx;
@@ -521,6 +521,34 @@ module.exports = function(router, ctx) {
           }
         }
       } catch (e) { console.log('[ia/analizar] deteccion de pagos omitidos:', e && e.message); }
+
+      // ── Cargo INTERESES CORRIENTES contra el DESGLOSE de la app (Fase C, oct-2026) ──
+      // Si la estrategia sabe leer la cifra del banco, la diferencia y su severidad son aritmetica y
+      // salen de aqui, no del modelo (reemplaza el item de intereses que haya armado la IA).
+      try {
+        const interesBanco = (estrategia && typeof estrategia.parsearIntereses === 'function') ? estrategia.parsearIntereses(texto_redactado) : null;
+        if (interesBanco != null) {
+          if (!Array.isArray(resu.discrepancias)) resu.discrepancias = [];
+          const ci = conciliarIntereses(resu, mv, interesBanco);
+          if (ci) resu.intereses_conciliados = ci;
+        }
+      } catch (e) { console.log('[ia/analizar] conciliacion de intereses:', e && e.message); }
+
+      // ── Fechas corridas un dia JUNTO AL CORTE (informativo) ──
+      try {
+        const corridas = detectarFechasCorridas(cruce, mv && mv.fecha_corte);
+        if (corridas.length) {
+          if (!Array.isArray(resu.discrepancias)) resu.discrepancias = [];
+          resu.discrepancias.push(...corridas);
+          resu.fechas_corridas_detectadas = corridas.length;
+        }
+      } catch (e) { console.log('[ia/analizar] fechas corridas:', e && e.message); }
+
+      // ── Severidad por MONTO: el ULTIMO paso, para que alcance a todo lo que se agrego arriba ──
+      try {
+        const cambiadas = calibrarSeveridad(resu.discrepancias);
+        if (cambiadas) resu.severidades_recalculadas = cambiadas;
+      } catch (e) { console.log('[ia/analizar] severidad por monto:', e && e.message); }
 
       // Transparencia para la UI: cuántas concilió la capa determinista y qué quedó sin cruzar.
       resu.cruce_determinista = {

@@ -151,7 +151,8 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
       tasa_intl_incorrecta: 'Tasa internacional incorrecta', fecha_pago_movida: 'Fecha de pago movida',
       reverso_detectado: 'Reverso detectado', mover_ciclo: 'Mover de ciclo', diferida_omitida: 'Diferida omitida',
       pago_omitido: 'Pago no registrado', compra_no_facturada: 'Compra que el banco no facturó',
-      pago_minimo_oficial: 'Pago mínimo del extracto', otro: 'Otra discrepancia'
+      pago_minimo_oficial: 'Pago mínimo del extracto', intereses_corrientes: 'Intereses del extracto',
+      fecha_corrida: 'Fecha corrida junto al corte', otro: 'Otra discrepancia'
     };
     if (map[tipo]) return map[tipo];
     const s = String(tipo).replace(/_/g, ' ').trim();

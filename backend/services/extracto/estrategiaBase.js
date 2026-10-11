@@ -17,6 +17,9 @@
 //        detectores deterministas de la conciliación. Solo hace falta cuando el layout del banco no
 //        cabe en la regex del detector, que espera fecha DD/MM/YYYY, concepto y monto en la MISMA
 //        línea: RappiCard imprime la fecha en ISO y parte el movimiento en varios renglones.
+//   parsearIntereses(texto)  -> number | null   // el cargo INTERESES CORRIENTES del extracto (Fase C,
+//        oct-2026). Con él la conciliación compara el interés del banco contra el desglose de la app
+//        de forma determinista; sin él esa comparación se le deja a la IA, como antes.
 //
 // El motor de cruce (motorCruce.cruzar) solo necesita parsearLineas; ia.js usa además reglasPrompt.
 //

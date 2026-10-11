@@ -89,10 +89,26 @@ module.exports = {
     return out;
   },
 
+  // El cargo INTERESES CORRIENTES tal como lo imprime el banco: en el detalle de movimientos
+  //   "30/09/2026 INTERESES CORRIENTES $ 123.456,78 $ 123.456,78 $ 0,00"   (cifras inventadas)
+  // y en el detalle del pago minimo ("+ Intereses corrientes $ ..."). Se exige que TODAS sus apariciones
+  // digan lo mismo: con dos valores distintos no se devuelve nada (mejor no conciliar que conciliar
+  // contra una cifra mal leida). null si el texto no lo trae.
+  parsearIntereses(texto) {
+    const RE = /intereses\s+corrientes\s*\$\s*(\d{1,3}(?:\.\d{3})*(?:,\d{1,2})?)/gi;
+    const vistos = new Set();
+    let m;
+    while ((m = RE.exec(String(texto || ''))) !== null) {
+      const v = parseFloat(m[1].replace(/\./g, '').replace(',', '.'));
+      if (isFinite(v)) vistos.add(v);
+    }
+    return vistos.size === 1 ? [...vistos][0] : null;
+  },
+
   // Reglas que solo aplican a Bancolombia Visa (antes fijas en ia.js como 2c y 4c).
   reglasPrompt() {
     return [
-      '2c. Las cuotas de avances y diferidas que recibes YA incluyen su interes corriente (campos "interes"/"total" de cada una). Por eso los "intereses corrientes" del extracto en su mayoria YA estan reflejados en esas cuotas; NO asumas que la app no los incluye. La diferencia tipica es solo un residual pequeno (revolving / intl no modelado).',
+      '2c. Las cuotas de avances y diferidas que recibes YA incluyen su interes corriente (campos "interes"/"total" de cada una) y "desglose_intereses" dice de donde sale cada peso, incluida la cuota facturada que devenga hasta el pago y la ultima cuota de los planes que terminaron. Los "intereses corrientes" del extracto se concilian contra ese desglose (regla 2j); la app ya no tiene un hueco de "revolving" que explique diferencias grandes.',
       '4c. TASA DE INTERES INTERNACIONAL (puede haber DOS por ciclo): la Tasa de Usura cambia el 1° de cada mes, asi que un ciclo que abarca dos meses calendario puede traer una tasa por mes. En el extracto cada compra intl trae su tasa como porcentaje con coma decimal (ej. "2,0849%"); las nacionales a 1 cuota muestran "0,0000%" (no las uses). Convierte cada tasa a DECIMAL con punto ("2,0849%" -> 0.020849) y devuelve un MAPA por mes en el campo raiz "tasas_intl_extracto", con clave "YYYY-MM" segun el mes calendario de las compras de esa tasa (ej. {"2026-05":0.0191,"2026-06":0.0199}). Si todas las compras intl son del mismo mes, devuelve un solo par. Si no hay compras internacionales con tasa > 0, devuelve {} (vacio). NUNCA uses la EFECTIVA ANUAL (E.A., ~25%); es la mensual. No inventes tasas: la app ademas cruza por la tasa leida en cada linea del PDF.'
     ];
   }
