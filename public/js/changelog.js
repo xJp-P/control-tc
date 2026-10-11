@@ -12,6 +12,16 @@
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '6.7.0': [
+    'EL ASISTENTE YA LEE TODAS LAS REGLAS DEL BANCO. El documento con las reglas de cada tarjeta le llegaba recortado: de la Visa de Bancolombia nunca habia leido como se calcula el pago minimo, cual es la fecha limite ni como genera interes la cuota ya facturada, y de la RappiCard le faltaba mas de la mitad. Ahora lo recibe completo.',
+    'LA DIFERENCIA DE INTERESES CON EL BANCO SE EXPLICA POR CAUSA. El asistente recibe el interes de la aplicacion separado en sus partes: el del saldo, el de la cuota facturada hasta el dia en que pagaste, el que la cuota 1 aplazo, el de las reprogramaciones y el de la ultima cuota de los planes que terminaron. Con eso compara contra el cargo "Intereses corrientes" del extracto, en vez de achacar la diferencia a un "revolving" que no existe.',
+    'Y ESA CUENTA LA HACE LA APLICACION, NO LA IA. En la Visa de Bancolombia la aplicacion lee el cargo de intereses del extracto y te muestra la diferencia exacta con su desglose, en un aviso propio: "Intereses del extracto".',
+    'LA GRAVEDAD DE CADA DIFERENCIA SALE DE SU MONTO: ALTA si mueve el pago minimo en mas de $20.000, MEDIA entre $2.000 y $20.000, y BAJA por debajo. Antes la ponia la IA a ojo, y una diferencia de decenas de miles llego a salir como baja.',
+    'EL ASISTENTE DESCRIBE LOS PLANES CON SUS MONTOS REALES: recibe las cuotas de cada plan reprogramado tal como las cobra el banco, en vez de suponer que son iguales.',
+    'AVISO DE FECHAS EN EL BORDE DEL CORTE. Si la fecha de una compra en la aplicacion difiere en un dia de la del banco y cae junto al dia del corte, el asistente te lo avisa: ahi un solo dia la cambia de mes.',
+    'EL BOLSILLO DE LA RAPPICARD YA NO ARRASTRA DINERO DE MESES PAGADOS. Las cuotas que la RappiCard registra sin una compra guardaban lo apartado en otro lugar, y al pagar el mes no se limpiaba: la tarjeta "Bolsillo" lo seguia sumando en todos los meses siguientes. Ahora, al cerrar el mes, se libera como el de tus compras y el de Bancolombia.',
+    'LO QUE UN RESPONSABLE TE REEMBOLSO NO SE TOCA. En una compra de otra persona, ese dinero es el registro de lo que ya te pago: borrarlo al cerrar el mes la volveria a mostrar como deudora.',
+  ],
   '6.6.0': [
     'LOS INTERESES DE BANCOLOMBIA YA CUADRAN CON LOS DEL BANCO. El banco cobra interes sobre el saldo de cada dia: la cuota que te factura en el corte sigue generando interes hasta el dia en que pagas el extracto, no hasta el corte. La aplicacion no lo contaba y cada mes se quedaba corta en unos puntos del interes. Ahora lo suma con la fecha real de tu pago, o con la fecha limite si todavia no has pagado. Comparado contra tres extractos reales seguidos, el ultimo quedo a unas decenas de pesos del banco.',
     'PAGAR ANTES SI TE AHORRA INTERESES, y la aplicacion ya lo refleja: si pagas el extracto pocos dias despues del corte, el interes del mes siguiente baja.',

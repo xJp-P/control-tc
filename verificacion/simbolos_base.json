@@ -234,7 +234,7 @@
     {
       "nombre": "CHANGELOG",
       "tipo": "const",
-      "lineas": 847,
+      "lineas": 857,
       "pieza": "js/changelog.js"
     },
     {
@@ -390,7 +390,7 @@
     {
       "nombre": "IaResultado",
       "tipo": "function",
-      "lineas": 698,
+      "lineas": 699,
       "pieza": "js/ia.js"
     },
     {
