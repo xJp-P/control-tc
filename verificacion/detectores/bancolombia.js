@@ -213,3 +213,5 @@ const R12 = {
 };
 
 module.exports = [R11, R12];
+module.exports.sembrarTarjeta = sembrarTarjeta;
+module.exports.sembrarDiferida = sembrarDiferida;
