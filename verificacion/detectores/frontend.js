@@ -1205,7 +1205,11 @@ const F10 = {
           if (!r.j || !Array.isArray(r.j)) continue;
           for (const ext of r.j) {
             if (ext.estado === 'pagado') continue;
-            const restante = Math.round((ext.pago_minimo || 0) - (ext.monto_pagado || 0));
+            // Al peso POR ARRIBA, no redondeado: la cifra oficial puede traer centavos ($123.456,10) y el
+            // usuario teclea pesos enteros. Redondeado, el "borde de la banda" quedaba $1,10 por debajo
+            // del minimo y el aserto esperaba un sellado que ni el boton ni el backend prometen (los dos
+            // coinciden en que es abono). Con un minimo entero es el mismo numero de siempre.
+            const restante = Math.ceil(Math.round(((ext.pago_minimo || 0) - (ext.monto_pagado || 0)) * 100) / 100);
             if (!(restante > 5000)) continue;   // margen suficiente para separar los tres montos
             out.push({ id: ext.id, tarjeta_id: t.id, ciclo: ext.ciclo, tiene_oficial: !!ext.tiene_oficial, restante, ext });
           }
