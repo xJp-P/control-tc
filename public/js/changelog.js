@@ -12,6 +12,14 @@
 
 // Changelog por version (se muestra al abrir la app despues de actualizar)
 const CHANGELOG = {
+  '6.8.0': [
+    'EL ASISTENTE DETECTA LAS COMPRAS QUE EL BANCO COBRA AL 0%. El extracto imprime la tasa de cada compra: 0% es una compra nacional y una tasa mayor es internacional. Si la aplicacion la tiene clasificada distinto, el asistente lo avisa con el interes que sobra o que falta y te ofrece corregirla con un clic ("Marcar como nacional" o "Marcar como internacional"), en todas sus partes si la compra esta dividida.',
+    'LA SUGERENCIA DE "COMPRA INTERNACIONAL" APRENDE DE TUS CORRECCIONES. Antes bastaba una compra marcada por error para que el formulario siguiera sugiriendo "internacional" en todas las siguientes de ese comercio. Ahora manda la clasificacion mas reciente: en cuanto corriges una, deja de sugerirse. Tambien se corrigieron las compras de comercios que el banco cobra al 0% y estaban marcadas como internacionales.',
+    'SI EL BANCO CORTA OTRO DIA, EL AVISO DE INTERESES LO TIENE EN CUENTA. Un dia mas o menos de periodo mueve el interes del mes. El aviso "Intereses del extracto" ahora lo descuenta antes de explicar el resto, y ya no lo confunde con otras causas.',
+    'LOS ABONOS PARCIALES SI BAJAN EL INTERES, AUNQUE SOLO EN PARTE. Medido con un extracto real: un abono antes de la fecha limite reduce el interes de la cuota ya facturada, pero no todo. El aviso de intereses ahora lo explica asi. La aplicacion todavia calcula como si pagaras todo el ultimo dia; se ajustara cuando se sepa en que orden aplica el banco cada pago.',
+    'AVISO DE FECHAS EN PLANES NUEVOS. Si la aplicacion y el banco fechan distinto un plan a cuotas que empieza este mes, el asistente te dice cuanto interes mueve esa diferencia el mes siguiente.',
+    'UNA DEVOLUCION QUE YA APLICASTE SALE COMO AVISO MENOR, no como alerta.',
+  ],
   '6.7.0': [
     'EL ASISTENTE YA LEE TODAS LAS REGLAS DEL BANCO. El documento con las reglas de cada tarjeta le llegaba recortado: de la Visa de Bancolombia nunca habia leido como se calcula el pago minimo, cual es la fecha limite ni como genera interes la cuota ya facturada, y de la RappiCard le faltaba mas de la mitad. Ahora lo recibe completo.',
     'LA DIFERENCIA DE INTERESES CON EL BANCO SE EXPLICA POR CAUSA. El asistente recibe el interes de la aplicacion separado en sus partes: el del saldo, el de la cuota facturada hasta el dia en que pagaste, el que la cuota 1 aplazo, el de las reprogramaciones y el de la ultima cuota de los planes que terminaron. Con eso compara contra el cargo "Intereses corrientes" del extracto, en vez de achacar la diferencia a un "revolving" que no existe.',
