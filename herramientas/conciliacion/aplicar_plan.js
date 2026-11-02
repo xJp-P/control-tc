@@ -256,6 +256,19 @@ const OPS = {
     return filas.length + ' compra(s) desmarcadas en los ciclos ' + [...new Set(filas.map(f => f.ciclo))].sort().join(', ');
   },
 
+  // Fija el reembolso registrado de una compra de TERCERO (su bolsillo) por el MISMO endpoint que la
+  // pestaña Terceros (desde_terceros). Para cuando el reembolso quedo por encima del costo real de la
+  // compra (p. ej. incluia un interes intl que el banco nunca cobro) y el director decide no llevar ese
+  // excedente como saldo a favor. El endpoint aplica sus propios candados (tope del costo, cruces).
+  async fijar_reembolso_tercero(port, o) {
+    const c = unaCompra(o.compra);
+    if (c.persona_id == null) throw new Error('La compra no es de un tercero.');
+    if (Math.abs((c.monto_bolsillo || 0) - o.monto) < 0.5) return 'ya era ' + o.monto + ', se salta';
+    await api(port, 'PUT', '/compras/' + c.id + '/bolsillo', { monto_bolsillo: o.monto, desde_terceros: true });
+    const f = db.prepare('SELECT monto_bolsillo FROM compras WHERE id=?').get(c.id);
+    return 'reembolso ' + c.monto_bolsillo + ' -> ' + f.monto_bolsillo;
+  },
+
   async pago_oficial(port, o) {
     const r = await api(port, 'POST', '/extractos/pago-oficial', { tarjeta_id: T, ciclo: plan.ciclo, pago_minimo: o.pago_minimo, pago_total: o.pago_total, fuente: 'conciliacion' });
     return 'minimo ' + r.pago_minimo + ', total ' + r.pago_total;
