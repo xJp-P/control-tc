@@ -242,6 +242,17 @@ const R13 = {
         chk('y el plan nuevo suelto con 2 dias de diferencia', planes.some(d => Number(d.compra_id) === Number(compraIrr)), 'sin aviso para R13 IRREGULAR');
         chk('una hija de reprogramacion no avisa aunque su fecha difiera (par)', !planes.some(d => /HIJA/.test(d.descripcion || '')), 'aviso la hija');
 
+        // (J) El asistente que sugiere "internacional" al registrar: manda la ULTIMA clasificacion del
+        // comercio. Una marca vieja corregida a nacional deja de sugerirse; una nacional vieja que el banco
+        // empezo a cobrar como intl (la mas reciente marcada) si se sugiere.
+        const sembrarSug = (desc, fecha, intl) => db.prepare("INSERT INTO compras (tarjeta_id, fecha, descripcion, valor_cop, estado, ciclo, es_internacional) VALUES (?, ?, ?, 1000, 'pendiente', ?, ?)").run(T, fecha, desc, C, intl ? 1 : 0);
+        sembrarSug('R13 CORREGIDA A NACIONAL', '2029-02-01', true); sembrarSug('R13 CORREGIDA A NACIONAL', '2029-02-20', false);
+        sembrarSug('R13 AHORA INTERNACIONAL', '2029-02-01', false); sembrarSug('R13 AHORA INTERNACIONAL', '2029-02-20', true);
+        const sug = ((await pedir(port, 'GET', '/api/compras/intl-descripciones')).j) || [];
+        chk('el asistente deja de sugerir intl a un comercio cuya ultima compra se corrigio a nacional', Array.isArray(sug) && sug.indexOf('r13 corregida a nacional') === -1,
+          'lo sigue sugiriendo -> una marca equivocada se propaga a todas las compras siguientes');
+        chk('y sugiere el que ahora el banco cobra como internacional (par)', Array.isArray(sug) && sug.indexOf('r13 ahora internacional') !== -1, 'no lo sugiere');
+
         // (I) Reverso ya aplicado: aviso BAJA; el que falta aplicar sigue ALTA.
         const rev = (R.discrepancias || []).filter(d => d.tipo === 'reverso_detectado');
         const rA = rev.find(d => Number(d.compra_id) === Number(reversada)), rB = rev.find(d => Number(d.compra_id) === Number(porReversar));
@@ -250,7 +261,7 @@ const R13 = {
       });
     } catch (e) { chk('escenario sembrado', false, 'excepcion: ' + e.message); }
 
-    const PISO = 60;
+    const PISO = 62;
     if (total < PISO) notas.push('FALLO: solo se ejecutaron ' + total + ' asertos, piso ' + PISO + ' -> el detector dejo de mirar');
     cifras.asertos = total;
     return resultado(ok === total && total >= PISO, cifras, notas);
