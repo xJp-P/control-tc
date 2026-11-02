@@ -5,7 +5,7 @@
 // lo que el codigo sabe y no se le deja a la IA: la severidad por monto, el cargo de intereses contra
 // el desglose de la app y las fechas corridas junto al corte. El factory de ia.js vuelve a colgar los
 // dos detectores de module.exports porque son exports del backend pensados para pruebas.
-const { parseMontoCol, dice, normalizarDesc } = require('../../services/extracto/motorCruce');
+const { parseMontoCol, dice, normalizarDesc, cruzar } = require('../../services/extracto/motorCruce');
 const { calcExtracto } = require('../../engine/extracto');
 const { addMonths } = require('../../helpers/dates');
 
@@ -82,7 +82,8 @@ function detectarReversos(db, texto, tarjetaId, lineasBanco) {
       valor_extracto: -Math.round(cand.monto),
       valor_app: Math.round(c.valor_cop),
       compra_id: c.id,
-      severidad: 'alta',
+      // Ya aplicado no hay nada que hacer: es un aviso, no una alarma (en oct-2026 salia ALTA).
+      severidad: c.reversada ? 'baja' : 'alta',
       ya_aplicado: !!c.reversada,
       reverso: {
         concepto_extracto: cand.concepto, monto: Math.round(cand.monto),
@@ -226,7 +227,11 @@ function calibrarSeveridad(discrepancias) {
 // dejan al modelo, que en septiembre-2026 la atribuyo a "revolving" y la califico baja. Reemplaza el
 // item de intereses que haya armado la IA (el que trae la cifra del banco como valor_extracto y no
 // propone ninguna accion): nunca toca una discrepancia accionable.
-function conciliarIntereses(resu, mv, interesBanco) {
+// `fechaCorteBanco` (opcional): el corte que imprime el extracto. Si difiere del de la app, el periodo
+// del banco tiene otros dias y eso se descuenta ANTES de leer el resto: en oct-2026 el banco corto el 31
+// (un dia mas de periodo) y, sin ese descuento, la diferencia que quedaba "parecia" el desfase del intl
+// por coincidencia de tamano, cuando era el abono parcial del mes anterior.
+function conciliarIntereses(resu, mv, interesBanco, fechaCorteBanco) {
   const dg = mv && mv.desglose_intereses;
   if (!(Number(interesBanco) >= 0) || !dg || !Array.isArray(resu.discrepancias)) return null;
   const fmt = (n) => '$' + Math.round(n).toLocaleString('es-CO');
@@ -247,14 +252,34 @@ function conciliarIntereses(resu, mv, interesBanco) {
     ['interes diferido de cuotas 1', c.interes_cuota1_diferido], ['arrastre de reprogramaciones', c.arrastre_reprogramacion],
     ['ultima cuota de planes terminados', c.cola_ultima_cuota], ['intl de compras 1/1', c.intl_compras_1_1],
   ].filter(p => Math.round(Number(p[1]) || 0) !== 0).map(p => p[0] + ' ' + fmt(p[1]));
-  let lectura;
-  if (Math.abs(impacto) < UMBRAL_SEVERIDAD_MEDIA) lectura = 'La diferencia (' + fmt(Math.abs(impacto)) + ') esta dentro del margen del modelo.';
+  // 1) Dias de periodo: si el banco corto otro dia, su periodo tiene otros dias que la app no cuenta.
+  const dias = (a, b) => Math.round((new Date(b + 'T12:00:00') - new Date(a + 'T12:00:00')) / 86400000);
+  let ajusteCorte = 0, textoCorte = '';
+  if (fechaCorteBanco && dg.corte && dg.corte_anterior && fechaCorteBanco !== dg.corte) {
+    const diasApp = dias(dg.corte_anterior, dg.corte), extra = dias(dg.corte, fechaCorteBanco);
+    if (diasApp > 0 && extra && Math.abs(extra) <= 5) {
+      ajusteCorte = (Number(c.periodo) || 0) * extra / diasApp;
+      textoCorte = 'El banco corto el ' + fechaCorteBanco + ' (' + Math.abs(extra) + ' dia(s) ' + (extra > 0 ? 'despues' : 'antes') + ' que la app): eso '
+        + (extra > 0 ? 'suma' : 'resta') + ' unos ' + fmt(Math.abs(ajusteCorte)) + ' de periodo que la app no cuenta. ';
+    }
+  }
+  // 2) Lo que queda tras ese descuento: banco - (app + ajuste). Negativo = el banco cobro MENOS.
+  const resto = Math.round(banco - app - ajusteCorte);
+  let lectura = textoCorte;
+  if (Math.abs(resto) < UMBRAL_SEVERIDAD_MEDIA) lectura += (textoCorte ? 'Descontado eso, la' : 'La') + ' diferencia (' + fmt(Math.abs(resto)) + ') esta dentro del margen del modelo.';
   else {
-    lectura = 'Quedan ' + fmt(Math.abs(impacto)) + (impacto < 0 ? ' que el banco cobra de mas' : ' que la app cobra de mas') + ' sin causa identificada por la app.';
     const abonos = (fp && Array.isArray(fp.abonos_al_extracto_anterior)) ? fp.abonos_al_extracto_anterior.filter(a => fp.devenga_hasta && a.fecha < fp.devenga_hasta) : [];
-    if (abonos.length && impacto > 0) lectura += ' El extracto anterior tuvo abonos antes del ' + fp.devenga_hasta + ': si el banco descuenta la cuota facturada el dia de cada abono, cobra menos (sin medir todavia).';
     const desfase = dg.intl_desfase ? Math.abs((dg.intl_desfase.de_este_ciclo_segun_app || 0) - (dg.intl_desfase.del_ciclo_anterior || 0)) : 0;
-    if (desfase > 0 && Math.abs(impacto) <= desfase + 1) lectura += ' Es del tamano del desfase del intl entre ciclos.';
+    const base = (textoCorte ? 'Descontado eso, quedan ' : 'Quedan ') + fmt(Math.abs(resto)) + (resto > 0 ? ' que el banco cobra de mas' : ' que el banco cobra de menos');
+    if (abonos.length && resto < 0) {
+      // Medido en oct-2026 (investigacion/interes_bancolombia/veredicto_interes.js): un abono parcial
+      // SI apaga parte de la cuota facturada, pero no toda; el orden exacto aun no se identifica.
+      lectura += base + ': el extracto anterior tuvo abonos antes del ' + fp.devenga_hasta + ', y el banco descuenta parte de la cuota facturada con cada abono (medido, la app aun no lo modela).';
+    } else if (desfase > 0 && Math.abs(resto) <= desfase + 1) {
+      lectura += base + ': es del tamano del desfase del intl entre ciclos.';
+    } else {
+      lectura += base + ' sin causa identificada por la app.';
+    }
   }
   const item = {
     tipo: 'intereses_corrientes',
@@ -264,7 +289,7 @@ function conciliarIntereses(resu, mv, interesBanco) {
     accion_sugerida: { operacion: 'ninguna', parametros: {} },
   };
   resu.discrepancias.push(item);
-  return { extracto: banco, app, diferencia: Math.round(banco - app), reemplazo_ia: reemplazadas };
+  return { extracto: banco, app, diferencia: Math.round(banco - app), ajuste_corte: Math.round(ajusteCorte), resto, reemplazo_ia: reemplazadas };
 }
 
 // ── Compras con la FECHA CORRIDA junto al corte ─────────────────────────────────────────────────────
@@ -297,5 +322,152 @@ function detectarFechasCorridas(cruce, fechaCorte) {
   return out;
 }
 
+// ── Segundo cruce, sobre lo que el primero dejo SIN PAREJA ──────────────────────────────────────────
+// El cruce principal empareja compra a compra con ±1 dia, y se le escapan dos cosas que el banco
+// imprime en UNA linea (conciliacion de oct-2026): (a) una compra DIVIDIDA entre personas (dos partes
+// en la app contra una sola linea del banco por la suma), y (b) la cuota de un plan cuya fecha la app
+// tiene corrida mas de un dia (un plan nuevo a 3 cuotas, ademas dividido, con tres dias de diferencia).
+// Aqui se vuelven a cruzar las lineas sobrantes contra las compras divididas SUMADAS por grupo (±1
+// dia) y contra los planes NUEVOS del ciclo, sumados por grupo si son divididos (±7 dias: la fecha del
+// plan es justo lo que se quiere comparar). OJO con el monto de un plan: en su linea el banco imprime
+// primero el VALOR de la compra y despues la cuota, y el parser se queda con el mayor; por eso el plan
+// se compara por su valor total (`planes`: Map compra_id -> { monto }), no por el capital de la cuota.
+// Cada match trae `partes` (los compra_id reales).
+function cruzarSobrantes(cruce, mv, planes) {
+  const lineas = (cruce && cruce.lineasSinMatch) || [];
+  if (!lineas.length || !mv) return { matches: [] };
+  const yaCruzadas = new Set(((cruce && cruce.matches) || []).map(m => String(m.compra_id)));
+  const porClave = new Map();
+  const sumar = (clave, base, monto, id) => {
+    const g = porClave.get(clave) || Object.assign({ partes: [], monto: 0 }, base);
+    g.monto += Number(monto) || 0; g.partes.push(id); porClave.set(clave, g);
+  };
+  (mv.compras || []).forEach(c => {
+    if (c && c.grupo_id && !yaCruzadas.has(String(c.id))) sumar('c:' + c.grupo_id, { id: 'grupo:' + c.grupo_id, tipo: 'compra', descripcion: c.descripcion, fecha: c.fecha }, c.total, c.id);
+  });
+  const sueltos = [];
+  (mv.diferidas || []).forEach(d => {
+    const id = d && d.compra_id;
+    const plan = id != null && planes ? planes.get(String(id)) : null;
+    if (!plan || yaCruzadas.has(String(id))) return;
+    if (d.grupo_id) sumar('d:' + d.grupo_id, { id: 'plan:' + d.grupo_id, tipo: 'diferida', descripcion: d.etiqueta, fecha: d.fecha }, plan.monto, id);
+    else sueltos.push({ id: 'plan:' + id, tipo: 'diferida', descripcion: d.etiqueta, fecha: d.fecha, monto: Number(plan.monto) || 0, partes: [id] });
+  });
+  const todos = [...porClave.values(), ...sueltos];
+  const comoCompra = g => ({ id: g.id, descripcion: g.descripcion, fecha: g.fecha, total: Math.round(g.monto * 100) / 100 });
+  const estrategia = { parsearLineas: () => lineas };
+  const matches = [];
+  const correr = (lista, tolDias) => {
+    if (!lista.length) return;
+    const r = cruzar('', { COP: lista.map(comoCompra) }, estrategia, { tolDias });
+    const porId = new Map(lista.map(g => [g.id, g]));
+    (r.matches || []).forEach(m => { const g = porId.get(m.compra_id); if (g) matches.push(Object.assign({}, m, { tipo: g.tipo, partes: g.partes, fecha_app: g.fecha })); });
+  };
+  correr(todos.filter(g => g.tipo === 'compra'), 1);
+  correr(todos.filter(g => g.tipo === 'diferida'), 7);
+  return { matches };
+}
+
+// Fecha (YYYY-MM-DD) de una linea del extracto, tomando el año de la fecha de la app (con el salto de año).
+function fechaDeLinea(m) {
+  const fa = String(m.fecha_app || '').slice(0, 10);
+  if (!fa || m.dia_extracto == null || m.mes_extracto == null) return null;
+  const mesA = Number(fa.slice(5, 7)), mesE = Number(m.mes_extracto);
+  let y = Number(fa.slice(0, 4));
+  if (mesA === 1 && mesE === 12) y -= 1; else if (mesA === 12 && mesE === 1) y += 1;
+  return y + '-' + String(mesE).padStart(2, '0') + '-' + String(Number(m.dia_extracto)).padStart(2, '0');
+}
+
+// ── Compras que el banco cobra al 0% y la app tiene como INTERNACIONALES (y al reves) ───────────────
+// El banco imprime la tasa en cada linea: 0,0000% es una compra nacional, una tasa > 0 es una compra
+// internacional que acumula interes. Si la app las clasifica distinto, el interes intl de la app esta
+// mal y ningun modelo lo arregla: en oct-2026 tres compras de comercios locales (una dividida) le
+// sumaban miles de pesos de interes que el banco no cobra, y la IA no lo vio.
+// Solo para tarjetas donde la bandera intl cobra interes (aplicaIntInternacional). Propone una accion
+// (marcar_nacional / marcar_internacional) que actua sobre TODAS las partes de una compra dividida.
+function detectarClasificacionIntl(cruce, sobrantes, mv, fechaCorte) {
+  const fmt = (n) => '$' + Math.round(n).toLocaleString('es-CO');
+  const porId = new Map(((mv && mv.compras) || []).map(c => [String(c.id), c]));
+  const casos = [];
+  ((cruce && cruce.matches) || []).forEach(m => {
+    if ((m.tipo || 'compra') !== 'compra') return;
+    const c = porId.get(String(m.compra_id));
+    if (c) casos.push({ m, partes: [c] });
+  });
+  ((sobrantes && sobrantes.matches) || []).forEach(m => {
+    if (m.tipo !== 'compra') return;
+    const partes = (m.partes || []).map(id => porId.get(String(id))).filter(Boolean);
+    if (partes.length) casos.push({ m, partes });
+  });
+  const out = [];
+  casos.forEach(({ m, partes }) => {
+    const bancoIntl = Number(m.tasa_extracto) > 0 ? true : (m.tasa_cero_extracto ? false : null);
+    if (bancoIntl == null) return;                       // la linea no dice nada de la tasa
+    const appIntl = partes.some(p => p.es_internacional);
+    if (appIntl === bancoIntl) return;
+    const ids = partes.map(p => p.id);
+    const valor = partes.reduce((s, p) => s + (Number(p.total) || 0), 0);
+    const desc = partes[0].descripcion;
+    const dividida = partes.length > 1 ? ' Es una compra dividida: se corrigen sus ' + partes.length + ' partes.' : '';
+    if (!bancoIntl) {
+      const interes = partes.reduce((s, p) => s + (Number(p.interes_intl) || 0), 0);
+      out.push({
+        tipo: 'clasificacion_incorrecta',
+        descripcion: 'El banco cobra "' + desc + '" al 0%: es nacional. La app la tiene como internacional y le suma ' + fmt(interes) + ' de interes que el banco no cobra.' + dividida,
+        valor_extracto: Math.round(m.monto), valor_app: Math.round(valor), compra_id: ids[0], compra_ids: ids,
+        impacto_pago_minimo: Math.round(interes), severidad: 'media', determinista: true,
+        accion_sugerida: { operacion: 'marcar_nacional', parametros: { compra_ids: ids } },
+      });
+    } else {
+      const tasa = Number(m.tasa_extracto);
+      const dias = p => fechaCorte ? Math.max(0, Math.round((new Date(fechaCorte + 'T12:00:00') - new Date(String(p.fecha).slice(0, 10) + 'T12:00:00')) / 86400000)) : 0;
+      const falta = partes.reduce((s, p) => s + (Number(p.total) || 0) * tasa * dias(p) / 30, 0);
+      out.push({
+        tipo: 'clasificacion_incorrecta',
+        descripcion: 'El banco cobra "' + desc + '" con ' + (tasa * 100).toFixed(4).replace('.', ',') + '% mensual: es internacional y acumula interes. La app la tiene como nacional y le faltan unos ' + fmt(falta) + '.' + dividida,
+        valor_extracto: Math.round(m.monto), valor_app: Math.round(valor), compra_id: ids[0], compra_ids: ids,
+        impacto_pago_minimo: -Math.round(falta), severidad: 'media', determinista: true,
+        accion_sugerida: { operacion: 'marcar_internacional', parametros: { compra_ids: ids, tasa_intl: tasa } },
+      });
+    }
+  });
+  return out;
+}
+
+// ── La fecha de un plan NUEVO que la app y el banco tienen distinta ─────────────────────────────────
+// Con la gracia de Bancolombia, el interes de la cuota 1 corre desde la fecha del plan hasta el primer
+// corte y lo cobra la cuota 2: cada dia de diferencia es plata del mes siguiente (en un plan grande de
+// oct-2026, tres dias eran miles de pesos). Si el banco cuenta desde la compra o desde la
+// financiacion NO esta medido todavia (directriz 2), asi que es un AVISO con la cifra, no una accion.
+// `planesNuevos`: Map compra_id -> { monto, tasa } de los planes cuyo primer corte cae en este ciclo.
+function detectarFechasPlanes(cruce, sobrantes, planesNuevos) {
+  const fmt = (n) => '$' + Math.round(n).toLocaleString('es-CO');
+  if (!planesNuevos || !planesNuevos.size) return [];
+  const dias = (a, b) => Math.round((new Date(b + 'T12:00:00') - new Date(a + 'T12:00:00')) / 86400000);
+  const candidatos = [];
+  ((cruce && cruce.matches) || []).forEach(m => { if (m.tipo === 'diferida') candidatos.push({ m, partes: [m.compra_id] }); });
+  ((sobrantes && sobrantes.matches) || []).forEach(m => { if (m.tipo === 'diferida') candidatos.push({ m, partes: m.partes || [] }); });
+  const out = [];
+  candidatos.forEach(({ m, partes }) => {
+    const nuevos = partes.map(id => planesNuevos.get(String(id))).filter(Boolean);
+    if (!nuevos.length) return;
+    const fa = String(m.fecha_app || '').slice(0, 10), fe = fechaDeLinea(m);
+    if (!fa || !fe) return;
+    const d = dias(fa, fe);
+    if (!d) return;
+    const efecto = nuevos.reduce((s, p) => s + p.monto * p.tasa * Math.abs(d) / 30, 0);
+    out.push({
+      tipo: 'fecha_corrida',
+      descripcion: 'Plan nuevo "' + (m.descripcion_app || m.descripcion_extracto || '') + '": la app lo fecha el ' + fa + ' y el banco el ' + fe + ' (' + Math.abs(d) + ' dia(s) '
+        + (d > 0 ? 'despues' : 'antes') + '). El interes de su cuota 1 cuenta desde esa fecha y lo cobra la cuota 2: son unos ' + fmt(efecto) + ' el mes que viene. '
+        + 'Aun no esta medido si el banco cuenta desde la compra o desde la financiacion.',
+      severidad: severidadPorMonto(efecto), compra_id: partes[0], compra_ids: partes, fecha_app: fa, fecha_extracto: fe,
+      efecto_mes_siguiente: Math.round(efecto) * (d > 0 ? -1 : 1),
+      accion_sugerida: { operacion: 'ninguna', parametros: {} },
+    });
+  });
+  return out;
+}
+
 module.exports = { detectarReversos, detectarPagosOmitidos, severidadPorMonto, calibrarSeveridad, conciliarIntereses, detectarFechasCorridas,
-  UMBRAL_SEVERIDAD_ALTA, UMBRAL_SEVERIDAD_MEDIA };
+  cruzarSobrantes, detectarClasificacionIntl, detectarFechasPlanes, UMBRAL_SEVERIDAD_ALTA, UMBRAL_SEVERIDAD_MEDIA };

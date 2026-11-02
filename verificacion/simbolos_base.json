@@ -390,7 +390,7 @@
     {
       "nombre": "IaResultado",
       "tipo": "function",
-      "lineas": 699,
+      "lineas": 715,
       "pieza": "js/ia.js"
     },
     {

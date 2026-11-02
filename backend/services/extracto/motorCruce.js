@@ -95,10 +95,11 @@ function parsearTabular(texto, opts) {
     // 1° de cada mes, así que un ciclo que abarca dos meses puede traer tasas distintas por compra;
     // leerla de la línea es la fuente determinista exacta. Las compras 1/1 nacionales muestran
     // "0,0000%" → sin tasa intl. Decimal mensual: "1,9110%" -> 0.01911.
-    let tasaLinea = null;
+    let tasaLinea = null, hayTasa = false;
     const reTasaLinea = /\b(\d{1,2})[.,](\d{1,4})\s*%/g;
     let tmTasa;
     while ((tmTasa = reTasaLinea.exec(limpia)) !== null) {
+      hayTasa = true;
       const v = parseFloat(tmTasa[1] + '.' + tmTasa[2]) / 100;
       if (v > 0) { tasaLinea = Math.round(v * 1e6) / 1e6; break; }
     }
@@ -123,7 +124,9 @@ function parsearTabular(texto, opts) {
     if (!/[A-Za-zÁÉÍÓÚÑáéíóúñ]{3,}/.test(desc)) return;
     // monto SIN redondear: el cruce compara con tolerancia por moneda y el USD necesita decimales.
     // `tasa`: tasa MV mensual capturada de la línea (decimal) o null (fuente del split del día 1°).
-    out.push({ dia, mes, descripcion: desc, monto: monto, tasa: tasaLinea, raw: linea });
+    // `tasa_cero`: la línea SÍ imprime tasa y es 0% — el banco la cobra como NACIONAL. Distinto de no
+    // traer tasa (layout sin esa columna): ahí no se sabe y no se concluye nada.
+    out.push({ dia, mes, descripcion: desc, monto: monto, tasa: tasaLinea, tasa_cero: hayTasa && tasaLinea == null, raw: linea });
   });
   return out;
 }
@@ -198,6 +201,7 @@ function cruzar(texto, comprasInput, estrategia, opts) {
       fecha_app: C.fecha,
       dia_extracto: L.dia, mes_extracto: L.mes,
       tasa_extracto: (L.tasa != null ? L.tasa : null), // tasa MV de la línea del extracto (split día 1°)
+      tasa_cero_extracto: !!L.tasa_cero,               // la línea imprime 0%: el banco no la cobra como intl
       score: Math.round(p.score * 100) / 100
     });
   });
@@ -211,7 +215,9 @@ function cruzar(texto, comprasInput, estrategia, opts) {
       comprasSinMatch.push({ compra_id: c.id, tipo: c.tipo || 'compra', moneda, descripcion: c.descripcion, total: moneda === 'USD' ? Math.round(m * 100) / 100 : Math.round(m), fecha: c.fecha });
     });
   });
-  const lineasSinMatch = lineas.filter((_, i) => !usadosL[i]).map(L => ({ descripcion: L.descripcion, monto: L.monto, dia: L.dia, mes: L.mes, moneda: L.moneda || 'COP' }));
+  // tasa/tasa_cero viajan también en las sobrantes: el cruce de compras DIVIDIDAS (analizar.js) las vuelve
+  // a cruzar contra la suma de las partes y necesita saber con qué tasa las imprimió el banco.
+  const lineasSinMatch = lineas.filter((_, i) => !usadosL[i]).map(L => ({ descripcion: L.descripcion, monto: L.monto, dia: L.dia, mes: L.mes, moneda: L.moneda || 'COP', tasa: L.tasa != null ? L.tasa : null, tasa_cero: !!L.tasa_cero }));
   const totalCompras = Object.keys(grupos).reduce((s, mon) => s + comprasDe(mon).length, 0);
 
   return {

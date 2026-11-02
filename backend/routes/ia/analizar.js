@@ -12,7 +12,9 @@ const { analizar: analizarIA } = require('../../services/aiProvider');
 const { cruzar, dice, normalizarDesc } = require('../../services/extracto/motorCruce');
 const { getEstrategiaExtracto } = require('../../services/extracto');
 const { construirPrompt } = require('./_prompt');
-const { detectarReversos, detectarPagosOmitidos, calibrarSeveridad, conciliarIntereses, detectarFechasCorridas } = require('./_detectores');
+const { detectarReversos, detectarPagosOmitidos, calibrarSeveridad, conciliarIntereses, detectarFechasCorridas,
+  cruzarSobrantes, detectarClasificacionIntl, detectarFechasPlanes } = require('./_detectores');
+const { aplicaIntInternacional, esBancolombiaBank } = require('../../helpers/banco');
 
 module.exports = function(router, ctx) {
   const { db, readIaKey } = ctx;
@@ -529,14 +531,49 @@ module.exports = function(router, ctx) {
         const interesBanco = (estrategia && typeof estrategia.parsearIntereses === 'function') ? estrategia.parsearIntereses(texto_redactado) : null;
         if (interesBanco != null) {
           if (!Array.isArray(resu.discrepancias)) resu.discrepancias = [];
-          const ci = conciliarIntereses(resu, mv, interesBanco);
+          // Con el corte que lee la IA del extracto, el item descuenta los dias de periodo de mas o de menos.
+          const fcBanco = (resu.fecha_corte_extracto && /^\d{4}-\d{2}-\d{2}$/.test(resu.fecha_corte_extracto)) ? resu.fecha_corte_extracto : null;
+          const ci = conciliarIntereses(resu, mv, interesBanco, fcBanco);
           if (ci) resu.intereses_conciliados = ci;
         }
       } catch (e) { console.log('[ia/analizar] conciliacion de intereses:', e && e.message); }
 
-      // ── Fechas corridas un dia JUNTO AL CORTE (informativo) ──
+      // Segundo cruce sobre lo que el primero dejo sin pareja: compras DIVIDIDAS sumadas por grupo y
+      // cuotas de planes con la fecha corrida. Lo usan los dos bloques siguientes.
+      // Planes NUEVOS del ciclo (su primer corte cae aqui) con su valor total: Bancolombia difiere el interes
+      // de la cuota 1 a la 2, asi que la fecha del plan mueve plata del mes siguiente. Sin las hijas de
+      // "Sellar y Renacer": su fecha es el corte de la reprogramacion a proposito, no la de la compra.
+      const planesNuevos = new Map();
+      let sobrantes = { matches: [] };
       try {
-        const corridas = detectarFechasCorridas(cruce, mv && mv.fecha_corte);
+        if (mv && mv.tarjeta && esBancolombiaBank(db, Number(mv.tarjeta.id))) {
+          db.prepare("SELECT c.id, d.monto, d.tasa_mv FROM compras c JOIN diferidas d ON d.id = c.diferida_id WHERE c.tarjeta_id=? AND d.estado='activo' "
+            + "AND substr(d.fecha_primer_corte,1,7)=? AND d.reprog_total IS NULL AND COALESCE(d.sin_gracia_cuota1,0)=0")
+            .all(mv.tarjeta.id, mv.ciclo).forEach(r => planesNuevos.set(String(r.id), { monto: Number(r.monto) || 0, tasa: Number(r.tasa_mv) || 0 }));
+        }
+        sobrantes = cruzarSobrantes(cruce, mv, planesNuevos);
+      } catch (e) { console.log('[ia/analizar] cruce de sobrantes:', e && e.message); }
+
+      // ── Compras que el banco cobra al 0% y la app tiene como internacionales (y al reves) ──
+      // Solo donde la bandera intl cobra interes. Reemplaza lo que la IA haya dicho de esas compras.
+      try {
+        if (mv && mv.tarjeta && aplicaIntInternacional(mv.tarjeta.banco, mv.tarjeta.franquicia)) {
+          const clasif = detectarClasificacionIntl(cruce, sobrantes, mv, mv.fecha_corte);
+          if (clasif.length) {
+            if (!Array.isArray(resu.discrepancias)) resu.discrepancias = [];
+            const ids = new Set(clasif.flatMap(d => d.compra_ids.map(String)));
+            resu.discrepancias = resu.discrepancias.filter(d => !(d && d.tipo === 'clasificacion_incorrecta' && !d.determinista && d.compra_id != null && ids.has(String(d.compra_id))));
+            resu.discrepancias.push(...clasif);
+            resu.clasificaciones_detectadas = clasif.length;
+          }
+        }
+      } catch (e) { console.log('[ia/analizar] clasificacion intl:', e && e.message); }
+
+      // ── Fechas corridas: compras 1/1 junto al corte y planes NUEVOS con otra fecha (informativo) ──
+      try {
+        const deGrupo = (sobrantes.matches || []).filter(m => m.tipo === 'compra').map(m => Object.assign({}, m, { compra_id: (m.partes || [])[0] }));
+        const corridas = detectarFechasCorridas({ matches: [...(cruce.matches || []), ...deGrupo] }, mv && mv.fecha_corte);
+        corridas.push(...detectarFechasPlanes(cruce, sobrantes, planesNuevos));
         if (corridas.length) {
           if (!Array.isArray(resu.discrepancias)) resu.discrepancias = [];
           resu.discrepancias.push(...corridas);

@@ -106,8 +106,10 @@ function desgloseIntereses(db, tarjetaId, ciclo, calc) {
   // Hasta que dia supone la app que devengo la cuota facturada del extracto anterior, y de donde sale.
   let fechaPago = null, origen = null;
   const opts = avanceOpts(db, T);
+  // El corte anterior, para que la conciliacion pueda contar los dias del periodo si el banco corta otro dia.
+  let ePrev = null;
+  try { ePrev = calcExtracto(db, T, previo, true); } catch (e) { ePrev = null; }
   if (opts && opts.fechaPagoDe) {
-    const ePrev = calcExtracto(db, T, previo, true);
     fechaPago = opts.fechaPagoDe(previo, ePrev ? ePrev.fechaCorte : null);
     const custom = db.prepare('SELECT fecha_pago FROM fechas_pago_custom WHERE tarjeta_id=? AND ciclo=?').get(T, previo);
     origen = (extPrevio && extPrevio.estado === 'pagado' && extPrevio.fecha_pagado) ? 'dia real del pago del extracto anterior'
@@ -123,6 +125,8 @@ function desgloseIntereses(db, tarjetaId, ciclo, calc) {
     que_es: 'El interes que la app suma al pago minimo de este ciclo, separado por causa. Es el numero que se compara con el cargo INTERESES CORRIENTES del extracto.',
     componentes: Object.assign({}, comp, { intl_compras_1_1: r2(intlCiclo) }),
     total_app: total,
+    corte: calc ? calc.fechaCorte : null,
+    corte_anterior: ePrev ? ePrev.fechaCorte : null,
     intl_desfase: { de_este_ciclo_segun_app: r2(intlCiclo), del_ciclo_anterior: r2(intlPrevio),
       nota: 'La app cobra el interes intl de una compra 1/1 en su mismo ciclo; el banco puede cobrarlo en el siguiente. Una diferencia de ese tamano puede ser solo ese desfase.' },
     aplazado_a_la_cuota_2: r2(aplazadoACuota2),

@@ -128,7 +128,7 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
   }
   useEffect(() => { recargarContexto(); }, [tarjetaId, ciclo]);
   // Operaciones que la app puede aplicar automaticamente (mapean a endpoints existentes).
-  const AUTO = { crear_compra: 1, eliminar_compra: 1, fijar_pago_minimo_oficial: 1, editar_valor: 1, mover_ciclo: 1, reprogramar_cuotas: 1, convertir_a_diferida: 1, crear_diferida_omitida: 1, actualizar_tasa_intl: 1, actualizar_fecha_pago: 1, reversar_compra: 1, anular_plan: 1, registrar_pago: 1 };
+  const AUTO = { crear_compra: 1, eliminar_compra: 1, fijar_pago_minimo_oficial: 1, editar_valor: 1, mover_ciclo: 1, reprogramar_cuotas: 1, convertir_a_diferida: 1, crear_diferida_omitida: 1, actualizar_tasa_intl: 1, actualizar_fecha_pago: 1, reversar_compra: 1, anular_plan: 1, registrar_pago: 1, marcar_nacional: 1, marcar_internacional: 1 };
   // Operaciones ESTRUCTURALES: cambian QUE compras forman el ciclo y por cuanto. Fijar la cifra oficial
   // del extracto tiene que ir DESPUES de estas, porque es lo que convierte un pago parcial inofensivo en
   // un SELLADO del mes: sin cifra oficial, pagar menos que el estimado del motor queda como abono y no
@@ -137,7 +137,7 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
   // todavia habria que mover a otro mes, que quedan tras el 403 de ciclos pagados y sin reversa.
   // NO estructurales a proposito: actualizar_fecha_pago (solo cambia lo que se ve) y registrar_pago
   // (opera sobre el ciclo ANTERIOR, no sobre la composicion de este).
-  const ESTRUCTURAL = { crear_compra: 1, eliminar_compra: 1, editar_valor: 1, mover_ciclo: 1, reprogramar_cuotas: 1, convertir_a_diferida: 1, crear_diferida_omitida: 1, actualizar_tasa_intl: 1, reversar_compra: 1, anular_plan: 1, fecha_corte_movida: 1 };
+  const ESTRUCTURAL = { crear_compra: 1, eliminar_compra: 1, editar_valor: 1, mover_ciclo: 1, reprogramar_cuotas: 1, convertir_a_diferida: 1, crear_diferida_omitida: 1, actualizar_tasa_intl: 1, reversar_compra: 1, anular_plan: 1, fecha_corte_movida: 1, marcar_nacional: 1, marcar_internacional: 1 };
 
   // Formatea una tasa mensual decimal a porcentaje colombiano (0.020849 -> "2,0849%").
   const fmtPct = (x) => (x == null || x === '') ? '—' : (Number(x) * 100).toFixed(4).replace('.', ',') + '%';
@@ -166,7 +166,8 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
       reprogramar_cuotas: 'Reprogramar cuotas', actualizar_tasa_intl: 'Actualizar tasa internacional',
       actualizar_fecha_pago: 'Actualizar fecha de pago', fecha_corte_movida: 'Aplicar corte adelantado',
       convertir_a_diferida: 'Convertir a diferida', crear_diferida_omitida: 'Crear diferida omitida', reversar_compra: 'Reversar compra', anular_plan: 'Anular compra',
-      registrar_pago: 'Registrar pago', fijar_pago_minimo_oficial: 'Usar el pago minimo del extracto', ninguna: 'Sin acción'
+      registrar_pago: 'Registrar pago', fijar_pago_minimo_oficial: 'Usar el pago minimo del extracto', ninguna: 'Sin acción',
+      marcar_nacional: 'Marcar como nacional (0%)', marcar_internacional: 'Marcar como internacional'
     };
     if (map[op]) return map[op];
     const s = String(op).replace(/_/g, ' ').trim();
@@ -204,6 +205,8 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
     // este corte, la rama por descripción bloquearía de más si el nombre coincide con un grupo de otro ciclo.
     const opAG = d.accion_sugerida ? d.accion_sugerida.operacion : '';
     if (opAG === 'crear_diferida_omitida' || opAG === 'crear_compra' || opAG === 'registrar_pago' || opAG === 'fijar_pago_minimo_oficial') return false;
+    // La clasificacion intl viaja con TODAS las partes de la compra dividida (compra_ids): no hay grupo que romper.
+    if (opAG === 'marcar_nacional' || opAG === 'marcar_internacional') return false;
     const t = compraDe(d);
     if (opAG === 'mover_ciclo' && t) return false;
     if (t && t.grupo_id) return true;
@@ -282,6 +285,13 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
       const filas = [['Tasas a aplicar (una por mes)', String(grupos.length)], ['Compras a actualizar', String(nTotal)], ['Ciclo', ciclo]];
       grupos.forEach((g, i) => filas.push(['Tasa ' + (i + 1), fmtPct(g.tasa_intl) + ' · ' + ((g.compra_ids || []).length) + ' compra(s)']));
       return { titulo: 'Sincronizar tasa internacional con el extracto', endpoint: 'POST /api/compras/aplicar-tasa-intl', filas };
+    }
+    if (op === 'marcar_nacional' || op === 'marcar_internacional') {
+      const ids = Array.isArray(p.compra_ids) ? p.compra_ids : (cid != null ? [cid] : []);
+      const filas = [['Compra', ((/"([^"]+)"/.exec(d.descripcion || '') || [])[1]) || ('#' + ids[0])], ['Partes', String(ids.length)], ['Ciclo', ciclo]];
+      if (op === 'marcar_internacional') filas.push(['Tasa del extracto', fmtPct(p.tasa_intl)]);
+      filas.push(['Efecto', op === 'marcar_nacional' ? 'deja de sumarle interes internacional (el banco la cobra al 0%)' : 'empieza a sumarle interes internacional con la tasa del extracto']);
+      return { titulo: op === 'marcar_nacional' ? 'Marcar como compra nacional' : 'Marcar como compra internacional', endpoint: 'POST /api/compras/clasificar-intl', filas };
     }
     if (op === 'actualizar_fecha_pago') {
       const fp = p.fecha_pago != null ? p.fecha_pago : d.fecha_extracto;
@@ -510,6 +520,12 @@ function IaResultado({ resultado, isMock, tarjetaId, ciclo, onAplicada, onReanal
         const limpios = grupos.filter(g => Number(g.tasa_intl) > 0 && Array.isArray(g.compra_ids) && g.compra_ids.length);
         if (!limpios.length) throw new Error('No hay tasas internacionales validas para aplicar.');
         const r = await api('/compras/aplicar-tasa-intl', { method: 'POST', body: { tarjeta_id: Number(tarjetaId), ciclo: ciclo, grupos: limpios } });
+        if (r && r.error) throw new Error(r.error);
+      } else if (op === 'marcar_nacional' || op === 'marcar_internacional') {
+        const ids = (Array.isArray(p.compra_ids) ? p.compra_ids : [p.compra_id != null ? p.compra_id : d.compra_id]).map(Number).filter(n => n > 0);
+        if (!ids.length) throw new Error('No se identifico la compra a clasificar.');
+        const r = await api('/compras/clasificar-intl', { method: 'POST', body: { tarjeta_id: Number(tarjetaId), ciclo: ciclo, compra_ids: ids,
+          es_internacional: op === 'marcar_internacional' ? 1 : 0, tasa_intl: op === 'marcar_internacional' ? p.tasa_intl : null } });
         if (r && r.error) throw new Error(r.error);
       } else if (op === 'actualizar_fecha_pago') {
         const fp = p.fecha_pago != null ? p.fecha_pago : d.fecha_extracto;

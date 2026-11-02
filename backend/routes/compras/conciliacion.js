@@ -62,6 +62,31 @@ module.exports = function(router, ctx) {
     res.json({ ok: true, actualizadas: total, grupos: limpios.length });
   });
 
+  // POST /api/compras/clasificar-intl — acción 1-clic del Asistente de Conciliación IA (oct-2026).
+  // Body: { tarjeta_id, ciclo, compra_ids, es_internacional: 0|1, tasa_intl? }
+  // El extracto imprime la tasa de cada compra: 0% es nacional, > 0 es internacional y acumula
+  // interés. Cuando la app la clasifica distinto, esto la corrige — en TODAS las partes de una compra
+  // dividida (vienen en compra_ids). Quirúrgico: solo es_internacional (y la tasa del extracto al
+  // marcarla internacional). Mismo candado que aplicar-tasa-intl: un ciclo pagado no se toca.
+  router.post('/clasificar-intl', (req, res) => {
+    const { tarjeta_id, ciclo } = req.body || {};
+    const intl = Number(req.body && req.body.es_internacional) === 1 ? 1 : 0;
+    const ids = (Array.isArray(req.body && req.body.compra_ids) ? req.body.compra_ids : []).map(Number).filter(n => Number.isInteger(n) && n > 0);
+    if (!tarjeta_id || !ciclo || !ids.length) return res.status(400).json({ error: 'Faltan datos: se requieren tarjeta_id, ciclo y compra_ids.' });
+    const tasa = req.body && req.body.tasa_intl != null && req.body.tasa_intl !== '' ? Number(req.body.tasa_intl) : null;
+    if (intl && tasa != null && (!(tasa > 0) || tasa >= 1)) return res.status(400).json({ error: 'La tasa debe ser un decimal mensual válido (ej. 0.021155).' });
+    if (esCicloPagado(tarjeta_id, ciclo)) return res.status(403).json({ error: 'No se puede aplicar: el extracto del ciclo ' + ciclo + ' ya está pagado.' });
+    const ph = ids.map(() => '?').join(',');
+    const info = (intl && tasa != null)
+      ? db.prepare(`UPDATE compras SET es_internacional=1, tasa_intl=? WHERE tarjeta_id=? AND ciclo=? AND id IN (${ph})`).run(tasa, tarjeta_id, ciclo, ...ids)
+      : db.prepare(`UPDATE compras SET es_internacional=? WHERE tarjeta_id=? AND ciclo=? AND id IN (${ph})`).run(intl, tarjeta_id, ciclo, ...ids);
+    if (!info.changes) return res.status(404).json({ error: 'Ninguna de esas compras es de esta tarjeta y ciclo.' });
+    const desc = db.prepare('SELECT descripcion FROM compras WHERE id=?').get(ids[0]);
+    logAction('editar', tjNombre(tarjeta_id) + (intl ? 'Marcada como internacional' : 'Marcada como nacional (el banco la cobra al 0%)') + ': '
+      + ((desc && desc.descripcion) || ('#' + ids[0])) + (info.changes > 1 ? ' (' + info.changes + ' partes)' : '') + ' · ciclo ' + ciclo);
+    res.json({ ok: true, actualizadas: info.changes, es_internacional: intl });
+  });
+
   // ── Aplicar corte ADELANTADO de un ciclo (cortes_custom) ──────────────────────
   // POST /aplicar-corte-ciclo  Body: { tarjeta_id, ciclo, fecha_corte }
   // Persiste la fecha de corte REAL de un ciclo (el banco adelantó el corte) y re-evalúa las compras
