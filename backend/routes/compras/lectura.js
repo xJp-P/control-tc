@@ -137,20 +137,27 @@ module.exports = function(router, ctx) {
     res.json({ porPersona: rows, personal, totalGeneral });
   });
 
-  // Asistente INTL: devuelve descripciones (deduplicadas, lowercase, trimmed) que ACTUALMENTE
-  // tienen al menos una compra marcada como es_internacional=1. La consulta es en tiempo real:
-  // si el usuario desmarca el flag intl de una compra y no quedan más con esa descripcion
-  // marcadas, ya no aparecerá en este listado en la siguiente petición (auto-desaprendizaje).
+  // Asistente INTL: devuelve descripciones (deduplicadas, lowercase, trimmed) cuya compra MÁS RECIENTE
+  // está marcada como es_internacional=1. Manda la ÚLTIMA clasificación, no "alguna vez marcada": antes
+  // bastaba UNA compra marcada por error para que el asistente siguiera sugiriendo "internacional" en
+  // todas las siguientes de ese comercio, y la marca se propagaba (oct-2026: compras que el banco cobra
+  // al 0% llevaban meses sumando interés intl). Ahora, en cuanto una compra de ese comercio se corrige a
+  // nacional —a mano o con la acción "Marcar como nacional" de la conciliación—, deja de sugerirse.
   router.get('/intl-descripciones', (req, res) => {
     const rows = db.prepare(`
-      SELECT DISTINCT LOWER(TRIM(descripcion)) as descripcion
+      SELECT LOWER(TRIM(descripcion)) as descripcion, COALESCE(es_internacional, 0) as intl
       FROM compras
-      WHERE es_internacional = 1
-        AND descripcion IS NOT NULL
+      WHERE descripcion IS NOT NULL
         AND TRIM(descripcion) != ''
-      ORDER BY descripcion
+      ORDER BY fecha DESC, id DESC
     `).all();
-    res.json(rows.map(r => r.descripcion));
+    const vistas = new Set(), intl = [];
+    rows.forEach(r => {
+      if (vistas.has(r.descripcion)) return;
+      vistas.add(r.descripcion);
+      if (r.intl === 1) intl.push(r.descripcion);
+    });
+    res.json(intl.sort());
   });
 
   // Autocompletado del campo "Nombre en el Extracto": nombres distintos ya usados en compras

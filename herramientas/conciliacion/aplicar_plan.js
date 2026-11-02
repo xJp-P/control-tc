@@ -10,6 +10,8 @@
 //     tarjeta, no la del mes de la compra; el plan puede pedir la tasa_intl que la compra ya guarda).
 //   - limpiar_bolsillo_diferidas_sueltas: re-aplica a un ciclo ya pagado la limpieza que el sellado
 //     hace desde v6.7.0 (por el MISMO helper que usa el sellado, no una copia del SQL).
+//   - desmarcar_intl_historico: la bandera intl de comercios que el banco cobra al 0%, tambien en ciclos
+//     pagados (ahi la accion de la conciliacion no entra y el interes ya quedo congelado al sellar).
 // Toda escritura SQL queda en el Historial de la app (logAction), igual que las de los endpoints.
 //
 // Los registros se resuelven por descripcion + fecha (+ valor/estado), NUNCA por id: la BD maestra se
@@ -69,9 +71,16 @@ const OPS = {
   async crear_compra(port, o) {
     const ya = db.prepare('SELECT id FROM compras WHERE tarjeta_id=? AND fecha=? AND descripcion=? AND ABS(valor_cop-?)<0.005').get(T, o.fecha, o.descripcion, o.valor_cop);
     if (ya) return 'ya existia, se salta';
+    // La persona se resuelve por nombre (debe ser unica), igual que en asignar_persona.
+    let personaId = o.persona_id || null;
+    if (o.persona) {
+      const ps = db.prepare('SELECT id FROM personas WHERE nombre LIKE ?').all(o.persona + '%');
+      if (ps.length !== 1) throw new Error('La persona "' + o.persona + '" encontro ' + ps.length + ' coincidencias (se exige 1).');
+      personaId = ps[0].id;
+    }
     // Sin ciclo_manual: la fecha cae dentro del periodo, asi que el ciclo lo deriva el backend.
     const r = await api(port, 'POST', '/compras', { tarjeta_id: T, fecha: o.fecha, descripcion: o.descripcion, valor_cop: o.valor_cop,
-      es_internacional: o.es_internacional ? 1 : 0, persona_id: o.persona_id || null, desde_conciliacion: true });
+      es_internacional: o.es_internacional ? 1 : 0, persona_id: personaId, desde_conciliacion: true });
     const c = db.prepare('SELECT ciclo, estado FROM compras WHERE id=?').get(r.id);
     return 'creada (ciclo ' + c.ciclo + ', ' + c.estado + ')';
   },
@@ -187,6 +196,64 @@ const OPS = {
       es_internacional: c.es_internacional, ciclo: c.ciclo, ciclo_manual: c.ciclo_manual, desde_conciliacion: true });
     const f = db.prepare('SELECT persona_id, ciclo, estado FROM compras WHERE id=?').get(c.id);
     return 'asignada a ' + ps[0].nombre + ' (ciclo ' + f.ciclo + ', ' + f.estado + ')';
+  },
+
+  // Mueve una compra (y TODAS las partes si es dividida) a otro ciclo, por el MISMO PUT que la accion
+  // mover_ciclo de la conciliacion IA (fila completa + ciclo_manual=1 + desde_conciliacion).
+  async mover_ciclo(port, o) {
+    const c = unaCompra(o.compra);
+    if (c.ciclo === o.ciclo) return 'ya estaba en ' + o.ciclo + ', se salta';
+    const partes = c.grupo_id ? db.prepare('SELECT * FROM compras WHERE grupo_id=?').all(c.grupo_id) : [c];
+    for (const x of partes) {
+      await api(port, 'PUT', '/compras/' + x.id, { tarjeta_id: x.tarjeta_id, fecha: x.fecha, descripcion: x.descripcion, valor_cop: x.valor_cop,
+        valor_usd: x.valor_usd, tasa_usd: x.tasa_usd, persona_id: x.persona_id, estado: x.estado, notas: x.notas, monto_bolsillo: x.monto_bolsillo,
+        es_internacional: x.es_internacional, ciclo: o.ciclo, ciclo_manual: 1, desde_conciliacion: true });
+    }
+    return c.ciclo + ' -> ' + o.ciclo + (partes.length > 1 ? ' (' + partes.length + ' partes)' : '');
+  },
+
+  // Borra una compra que el banco no facturo (p. ej. una preautorizacion), por el MISMO DELETE que la
+  // accion eliminar_compra de la conciliacion IA. Destructivo: solo con orden expresa del director.
+  async eliminar_compra(port, o) {
+    const filas = db.prepare('SELECT id FROM compras WHERE tarjeta_id=? AND descripcion=? AND fecha=? AND ABS(valor_cop-?)<0.005').all(T, o.compra.descripcion, o.compra.fecha, o.compra.valor_cop);
+    if (!filas.length) return 'no existe (ya borrada), se salta';
+    if (filas.length !== 1) throw new Error('El selector encontro ' + filas.length + ' compras (se exige 1).');
+    await api(port, 'DELETE', '/compras/' + filas[0].id, { desde_conciliacion: true });
+    return 'eliminada #' + filas[0].id;
+  },
+
+  // Marca como nacional (o internacional, con la tasa del extracto) una compra y todas sus partes, por el
+  // endpoint de la accion de la conciliacion IA (POST /compras/clasificar-intl). Solo ciclos sin pagar.
+  async clasificar_intl(port, o) {
+    // Las partes de una compra dividida comparten descripcion, fecha y a veces valor: si el selector da
+    // varias filas y TODAS son del mismo grupo, es una sola compra.
+    const filas = db.prepare('SELECT * FROM compras WHERE tarjeta_id=? AND descripcion=? AND fecha=? AND ABS(valor_cop-?)<0.005').all(T, o.compra.descripcion, o.compra.fecha, o.compra.valor_cop);
+    if (!filas.length || (filas.length > 1 && !(filas[0].grupo_id && filas.every(f => f.grupo_id === filas[0].grupo_id))))
+      throw new Error('El selector ' + JSON.stringify(o.compra) + ' encontro ' + filas.length + ' compras que no son una sola compra dividida.');
+    const c = filas[0];
+    const partes = c.grupo_id ? db.prepare('SELECT id, es_internacional FROM compras WHERE grupo_id=?').all(c.grupo_id) : [c];
+    const intl = o.es_internacional ? 1 : 0;
+    if (partes.every(x => (x.es_internacional ? 1 : 0) === intl)) return 'ya era ' + (intl ? 'internacional' : 'nacional') + ', se salta';
+    await api(port, 'POST', '/compras/clasificar-intl', { tarjeta_id: T, ciclo: c.ciclo, compra_ids: partes.map(x => x.id), es_internacional: intl, tasa_intl: o.tasa_intl });
+    return (intl ? 'internacional' : 'nacional') + (partes.length > 1 ? ' (' + partes.length + ' partes)' : '');
+  },
+
+  // Limpieza RETROSPECTIVA de la bandera intl de los comercios que el banco cobra al 0% (orden del
+  // director, oct-2026), en TODOS los ciclos de la tarjeta. Baja a SQL porque los ciclos PAGADOS no
+  // admiten la accion (y no hace falta: en un ciclo pagado el interes intl quedo congelado en el extracto
+  // al sellarlo, asi que la bandera solo alimenta al asistente que sugiere "internacional" al registrar).
+  // Los comercios se nombran explicitos (descripcion exacta, sin comodines) y deben venir respaldados por
+  // un extracto que los imprima al 0%.
+  async desmarcar_intl_historico(port, o) {
+    const descs = (o.descripciones || []).map(s => String(s).toUpperCase().trim()).filter(Boolean);
+    if (!descs.length) throw new Error('Faltan las descripciones.');
+    const ph = descs.map(() => '?').join(',');
+    const filas = db.prepare(`SELECT id, ciclo FROM compras WHERE tarjeta_id=? AND es_internacional=1 AND UPPER(TRIM(descripcion)) IN (${ph})`).all(T, ...descs);
+    if (!filas.length) return 'ninguna compra marcada, se salta';
+    db.prepare(`UPDATE compras SET es_internacional=0 WHERE tarjeta_id=? AND es_internacional=1 AND UPPER(TRIM(descripcion)) IN (${ph})`).run(T, ...descs);
+    logAction('editar', tjNombre(T) + 'Limpieza: ' + filas.length + ' compra(s) de ' + descs.length + ' comercio(s) que el banco cobra al 0% marcadas como nacionales ('
+      + [...new Set(filas.map(f => f.ciclo))].sort().join(', ') + ')');
+    return filas.length + ' compra(s) desmarcadas en los ciclos ' + [...new Set(filas.map(f => f.ciclo))].sort().join(', ');
   },
 
   async pago_oficial(port, o) {
