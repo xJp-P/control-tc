@@ -99,6 +99,23 @@ const R13 = {
       chk('nunca se descarta una discrepancia ACCIONABLE aunque coincida el monto', resu.discrepancias.some(d => d.tipo === 'compra_omitida'), 'se perdio la compra_omitida');
       chk('la diferencia de intereses sale de la aritmetica', !!it && it.impacto_pago_minimo === 43 && it.severidad === 'baja' && /periodo/.test(it.descripcion),
         JSON.stringify(it && { impacto: it.impacto_pago_minimo, sev: it.severidad, desc: it.descripcion }));
+
+      // (G) Corte del banco distinto al de la app (oct-2026: cortó el 31). Primero se descuentan los
+      // dias de periodo y SOLO despues se lee el resto; sin eso, el resto "parecia" el desfase del intl.
+      const mvC = { desglose_intereses: { total_app: 100000, corte: '2026-10-30', corte_anterior: '2026-09-30',
+        componentes: { periodo: 30000 }, intl_desfase: { de_este_ciclo_segun_app: 3000, del_ciclo_anterior: 0 },
+        cuota_facturada: { devenga_hasta: '2026-10-16', abonos_al_extracto_anterior: [{ fecha: '2026-10-03', monto: 1 }] } } };
+      const rC = { discrepancias: [] };
+      const cC = D.conciliarIntereses(rC, mvC, 98000, '2026-10-31');
+      const iC = rC.discrepancias[0] || {};
+      chk('con el corte del banco un dia despues, descuenta ese dia de periodo', !!cC && cC.ajuste_corte === 1000 && cC.resto === -3000,
+        JSON.stringify(cC) + ' (esperado ajuste 1000 = 30000 x 1/30 y resto -3000)');
+      chk('y atribuye el resto a los abonos, no al desfase del intl', /corto el 2026-10-31/.test(iC.descripcion || '') && /abonos/.test(iC.descripcion || '') && !/desfase del intl/.test(iC.descripcion || ''),
+        iC.descripcion);
+      chk('el impacto en el pago minimo sigue siendo app - banco', iC.impacto_pago_minimo === 2000, 'impacto=' + iC.impacto_pago_minimo);
+      const rC2 = { discrepancias: [] };
+      const cC2 = D.conciliarIntereses(rC2, mvC, 98000, '2026-10-30');
+      chk('con el mismo corte no ajusta nada (par)', !!cC2 && cC2.ajuste_corte === 0 && !/corto el/.test(rC2.discrepancias[0].descripcion), JSON.stringify(cC2));
     } catch (e) { chk('severidad e intereses', false, 'excepcion: ' + e.message); }
 
     // ── (B)(C)(E) Escenario sembrado: Visa Bancolombia con TODAS las causas de interes en 2029-02 ─────
@@ -118,6 +135,27 @@ const R13 = {
         compra('2029-02-10', 'R13 INTERNACIONAL', 80000, true);
         const enBorde = compra('2029-02-27', 'R13 BORDE', 50000, false);       // el banco la trae el 28 (dia del corte)
         const enMedio = compra('2029-02-12', 'R13 MITAD', 40000, false);       // el banco la trae el 13: lejos del corte
+        // (F) Clasificacion: lo que el banco imprime al 0% o con tasa, contra lo que dice la app.
+        const cero = compra('2029-02-15', 'R13 COBRA CERO', 40000, true);      // intl en la app, 0% en el banco
+        const olvidada = compra('2029-02-17', 'R13 OLVIDADA', 50000, false);   // nacional en la app, con tasa en el banco
+        const parte = (valor) => db.prepare("INSERT INTO compras (tarjeta_id, fecha, descripcion, valor_cop, estado, ciclo, es_internacional, tasa_intl, grupo_id) VALUES (?, '2029-02-16', 'R13 DIVIDIDA CERO', ?, 'pendiente', ?, 1, 0.02, 'r13-grupo')")
+          .run(T, valor, C).lastInsertRowid;
+        const partesCero = [parte(15000), parte(15000)];                       // dividida: UNA linea de 30.000 en el banco
+        // Candado del endpoint: un ciclo PAGADO no se reclasifica.
+        const enPagado = db.prepare("INSERT INTO compras (tarjeta_id, fecha, descripcion, valor_cop, estado, ciclo, es_internacional, tasa_intl) VALUES (?, '2029-01-10', 'R13 PAGADA', 20000, 'pagado', '2029-01', 1, 0.02)").run(T).lastInsertRowid;
+        db.prepare("INSERT INTO extractos (tarjeta_id, ciclo, fecha_corte, fecha_pago, pago_minimo, pago_total, estado, monto_pagado, fecha_pagado) VALUES (?, '2029-01', '2029-01-30', '2029-02-16', 1, 1, 'pagado', 1, '2029-02-11')").run(T);
+        // (H) Plan NUEVO y dividido que el banco fecha 3 dias despues; la hija (fecha del corte a proposito) no avisa.
+        const planParte = (monto, desc) => {
+          const d = sembrarDiferida(db, T, desc, monto, 0.02, 3, '2029-02-05', CORTE);
+          return db.prepare("INSERT INTO compras (tarjeta_id, fecha, descripcion, valor_cop, estado, ciclo, diferida_id, grupo_id, notas) VALUES (?, '2029-02-05', ?, ?, 'diferida', ?, ?, 'r13-plan', 'Diferida a 3 cuotas')")
+            .run(T, desc, monto, C, d).lastInsertRowid;
+        };
+        const partesPlan = [planParte(60000, 'R13 PLAN DIVIDIDO'), planParte(30000, 'R13 PLAN DIVIDIDO')];
+        db.prepare("INSERT INTO compras (tarjeta_id, fecha, descripcion, valor_cop, estado, ciclo, diferida_id, notas) VALUES (?, '2029-01-30', 'R13 HIJA', 30000, 'diferida', ?, ?, 'saldo reprogramado')").run(T, C, hija);
+        const compraIrr = db.prepare("INSERT INTO compras (tarjeta_id, fecha, descripcion, valor_cop, estado, ciclo, diferida_id, notas) VALUES (?, '2029-02-05', 'R13 IRREGULAR', 10000, 'diferida', ?, ?, 'Diferida a 2 cuotas')").run(T, C, irregular).lastInsertRowid;
+        // (I) Reversos: uno ya aplicado en la app (aviso BAJA) y su par sin aplicar (ALTA).
+        const reversada = db.prepare("INSERT INTO compras (tarjeta_id, fecha, descripcion, valor_cop, estado, ciclo, reversada) VALUES (?, '2029-02-12', 'R13 REVERSADA', 12345, 'pendiente', ?, 1)").run(T, C).lastInsertRowid;
+        const porReversar = db.prepare("INSERT INTO compras (tarjeta_id, fecha, descripcion, valor_cop, estado, ciclo) VALUES (?, '2029-02-13', 'R13 POR REVERSAR', 23456, 'pendiente', ?)").run(T, C).lastInsertRowid;
         require(path.join(raiz, 'backend', 'helpers', 'banco.js')).clearBancoCache();
 
         // (B) El desglose: cada causa presente y el total al peso con el interes del pago minimo.
@@ -145,9 +183,15 @@ const R13 = {
 
         // (C) El cargo del banco contra el desglose, por el handler REAL (proveedor mock).
         const bancoCobra = Math.round(dg.total_app) + 25000;
-        const linea = (fecha, desc, valor) => fecha.slice(8, 10) + '/' + fecha.slice(5, 7) + '  ' + desc + '   $' + Math.round(valor).toLocaleString('es-CO') + '   1/1   0,0000%';
+        const linea = (fecha, desc, valor, tasa, cuotas, capital) => fecha.slice(8, 10) + '/' + fecha.slice(5, 7) + '  ' + desc + '   $' + Math.round(valor).toLocaleString('es-CO')
+          + '   ' + (cuotas || '1/1') + (capital ? '   $' + Math.round(capital).toLocaleString('es-CO') : '') + '   ' + (tasa || '0,0000') + '%';
         const texto = ['EXTRACTO SINTETICO R13', '+ Intereses corrientes ' + pesos(bancoCobra),
           linea('2029-02-28', 'R13 BORDE', 50000), linea('2029-02-13', 'R13 MITAD', 40000),
+          linea('2029-02-10', 'R13 INTERNACIONAL', 80000, '2,0000'), linea('2029-02-15', 'R13 COBRA CERO', 40000),
+          linea('2029-02-17', 'R13 OLVIDADA', 50000, '2,0000'), linea('2029-02-16', 'R13 DIVIDIDA CERO', 30000),
+          linea('2029-02-08', 'R13 PLAN DIVIDIDO', 90000, '2,0000', '1/3', 30000), linea('2029-02-07', 'R13 IRREGULAR', 10000, '2,0000', '1/2', 6000),
+          linea('2029-01-26', 'R13 HIJA', 30000, '2,0000', '2/4', 10000),
+          '20/02/2029  R13 REVERSADA   $ -12.345,00', '21/02/2029  R13 POR REVERSAR   $ -23.456,00',
           '28/02/2029 INTERESES CORRIENTES ' + pesos(bancoCobra) + ' ' + pesos(bancoCobra) + ' $ 0,00'].join('\n');
         const r = await pedir(port, 'POST', '/api/ia/analizar', { provider: 'mock', movimientos: mv, texto_redactado: texto }, 30000);
         const R = (r.j && r.j.resultado) || {};
@@ -167,10 +211,46 @@ const R13 = {
         chk('avisa la compra con la fecha corrida junto al corte', corr.some(d => Number(d.compra_id) === Number(enBorde)),
           'sin aviso para la compra del ' + '2029-02-27 que el banco trae el 28 (dia del corte); avisos=' + JSON.stringify(corr.map(d => d.compra_id)));
         chk('no avisa una fecha corrida lejos del corte', !corr.some(d => Number(d.compra_id) === Number(enMedio)), 'aviso tambien la del 12-feb (ruido)');
+
+        // (F) Clasificacion contra la tasa que imprime el banco en cada linea.
+        const clas = (R.discrepancias || []).filter(d => d.tipo === 'clasificacion_incorrecta' && d.determinista);
+        const deIds = ids => clas.find(d => JSON.stringify((d.compra_ids || []).map(Number).sort()) === JSON.stringify(ids.map(Number).sort()));
+        const dCero = deIds([cero]), dDiv = deIds(partesCero), dOlv = deIds([olvidada]);
+        cifras.clasificaciones = clas.length;
+        chk('la compra que el banco cobra al 0% se propone marcar nacional', !!dCero && dCero.accion_sugerida.operacion === 'marcar_nacional' && dCero.impacto_pago_minimo > 0,
+          JSON.stringify(dCero || clas.map(d => d.compra_ids)));
+        chk('una compra DIVIDIDA al 0% se detecta sumando sus partes y se corrigen las dos', !!dDiv && dDiv.accion_sugerida.parametros.compra_ids.length === 2,
+          'sin aviso para las partes ' + JSON.stringify(partesCero) + ' (una linea de 30.000 en el banco)');
+        chk('la que el banco cobra con tasa y la app tiene nacional se propone marcar internacional', !!dOlv && dOlv.accion_sugerida.operacion === 'marcar_internacional'
+          && Math.abs(dOlv.accion_sugerida.parametros.tasa_intl - 0.02) < 1e-9 && dOlv.impacto_pago_minimo < 0, JSON.stringify(dOlv || null));
+        chk('una internacional que el banco tambien cobra con tasa no se toca (par)', clas.length === 3, 'avisos=' + JSON.stringify(clas.map(d => d.compra_ids)));
+        // El endpoint de la accion: corrige TODAS las partes, y no toca un ciclo pagado.
+        const rx = await pedir(port, 'POST', '/api/compras/clasificar-intl', { tarjeta_id: T, ciclo: C, compra_ids: partesCero, es_internacional: 0 });
+        const quedan = db.prepare('SELECT COUNT(*) n FROM compras WHERE id IN (?,?) AND es_internacional=1').get(partesCero[0], partesCero[1]).n;
+        chk('marcar nacional corrige las partes', rx.s === 200 && quedan === 0, 'status=' + rx.s + ' ' + rx.b.slice(0, 90) + ' · quedan intl ' + quedan);
+        const ry = await pedir(port, 'POST', '/api/compras/clasificar-intl', { tarjeta_id: T, ciclo: C, compra_ids: [olvidada], es_internacional: 1, tasa_intl: 0.02 });
+        const ol = db.prepare('SELECT es_internacional e, tasa_intl t FROM compras WHERE id=?').get(olvidada);
+        chk('marcar internacional fija la tasa del extracto', ry.s === 200 && ol.e === 1 && Math.abs(ol.t - 0.02) < 1e-9, JSON.stringify(ol));
+        const rz = await pedir(port, 'POST', '/api/compras/clasificar-intl', { tarjeta_id: T, ciclo: '2029-01', compra_ids: [enPagado], es_internacional: 0 });
+        chk('no reclasifica en un ciclo pagado', rz.s === 403 && db.prepare('SELECT es_internacional e FROM compras WHERE id=?').get(enPagado).e === 1, 'status=' + rz.s);
+
+        // (H) Plan nuevo con la fecha corrida: el aviso trae el efecto del mes siguiente.
+        const planes = corr.filter(d => /Plan nuevo/.test(d.descripcion || ''));
+        const pDiv = planes.find(d => (d.compra_ids || []).map(Number).sort().join() === partesPlan.map(Number).sort().join());
+        chk('avisa el plan nuevo DIVIDIDO que el banco fecha 3 dias despues, con el efecto del mes siguiente', !!pDiv && pDiv.efecto_mes_siguiente === -180,
+          JSON.stringify(pDiv || planes.map(d => d.compra_ids)) + ' (esperado 90.000 x 2% x 3/30 = 180)');
+        chk('y el plan nuevo suelto con 2 dias de diferencia', planes.some(d => Number(d.compra_id) === Number(compraIrr)), 'sin aviso para R13 IRREGULAR');
+        chk('una hija de reprogramacion no avisa aunque su fecha difiera (par)', !planes.some(d => /HIJA/.test(d.descripcion || '')), 'aviso la hija');
+
+        // (I) Reverso ya aplicado: aviso BAJA; el que falta aplicar sigue ALTA.
+        const rev = (R.discrepancias || []).filter(d => d.tipo === 'reverso_detectado');
+        const rA = rev.find(d => Number(d.compra_id) === Number(reversada)), rB = rev.find(d => Number(d.compra_id) === Number(porReversar));
+        chk('un reverso que la app ya aplico sale en BAJA', !!rA && rA.ya_aplicado && rA.severidad === 'baja', JSON.stringify(rA || rev.map(d => d.compra_id)));
+        chk('el que falta aplicar sigue en ALTA (par)', !!rB && !rB.ya_aplicado && rB.severidad === 'alta', JSON.stringify(rB || null));
       });
     } catch (e) { chk('escenario sembrado', false, 'excepcion: ' + e.message); }
 
-    const PISO = 45;
+    const PISO = 60;
     if (total < PISO) notas.push('FALLO: solo se ejecutaron ' + total + ' asertos, piso ' + PISO + ' -> el detector dejo de mirar');
     cifras.asertos = total;
     return resultado(ok === total && total >= PISO, cifras, notas);
